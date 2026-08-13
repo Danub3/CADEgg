@@ -696,6 +696,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "draw_regular_polygon"
             | "draw_equilateral_triangle_about_circle"
             | "draw_rectangle_by_center"
+            | "draw_elevator_shaft_protection"
             | "draw_text"
             | "move"
             | "move_handle"
@@ -1026,7 +1027,7 @@ pub async fn run_agent(
 ) -> Result<(), String> {
     let settings = crate::settings::load(&app)?;
     let user_text = user_input.trim().to_string();
-    let tooling = tools::select_tooling_context(&user_text, &session_objects);
+    let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
     let provider = match settings.provider.as_str() {
         "gemini" => Provider::Gemini(GeminiProvider {
             api_key: settings.gemini_api_key.clone(),
@@ -1051,6 +1052,13 @@ pub async fn run_agent(
         msgs.push(MessageView::User {
             content: format!("系统工具分层策略：\n{}", tooling.guidance),
         });
+    }
+    if tools::is_safety_request(&user_text) {
+        if let Some(prompt) = tools::safety_clarification_prompt(&user_text) {
+            msgs.push(MessageView::User {
+                content: format!("系统提醒（安全防护缺参追问）：\n{}", prompt),
+            });
+        }
     }
     if !user_text.is_empty() {
         if let Some(reference_context) =
@@ -1145,7 +1153,7 @@ pub async fn run_agent(
                 });
                 let mut batch_results: Vec<ToolResult> = Vec::new();
                 for call in &calls {
-                    let result = tools::dispatch(call);
+                    let result = tools::dispatch_with_mode(call, settings.work_mode);
                     let _ = app.emit("agent:event", AgentEvent::ToolResult { result: &result });
                     msgs.push(MessageView::Tool {
                         id: result.id.clone(),
@@ -1192,14 +1200,15 @@ pub async fn run_agent(
 }
 
 #[tauri::command]
-pub fn confirm_tool_call(call: ToolCall) -> Result<ToolResult, String> {
+pub fn confirm_tool_call(app: AppHandle, call: ToolCall) -> Result<ToolResult, String> {
+    let settings = crate::settings::load(&app)?;
     let mut undo_group_open = false;
     if is_mutating_tool(&call.name) {
         begin_undo_group()?;
         undo_group_open = true;
     }
 
-    let result = tools::dispatch_confirmed(&call);
+    let result = tools::dispatch_confirmed_with_mode(&call, settings.work_mode);
 
     if undo_group_open {
         if let Err(e) = end_undo_group() {

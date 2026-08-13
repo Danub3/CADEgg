@@ -1,6 +1,8 @@
 ﻿use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::settings::WorkMode;
+
 /// Tool invocation requested by the LLM. `id` echoes Claude's tool_use_id when
 /// available; for Gemini we synthesize one since functionCall has no id.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -341,6 +343,57 @@ fn params_run_lisp() -> Value {
     })
 }
 
+fn params_draw_elevator_shaft_protection() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "x": {"type": "number", "description": "电梯井口中心 X"},
+            "y": {"type": "number", "description": "电梯井口中心 Y"},
+            "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0"},
+            "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0"},
+            "guardrail_height": {"type": "number", "description": "防护栏杆高度，毫米，常用 1200"},
+            "post_spacing": {"type": "number", "description": "立杆最大间距，毫米，常用 2000"},
+            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，常用 180"},
+            "include_warning_sign": {"type": "boolean", "description": "是否绘制警示牌，默认 true"},
+            "include_material_table": {"type": "boolean", "description": "是否绘制材料表，默认 true"},
+            "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"}
+        },
+        "required": [
+            "x",
+            "y",
+            "opening_width",
+            "opening_height",
+            "guardrail_height",
+            "post_spacing",
+            "toe_board_height"
+        ]
+    })
+}
+
+fn params_validate_elevator_shaft_protection() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0"},
+            "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0"},
+            "guardrail_height": {"type": "number", "description": "防护栏杆高度，毫米"},
+            "post_spacing": {"type": "number", "description": "立杆最大间距，毫米"},
+            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米"},
+            "include_warning_sign": {"type": "boolean", "description": "是否包含警示牌"},
+            "include_material_table": {"type": "boolean", "description": "是否包含材料表"}
+        },
+        "required": [
+            "opening_width",
+            "opening_height",
+            "guardrail_height",
+            "post_spacing",
+            "toe_board_height",
+            "include_warning_sign",
+            "include_material_table"
+        ]
+    })
+}
+
 fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -378,6 +431,18 @@ fn all_tool_specs() -> Vec<ToolSpec> {
             layer: ToolLayer::SemanticGeometry,
             description: "绘制建筑平面中的 U 型双跑楼梯：两段平行梯跑、休息平台、踏步线、可选上行箭头和 UP 标注。适合“双跑楼梯、折返楼梯、带平台楼梯”等请求；未给尺寸时可用 flight_width=1200, step_depth=280, steps_per_flight=10, landing_depth=1200。",
             parameters: params_draw_double_flight_stair,
+        },
+        ToolSpec {
+            name: "draw_elevator_shaft_protection",
+            layer: ToolLayer::SemanticGeometry,
+            description: "绘制电梯井口临边防护标准布置：井口轮廓、立杆、上/中横杆、踢脚板、警示牌、尺寸标注和可选材料表。适合安全防护 demo 的主绘图工具。",
+            parameters: params_draw_elevator_shaft_protection,
+        },
+        ToolSpec {
+            name: "validate_elevator_shaft_protection",
+            layer: ToolLayer::Query,
+            description: "按确定性规则校核电梯井口临边防护参数，返回 JSON：ok、issues、checks、material_table。",
+            parameters: params_validate_elevator_shaft_protection,
         },
         ToolSpec {
             name: "draw_text",
@@ -492,12 +557,105 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+/// 判断是否为安全防护 demo 相关请求（电梯井口/临边防护等）。
+pub fn is_safety_request(user_input: &str) -> bool {
+    let text = user_input.to_lowercase();
+    contains_any(
+        &text,
+        &["电梯井", "井口", "临边防护", "洞口防护", "安全防护", "防护栏", "踢脚板"],
+    )
+}
+
+/// 电梯井口临边防护的必填关键参数。返回缺参列表，用于追问闭环。
+/// 仅对「要画防护图」但缺关键尺寸的请求返回缺项；若用户已在同一句里给出尺寸则视为已提供。
+pub fn safety_missing_params(user_input: &str) -> Vec<&'static str> {
+    let text = user_input.to_lowercase();
+    let wants_draw = contains_any(&text, &["画", "绘制", "生成", "做", "出图", "创建", "加"]);
+
+    let mut missing = Vec::new();
+
+    // 井口宽度：出现「宽 2000」「width」等即视为已提供，否则缺。
+    if !contains_any(&text, &["宽", "width"]) {
+        missing.push("井口宽度");
+    }
+    // 井口高度/进深
+    if !contains_any(&text, &["高", "进深", "height"]) {
+        missing.push("井口高度/进深");
+    }
+    // 防护栏杆高度
+    if !contains_any(&text, &["栏杆", "防护高", "护栏"]) {
+        missing.push("防护栏杆高度");
+    }
+    // 立杆间距
+    if !contains_any(&text, &["立杆", "间距", "spacing"]) {
+        missing.push("立杆间距");
+    }
+    // 踢脚板高度
+    if !contains_any(&text, &["踢脚板", "挡脚板", "toe"]) {
+        missing.push("踢脚板高度");
+    }
+
+    // 仅当用户确实想画图且确实缺关键尺寸时返回缺项；纯闲聊/只问规则不算缺参。
+    if !wants_draw || missing.is_empty() {
+        return Vec::new();
+    }
+    missing
+}
+
+/// 生成缺参追问提示文案，供系统提示注入或前端直接展示。
+pub fn safety_clarification_prompt(user_input: &str) -> Option<String> {
+    let missing = safety_missing_params(user_input);
+    if missing.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        "用户请求绘制电梯井口临边防护，但缺少以下关键尺寸，请先向用户追问确认，不要自行编造：".to_string(),
+    ];
+    for (i, field) in missing.iter().enumerate() {
+        lines.push(format!("{}. {}", i + 1, field));
+    }
+    lines.push("另外还需确认：是否包含警示牌、是否输出材料表。".to_string());
+    Some(lines.join("\n"))
+}
+
 pub fn select_tooling_context(
     user_input: &str,
     session_objects: &[SessionObject],
+    work_mode: WorkMode,
 ) -> ToolingContext {
     let text = user_input.to_lowercase();
     let has_session = !session_objects.is_empty();
+    let is_safety_request = crate::tools::is_safety_request(user_input);
+
+    if work_mode == WorkMode::SafetyDemoMode || is_safety_request {
+        let mut selected = vec![
+            "draw_elevator_shaft_protection",
+            "validate_elevator_shaft_protection",
+            "draw_text",
+            "zoom_extents",
+            "inspect_handle",
+        ];
+        if contains_any(&text, &["选中", "选择集", "圈选", "预选"]) {
+            selected.push("list_selection");
+            selected.push("import_selection");
+        }
+        let mut lines = vec![
+            "安全防护 demo 模式：只暴露电梯井口临边防护专用工具、校核工具、文字和最少查询工具。".to_string(),
+            "优先调用 draw_elevator_shaft_protection；绘图完成后调用 validate_elevator_shaft_protection 输出 JSON 校核结果。".to_string(),
+            "缺少 opening_width/opening_height/guardrail_height/post_spacing/toe_board_height 时，先向用户追问，不要编造尺寸。".to_string(),
+        ];
+        if let Some(prompt) = safety_clarification_prompt(user_input) {
+            lines.push(prompt);
+        }
+        if has_session {
+            lines.push("若继续操作已有对象，可先 inspect_handle 查询，但不要使用任意 LISP 或低层编辑工具。".to_string());
+        }
+        return ToolingContext {
+            tool_names: ordered_unique(selected),
+            guidance: lines.join("\n"),
+        };
+    }
+
     let is_stair_request = contains_any(&text, &["楼梯", "双跑", "折返", "休息平台", "踏步", "梯段"]);
     let mentions_object_ref = contains_any(
         &text,
@@ -578,7 +736,8 @@ pub fn select_tooling_context(
     if contains_any(
         &text,
         &["相切", "倒角", "圆角", "样条", "螺旋", "图片", "识图"],
-    ) {
+    ) && work_mode != WorkMode::CompetitionMode
+    {
         selected.push("run_lisp");
     }
 
@@ -604,6 +763,9 @@ pub fn select_tooling_context(
         "本轮工具层：{}。优先语义几何，其次基础绘制，最后 run_lisp；可确定的多步任务尽量一次性给出完整 tool_calls。",
         group_lines.join("；")
     )];
+    if work_mode == WorkMode::CompetitionMode {
+        lines.push("比赛模式：不要调用 run_lisp；需要复杂图形时优先选择结构化或语义工具。".to_string());
+    }
     if has_session || mentions_object_ref {
         lines.push("若继续操作已有对象，优先按 handle 工具执行，不要退回到 last。".to_string());
     }
@@ -855,6 +1017,11 @@ fn object_updates_for_success(call: &ToolCall, content: &str) -> Vec<ObjectUpdat
             .into_iter()
             .collect(),
         "draw_double_flight_stair" => Vec::new(),
+        "draw_elevator_shaft_protection" => {
+            extract_created_session_object(content)
+                .map(|object| vec![ObjectUpdate::Upsert { object }])
+                .unwrap_or_default()
+        }
         "draw_text" => extract_handle(content)
             .map(|handle| ObjectUpdate::Upsert {
                 object: SessionObject {
@@ -920,6 +1087,34 @@ pub fn dispatch(call: &ToolCall) -> ToolResult {
 
 pub fn dispatch_confirmed(call: &ToolCall) -> ToolResult {
     dispatch_with_policy(call, true)
+}
+
+pub fn dispatch_with_mode(call: &ToolCall, work_mode: WorkMode) -> ToolResult {
+    if work_mode == WorkMode::CompetitionMode && call.name == "run_lisp" {
+        return ToolResult {
+            id: call.id.clone(),
+            name: call.name.clone(),
+            ok: false,
+            content: "比赛模式已禁用 run_lisp。请改用结构化 CAD 工具或安全防护专用工具。".to_string(),
+            confirmation_required: false,
+            object_updates: Vec::new(),
+        };
+    }
+    dispatch(call)
+}
+
+pub fn dispatch_confirmed_with_mode(call: &ToolCall, work_mode: WorkMode) -> ToolResult {
+    if work_mode == WorkMode::CompetitionMode && call.name == "run_lisp" {
+        return ToolResult {
+            id: call.id.clone(),
+            name: call.name.clone(),
+            ok: false,
+            content: "比赛模式已禁用 run_lisp。请改用结构化 CAD 工具或安全防护专用工具。".to_string(),
+            confirmation_required: false,
+            object_updates: Vec::new(),
+        };
+    }
+    dispatch_confirmed(call)
 }
 
 pub fn requires_confirmation(tool_name: &str) -> bool {
@@ -1037,6 +1232,46 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
         ),
+        #[cfg(windows)]
+        "draw_elevator_shaft_protection" => crate::cad::cad_draw_elevator_shaft_protection(
+            num(&call.args, "x")?,
+            num(&call.args, "y")?,
+            num(&call.args, "opening_width")?,
+            num(&call.args, "opening_height")?,
+            num(&call.args, "guardrail_height")?,
+            num(&call.args, "post_spacing")?,
+            num(&call.args, "toe_board_height")?,
+            call.args
+                .get("include_warning_sign")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("include_material_table")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
+        ),
+        #[cfg(windows)]
+        "validate_elevator_shaft_protection" => {
+            crate::cad::cad_validate_elevator_shaft_protection(
+                num(&call.args, "opening_width")?,
+                num(&call.args, "opening_height")?,
+                num(&call.args, "guardrail_height")?,
+                num(&call.args, "post_spacing")?,
+                num(&call.args, "toe_board_height")?,
+                call.args
+                    .get("include_warning_sign")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                call.args
+                    .get("include_material_table")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            )
+        }
         #[cfg(windows)]
         "draw_text" => crate::cad::cad_draw_text(
             num(&call.args, "x")?,
@@ -1162,11 +1397,64 @@ mod tests {
 
     #[test]
     fn stair_requests_select_double_flight_stair_tool() {
-        let tooling = select_tooling_context("画一个双跑楼梯，宽 1200，每跑 10 级", &[]);
+        let tooling = select_tooling_context(
+            "画一个双跑楼梯，宽 1200，每跑 10 级",
+            &[],
+            WorkMode::CompetitionMode,
+        );
 
         assert!(tooling
             .tool_names
             .iter()
             .any(|name| name == "draw_double_flight_stair"));
+    }
+
+    #[test]
+    fn safety_requests_select_elevator_shaft_tools_without_lisp() {
+        let tooling = select_tooling_context(
+            "画一个电梯井口临边防护，宽 2000 高 1800",
+            &[],
+            WorkMode::CompetitionMode,
+        );
+
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_elevator_shaft_protection"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "validate_elevator_shaft_protection"));
+        assert!(!tooling.tool_names.iter().any(|name| name == "run_lisp"));
+    }
+
+    #[test]
+    fn competition_mode_does_not_expose_lisp_for_escape_keywords() {
+        let tooling = select_tooling_context(
+            "画一个带圆角和样条曲线的图形",
+            &[],
+            WorkMode::CompetitionMode,
+        );
+
+        assert!(!tooling.tool_names.iter().any(|name| name == "run_lisp"));
+    }
+
+    #[test]
+    fn safety_missing_params_detects_incomplete_request() {
+        let missing = safety_missing_params("画一个电梯井口防护");
+        assert!(missing.iter().any(|m| *m == "井口宽度"));
+        assert!(missing.iter().any(|m| *m == "防护栏杆高度"));
+
+        // 已给出完整尺寸时不应报告缺参
+        let missing = safety_missing_params(
+            "画一个电梯井口临边防护，井口宽 2000，高 1800，防护栏杆 1200，立杆间距 2000，踢脚板 180",
+        );
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn safety_clarification_prompt_only_for_draw_requests() {
+        assert!(safety_clarification_prompt("画一个电梯井口防护").is_some());
+        assert!(safety_clarification_prompt("电梯井口防护有哪些安全要求").is_none());
     }
 }

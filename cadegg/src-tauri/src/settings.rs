@@ -3,11 +3,21 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkMode {
+    #[default]
+    CompetitionMode,
+    SafetyDemoMode,
+}
+
 /// On-disk settings — never returned to the frontend as-is.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     #[serde(default = "default_provider")]
     pub provider: String,
+    #[serde(default = "default_work_mode")]
+    pub work_mode: WorkMode,
 
     // Claude
     #[serde(default)]
@@ -37,6 +47,9 @@ pub struct Settings {
 fn default_provider() -> String {
     "glm".to_string()
 }
+fn default_work_mode() -> WorkMode {
+    WorkMode::CompetitionMode
+}
 fn default_claude_model() -> String {
     "claude-opus-4-7".to_string()
 }
@@ -60,6 +73,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             provider: default_provider(),
+            work_mode: default_work_mode(),
             anthropic_api_key: String::new(),
             model: default_claude_model(),
             base_url: default_claude_base_url(),
@@ -77,6 +91,7 @@ impl Default for Settings {
 #[derive(Serialize)]
 pub struct SettingsView {
     pub provider: String,
+    pub work_mode: WorkMode,
     pub model: String,
     pub base_url: String,
     pub gemini_model: String,
@@ -109,6 +124,7 @@ impl From<&Settings> for SettingsView {
     fn from(s: &Settings) -> Self {
         Self {
             provider: s.provider.clone(),
+            work_mode: s.work_mode,
             model: s.model.clone(),
             base_url: s.base_url.clone(),
             gemini_model: s.gemini_model.clone(),
@@ -130,6 +146,8 @@ impl From<&Settings> for SettingsView {
 #[derive(Deserialize)]
 pub struct SettingsUpdate {
     pub provider: String,
+    #[serde(default = "default_work_mode")]
+    pub work_mode: WorkMode,
     pub model: String,
     pub base_url: String,
     pub gemini_model: String,
@@ -172,6 +190,7 @@ pub fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
 pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<(), String> {
     let mut current = load(&app).unwrap_or_default();
     current.provider = update.provider;
+    current.work_mode = update.work_mode;
     current.model = update.model;
     current.base_url = update.base_url;
     current.gemini_model = update.gemini_model;

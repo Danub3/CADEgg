@@ -1,0 +1,48 @@
+{
+  "scene": "elevator_shaft_protection",
+  "checks": [
+    {
+      "id": "opening_size_valid",
+      "label": "井口宽度和高度已提供且为正数",
+      "rule": "opening_width > 0 且 opening_height > 0"
+    },
+    {
+      "id": "guardrail_height_valid",
+      "label": "防护栏杆高度不低于 1200mm",
+      "rule": "guardrail_height >= 1200"
+    },
+    {
+      "id": "post_spacing_valid",
+      "label": "立杆间距不大于 2000mm",
+      "rule": "post_spacing > 0 且 post_spacing <= 2000"
+    },
+    {
+      "id": "toe_board_present",
+      "label": "踢脚板高度不低于 180mm",
+      "rule": "toe_board_height >= 180"
+    },
+    {
+      "id": "warning_sign_present",
+      "label": "警示牌已配置",
+      "rule": "include_warning_sign == true"
+    },
+    {
+      "id": "material_table_present",
+      "label": "材料表已配置",
+      "rule": "include_material_table == true"
+    },
+    {
+      "id": "dimension_complete",
+      "label": "井口尺寸、防护高度、立杆间距、踢脚板高度标注齐全",
+      "rule": "全部关键尺寸 > 0"
+    }
+  ],
+  "material_table": {
+    "posts": "ceil(perimeter / post_spacing)，至少 4 根",
+    "rails": "top_and_mid_rails（上横杆 + 中横杆）",
+    "toe_board_height": "按输入值",
+    "warning_sign": "按 include_warning_sign",
+    "material_table_included": "按 include_material_table"
+  },
+  "note": "本文件与 src-tauri/src/cad.rs 中 cad_validate_elevator_shaft_protection 的确定性校核规则保持一致，供 RAG 引用与人工核对。"
+}

@@ -4,6 +4,8 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   AgentEvent,
+  DemoLogEntry,
+  ElevatorValidation,
   Message,
   ObjectUpdate,
   PanelState,
@@ -46,6 +48,9 @@ export default function App() {
   const [syncingObjects, setSyncingObjects] = useState(false);
   const [importingSelection, setImportingSelection] = useState(false);
 
+  const [demoLog, setDemoLog] = useState<DemoLogEntry[]>([]);
+  const [lastValidation, setLastValidation] = useState<ElevatorValidation | null>(null);
+
   const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -56,6 +61,32 @@ export default function App() {
   const runTouchedObjectTableRef = useRef(false);
   const pendingPostRunSyncRef = useRef(false);
   const pendingToolCallsRef = useRef<Record<string, ToolCall>>({});
+  const lastUserInputRef = useRef("");
+  const pendingLogRef = useRef<{
+    toolCalls: string[];
+    params: Record<string, unknown>;
+    validation: ElevatorValidation | null;
+    summary: string;
+  } | null>(null);
+
+  function tryParseValidation(content: string): ElevatorValidation | null {
+    const trimmed = content.trim();
+    if (!trimmed.startsWith("{")) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        parsed &&
+        typeof parsed.ok === "boolean" &&
+        Array.isArray(parsed.checks) &&
+        typeof parsed.material_table === "object"
+      ) {
+        return parsed as ElevatorValidation;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  }
 
   function updateSessionObjects(
     updater: SessionObject[] | ((prev: SessionObject[]) => SessionObject[])
@@ -106,6 +137,10 @@ export default function App() {
       } else if (e.kind === "assistant") {
         for (const call of e.tool_calls) {
           pendingToolCallsRef.current[call.id] = call;
+          if (pendingLogRef.current) {
+            pendingLogRef.current.toolCalls.push(call.name);
+            Object.assign(pendingLogRef.current.params, call.args);
+          }
         }
         if (e.tool_calls.length > 0 || (e.text && assistantDraftRef.current && e.text === assistantDraftRef.current)) {
           assistantDraftRef.current = "";
@@ -125,6 +160,22 @@ export default function App() {
         const pendingCall = e.result.confirmation_required
           ? pendingToolCallsRef.current[e.result.id]
           : undefined;
+        if (e.result.name === "validate_elevator_shaft_protection") {
+          const validation = tryParseValidation(e.result.content);
+          if (validation) {
+            setLastValidation(validation);
+            if (pendingLogRef.current) {
+              pendingLogRef.current.validation = validation;
+            }
+          }
+        }
+        if (e.result.name === "draw_elevator_shaft_protection") {
+          if (pendingLogRef.current) {
+            pendingLogRef.current.summary = e.result.ok
+              ? e.result.content
+              : `绘图失败：${e.result.content}`;
+          }
+        }
         setMessages((prev) => [
           ...prev,
           { role: "tool", ...e.result, pending_call: pendingCall },
@@ -142,6 +193,19 @@ export default function App() {
           setAssistantDraft("");
         }
         commitUndoSnapshotIfNeeded();
+        const pending = pendingLogRef.current;
+        pendingLogRef.current = null;
+        if (pending && pending.toolCalls.length > 0) {
+          const entry: DemoLogEntry = {
+            time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+            user_input: lastUserInputRef.current,
+            tool_calls: pending.toolCalls,
+            params: pending.params,
+            validation: pending.validation ?? undefined,
+            summary: pending.summary || "完成",
+          };
+          setDemoLog((prev) => [entry, ...prev].slice(0, 30));
+        }
         const shouldPostRunSync = pendingPostRunSyncRef.current;
         pendingPostRunSyncRef.current = false;
         if (shouldPostRunSync) {
@@ -214,9 +278,16 @@ export default function App() {
         syncedObjects = latest;
       }
 
-      pendingUndoSnapshotRef.current = cloneSessionObjects(syncedObjects);
-      runTouchedObjectTableRef.current = false;
-      pendingPostRunSyncRef.current = false;
+    pendingUndoSnapshotRef.current = cloneSessionObjects(syncedObjects);
+    runTouchedObjectTableRef.current = false;
+    pendingPostRunSyncRef.current = false;
+    lastUserInputRef.current = text;
+    pendingLogRef.current = {
+      toolCalls: [],
+      params: {},
+      validation: null,
+      summary: "",
+    };
 
       // run_agent emits agent:event for each step; resolve only signals the loop ended.
       // We send the prior history (without the new user msg) — backend appends user_input itself.
@@ -239,6 +310,7 @@ export default function App() {
       await invoke("save_settings", {
         update: {
           provider: settings.provider,
+          work_mode: settings.work_mode,
           model: settings.model,
           base_url: settings.base_url,
           gemini_model: settings.gemini_model,
@@ -572,6 +644,107 @@ export default function App() {
                 )}
               </div>
 
+              {/* Validation panel */}
+              {lastValidation && (
+                <div
+                  className={`rounded-2xl border p-3 flex flex-col gap-2 ${
+                    lastValidation.ok
+                      ? "bg-emerald-50/70 border-emerald-200/80"
+                      : "bg-rose-50/70 border-rose-200/80"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-wider font-medium text-slate-600">
+                      安全防护校核
+                    </span>
+                    <span
+                      className={`text-[11px] font-semibold ${
+                        lastValidation.ok ? "text-emerald-700" : "text-rose-700"
+                      }`}
+                    >
+                      {lastValidation.ok ? "✓ 通过" : "✗ 未通过"}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {lastValidation.checks.map((check) => (
+                      <div
+                        key={check.id}
+                        className="flex items-start gap-1.5 text-[11px] leading-snug"
+                      >
+                        <span
+                          className={`shrink-0 font-semibold ${
+                            check.passed ? "text-emerald-600" : "text-rose-600"
+                          }`}
+                        >
+                          {check.passed ? "✓" : "✗"}
+                        </span>
+                        <span className="text-slate-700">{check.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {lastValidation.issues.length > 0 && (
+                    <div className="rounded-lg bg-rose-100/70 px-2 py-1.5 text-[11px] text-rose-800">
+                      风险项：{lastValidation.issues.join("；")}
+                    </div>
+                  )}
+                  <div className="rounded-lg bg-white/70 border border-slate-200/70 px-2 py-1.5 text-[11px] text-slate-700">
+                    材料表：立杆 {lastValidation.material_table.posts} 根 ·{" "}
+                    {lastValidation.material_table.rails === "top_and_mid_rails"
+                      ? "上横杆+中横杆"
+                      : lastValidation.material_table.rails}
+                    {" · "}踢脚板 {lastValidation.material_table.toe_board_height}mm · 警示牌{" "}
+                    {lastValidation.material_table.warning_sign ? "已配" : "未配"}
+                  </div>
+                </div>
+              )}
+
+              {/* Demo log */}
+              {demoLog.length > 0 && (
+                <details className="rounded-2xl bg-slate-50/80 border border-slate-200/70 p-3">
+                  <summary className="cursor-pointer text-[10px] uppercase tracking-wider font-medium text-slate-500 list-none">
+                    演示履历 · {demoLog.length} 条
+                  </summary>
+                  <div className="mt-2 flex flex-col gap-2">
+                    {demoLog.map((entry, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-xl bg-white/80 border border-slate-200/70 px-2.5 py-2 text-[11px] text-slate-700"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">{entry.time}</span>
+                          <span
+                            className={`font-semibold ${
+                              entry.validation
+                                ? entry.validation.ok
+                                  ? "text-emerald-600"
+                                  : "text-rose-600"
+                                : "text-slate-500"
+                            }`}
+                          >
+                            {entry.validation
+                              ? entry.validation.ok
+                                ? "校核通过"
+                                : "校核未通过"
+                              : "已执行"}
+                          </span>
+                        </div>
+                        <div className="mt-1 break-words text-slate-600">{entry.user_input}</div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {entry.tool_calls.map((name) => (
+                            <span
+                              key={name}
+                              className="px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-700 font-mono text-[10px]"
+                            >
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
               {/* Messages */}
               {messages.length === 0 && (
                 <div className="flex-1 flex flex-col items-center justify-center text-center py-6 gap-2">
@@ -658,10 +831,10 @@ export default function App() {
             {/* Provider switch */}
             <div className="flex flex-col gap-2">
               <label className="text-xs text-slate-500 font-medium">模型提供方</label>
-              <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 rounded-xl">
-                {(["claude", "gemini", "glm"] as Provider[]).map((p) => {
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl">
+                {(["gemini", "glm"] as Provider[]).map((p) => {
                   const active = settings.provider === p;
-                  const label = p === "claude" ? "Claude（未实现）" : p === "gemini" ? "Gemini" : "GLM";
+                  const label = p === "gemini" ? "Gemini" : "GLM";
                   return (
                     <button
                       key={p}
@@ -677,16 +850,43 @@ export default function App() {
                   );
                 })}
               </div>
-              {settings.provider === "claude" && (
-                <p className="text-[10px] text-amber-600 leading-snug">
-                  ⚠️ Claude 工具调用本版本暂未实现，请切到 Gemini 或 GLM。
-                </p>
-              )}
               {settings.provider === "glm" && (
                 <p className="text-[10px] text-emerald-700 leading-snug">
                   💡 智谱 GLM-4-Flash / 4.5-Flash 有免费额度，国内直连不用代理。
                 </p>
               )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-xs text-slate-500 font-medium">工作模式</label>
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl">
+                {(["competition_mode", "safety_demo_mode"] as const).map((mode) => {
+                  const active = settings.work_mode === mode;
+                  const label = mode === "competition_mode" ? "比赛模式" : "安全防护 demo";
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          work_mode: mode,
+                          provider: settings.provider === "claude" ? "glm" : settings.provider,
+                        })
+                      }
+                      className={`py-1.5 rounded-lg text-xs font-medium transition-all ${
+                        active
+                          ? "bg-white text-slate-800 shadow-sm"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-slate-400 leading-snug">
+                比赛模式隐藏 Claude 和 run_lisp；安全防护 demo 只开放电梯井口临边防护闭环工具。
+              </p>
             </div>
 
             {settings.provider === "claude" ? (

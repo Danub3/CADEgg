@@ -8,6 +8,7 @@ export function shouldAutoSyncObjectTable(toolName: string): boolean {
     "draw_equilateral_triangle_about_circle",
     "draw_rectangle_by_center",
     "draw_double_flight_stair",
+    "draw_elevator_shaft_protection",
     "draw_text",
     "move",
     "move_handle",

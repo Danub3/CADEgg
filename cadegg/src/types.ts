@@ -1,6 +1,7 @@
 export type PanelState = "collapsed" | "expanded";
 export type View = "chat" | "settings";
 export type Provider = "claude" | "gemini" | "glm";
+export type WorkMode = "competition_mode" | "safety_demo_mode";
 
 export interface ToolCall {
   id: string;
@@ -58,8 +59,37 @@ export type AgentEvent =
   | { kind: "done"; text: string }
   | { kind: "error"; message: string };
 
+export interface ValidationCheck {
+  id: string;
+  label: string;
+  passed: boolean;
+}
+
+export interface ElevatorValidation {
+  ok: boolean;
+  issues: string[];
+  checks: ValidationCheck[];
+  material_table: {
+    posts: number;
+    rails: string;
+    toe_board_height: number;
+    warning_sign: boolean;
+    material_table_included: boolean;
+  };
+}
+
+export interface DemoLogEntry {
+  time: string;
+  user_input: string;
+  tool_calls: string[];
+  params: Record<string, unknown>;
+  validation?: ElevatorValidation;
+  summary: string;
+}
+
 export interface SettingsView {
   provider: Provider;
+  work_mode: WorkMode;
   model: string;
   base_url: string;
   gemini_model: string;

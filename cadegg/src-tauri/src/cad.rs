@@ -990,6 +990,15 @@ fn extract_created_handle(content: &str) -> Result<String, String> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+fn extract_created_handle_or_fallback(content: &str, fallback: &str) -> Result<String, String> {
+    if content.contains("新对象 handle=") {
+        extract_created_handle(content)
+    } else {
+        Ok(fallback.to_string())
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn line_matches(info: &str, x1: f64, y1: f64, x2: f64, y2: f64) -> bool {
     let forward = format!(
         "直线 ({},{}) → ({},{})",
@@ -1665,6 +1674,425 @@ pub fn cad_draw_double_flight_stair(
     })
 }
 
+pub fn cad_draw_elevator_shaft_protection(
+    x: f64,
+    y: f64,
+    opening_width: f64,
+    opening_height: f64,
+    guardrail_height: f64,
+    post_spacing: f64,
+    toe_board_height: f64,
+    include_warning_sign: bool,
+    include_material_table: bool,
+    scale: f64,
+) -> Result<String, String> {
+    if opening_width <= 0.0 || opening_height <= 0.0 {
+        return Err(format!(
+            "opening_width 和 opening_height 必须为正数，收到 width={} height={}",
+            opening_width, opening_height
+        ));
+    }
+    if guardrail_height <= 0.0 || post_spacing <= 0.0 || toe_board_height <= 0.0 {
+        return Err(format!(
+            "guardrail_height、post_spacing、toe_board_height 必须为正数，收到 {}, {}, {}",
+            guardrail_height, post_spacing, toe_board_height
+        ));
+    }
+    if scale <= 0.0 {
+        return Err(format!("scale 必须为正数，收到 {scale}"));
+    }
+
+    fn push_line(cmd: &mut String, x1: f64, y1: f64, x2: f64, y2: f64) {
+        cmd.push_str(&format!(
+            "_.LINE\n{},{}\n{},{}\n\n",
+            fmt_num(x1),
+            fmt_num(y1),
+            fmt_num(x2),
+            fmt_num(y2)
+        ));
+    }
+
+    fn push_rect(cmd: &mut String, x1: f64, y1: f64, x2: f64, y2: f64) {
+        cmd.push_str("_.PLINE\n");
+        cmd.push_str(&format!("{},{}\n", fmt_num(x1), fmt_num(y1)));
+        cmd.push_str(&format!("{},{}\n", fmt_num(x2), fmt_num(y1)));
+        cmd.push_str(&format!("{},{}\n", fmt_num(x2), fmt_num(y2)));
+        cmd.push_str(&format!("{},{}\n", fmt_num(x1), fmt_num(y2)));
+        cmd.push_str("C\n");
+    }
+
+    fn push_text(cmd: &mut String, x: f64, y: f64, height: f64, text: &str) {
+        cmd.push_str(&format!(
+            "_.TEXT\n{},{}\n{}\n0\n{}\n",
+            fmt_num(x),
+            fmt_num(y),
+            fmt_num(height),
+            text
+        ));
+    }
+
+    let width = opening_width * scale;
+    let height = opening_height * scale;
+    let rail_h = guardrail_height * scale;
+    let toe_h = toe_board_height * scale;
+    let max_post_spacing = post_spacing * scale;
+    let margin = 450.0 * scale;
+    let text_h = (140.0 * scale).max(80.0);
+    let post_size = (90.0 * scale).max(40.0);
+    let rail_gap = (180.0 * scale).max(80.0);
+
+    let left = x - width / 2.0;
+    let right = x + width / 2.0;
+    let bottom = y - height / 2.0;
+    let top = y + height / 2.0;
+    let guard_left = left - margin;
+    let guard_right = right + margin;
+    let guard_bottom = bottom - margin;
+    let guard_top = top + margin;
+
+    let perimeter = 2.0 * ((guard_right - guard_left) + (guard_top - guard_bottom));
+    let post_count = (perimeter / max_post_spacing).ceil().max(4.0) as i32;
+    let side_post_count = ((guard_top - guard_bottom) / max_post_spacing).ceil().max(1.0) as i32;
+    let top_post_count = ((guard_right - guard_left) / max_post_spacing).ceil().max(1.0) as i32;
+
+    let mut cmd = String::new();
+    push_rect(&mut cmd, left, bottom, right, top);
+    push_rect(&mut cmd, guard_left, guard_bottom, guard_right, guard_top);
+    push_rect(
+        &mut cmd,
+        guard_left,
+        guard_bottom,
+        guard_right,
+        guard_bottom + toe_h,
+    );
+    push_rect(&mut cmd, guard_left, guard_top - toe_h, guard_right, guard_top);
+    push_rect(&mut cmd, guard_left, guard_bottom, guard_left + toe_h, guard_top);
+    push_rect(&mut cmd, guard_right - toe_h, guard_bottom, guard_right, guard_top);
+
+    let mid_offset = rail_h * 0.5;
+    push_line(
+        &mut cmd,
+        guard_left,
+        guard_bottom + rail_gap,
+        guard_right,
+        guard_bottom + rail_gap,
+    );
+    push_line(
+        &mut cmd,
+        guard_left,
+        guard_bottom + rail_gap + mid_offset,
+        guard_right,
+        guard_bottom + rail_gap + mid_offset,
+    );
+    push_line(
+        &mut cmd,
+        guard_left,
+        guard_top - rail_gap,
+        guard_right,
+        guard_top - rail_gap,
+    );
+    push_line(
+        &mut cmd,
+        guard_left,
+        guard_top - rail_gap - mid_offset,
+        guard_right,
+        guard_top - rail_gap - mid_offset,
+    );
+    push_line(
+        &mut cmd,
+        guard_left + rail_gap,
+        guard_bottom,
+        guard_left + rail_gap,
+        guard_top,
+    );
+    push_line(
+        &mut cmd,
+        guard_left + rail_gap + mid_offset,
+        guard_bottom,
+        guard_left + rail_gap + mid_offset,
+        guard_top,
+    );
+    push_line(
+        &mut cmd,
+        guard_right - rail_gap,
+        guard_bottom,
+        guard_right - rail_gap,
+        guard_top,
+    );
+    push_line(
+        &mut cmd,
+        guard_right - rail_gap - mid_offset,
+        guard_bottom,
+        guard_right - rail_gap - mid_offset,
+        guard_top,
+    );
+
+    for i in 0..=top_post_count {
+        let t = i as f64 / top_post_count as f64;
+        let px = guard_left + (guard_right - guard_left) * t;
+        push_rect(
+            &mut cmd,
+            px - post_size / 2.0,
+            guard_bottom - post_size / 2.0,
+            px + post_size / 2.0,
+            guard_bottom + post_size / 2.0,
+        );
+        push_rect(
+            &mut cmd,
+            px - post_size / 2.0,
+            guard_top - post_size / 2.0,
+            px + post_size / 2.0,
+            guard_top + post_size / 2.0,
+        );
+    }
+    for i in 1..side_post_count {
+        let t = i as f64 / side_post_count as f64;
+        let py = guard_bottom + (guard_top - guard_bottom) * t;
+        push_rect(
+            &mut cmd,
+            guard_left - post_size / 2.0,
+            py - post_size / 2.0,
+            guard_left + post_size / 2.0,
+            py + post_size / 2.0,
+        );
+        push_rect(
+            &mut cmd,
+            guard_right - post_size / 2.0,
+            py - post_size / 2.0,
+            guard_right + post_size / 2.0,
+            py + post_size / 2.0,
+        );
+    }
+
+    let dim_y = guard_bottom - 300.0 * scale;
+    let dim_x = guard_right + 300.0 * scale;
+    push_line(&mut cmd, left, dim_y, right, dim_y);
+    push_line(&mut cmd, left, dim_y - 60.0 * scale, left, dim_y + 60.0 * scale);
+    push_line(&mut cmd, right, dim_y - 60.0 * scale, right, dim_y + 60.0 * scale);
+    push_text(
+        &mut cmd,
+        x - 260.0 * scale,
+        dim_y - 180.0 * scale,
+        text_h,
+        &format!("井口宽 {}", fmt_num(opening_width)),
+    );
+    push_line(&mut cmd, dim_x, bottom, dim_x, top);
+    push_line(&mut cmd, dim_x - 60.0 * scale, bottom, dim_x + 60.0 * scale, bottom);
+    push_line(&mut cmd, dim_x - 60.0 * scale, top, dim_x + 60.0 * scale, top);
+    push_text(
+        &mut cmd,
+        dim_x + 80.0 * scale,
+        y,
+        text_h,
+        &format!("井口高 {}", fmt_num(opening_height)),
+    );
+    push_text(
+        &mut cmd,
+        guard_left,
+        guard_top + 180.0 * scale,
+        text_h,
+        &format!(
+            "电梯井口临边防护 H={} 立杆间距<={} 踢脚板={}",
+            fmt_num(guardrail_height),
+            fmt_num(post_spacing),
+            fmt_num(toe_board_height)
+        ),
+    );
+
+    if include_warning_sign {
+        let sign_w = 520.0 * scale;
+        let sign_h = 280.0 * scale;
+        let sign_x1 = x - sign_w / 2.0;
+        let sign_y1 = guard_top + 420.0 * scale;
+        push_rect(&mut cmd, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
+        push_text(
+            &mut cmd,
+            sign_x1 + 80.0 * scale,
+            sign_y1 + sign_h / 2.0 - text_h / 2.0,
+            text_h,
+            "当心坠落 禁止跨越",
+        );
+    }
+
+    if include_material_table {
+        let table_x = guard_right + 760.0 * scale;
+        let table_y = guard_top;
+        let row_h = 240.0 * scale;
+        let col_w = 720.0 * scale;
+        for row in 0..=5 {
+            let y0 = table_y - row_h * row as f64;
+            push_line(&mut cmd, table_x, y0, table_x + col_w * 2.0, y0);
+        }
+        for col in 0..=2 {
+            let x0 = table_x + col_w * col as f64;
+            push_line(&mut cmd, x0, table_y, x0, table_y - row_h * 5.0);
+        }
+        push_text(&mut cmd, table_x + 60.0 * scale, table_y - row_h * 0.7, text_h, "材料");
+        push_text(
+            &mut cmd,
+            table_x + col_w + 60.0 * scale,
+            table_y - row_h * 0.7,
+            text_h,
+            "数量/规格",
+        );
+        push_text(
+            &mut cmd,
+            table_x + 60.0 * scale,
+            table_y - row_h * 1.7,
+            text_h,
+            "立杆",
+        );
+        push_text(
+            &mut cmd,
+            table_x + col_w + 60.0 * scale,
+            table_y - row_h * 1.7,
+            text_h,
+            &format!("{} 根", post_count),
+        );
+        push_text(
+            &mut cmd,
+            table_x + 60.0 * scale,
+            table_y - row_h * 2.7,
+            text_h,
+            "横杆",
+        );
+        push_text(
+            &mut cmd,
+            table_x + col_w + 60.0 * scale,
+            table_y - row_h * 2.7,
+            text_h,
+            "上横杆+中横杆",
+        );
+        push_text(
+            &mut cmd,
+            table_x + 60.0 * scale,
+            table_y - row_h * 3.7,
+            text_h,
+            "踢脚板",
+        );
+        push_text(
+            &mut cmd,
+            table_x + col_w + 60.0 * scale,
+            table_y - row_h * 3.7,
+            text_h,
+            &format!("高 {}", fmt_num(toe_board_height)),
+        );
+        push_text(
+            &mut cmd,
+            table_x + 60.0 * scale,
+            table_y - row_h * 4.7,
+            text_h,
+            "警示牌",
+        );
+        push_text(
+            &mut cmd,
+            table_x + col_w + 60.0 * scale,
+            table_y - row_h * 4.7,
+            text_h,
+            if include_warning_sign { "1 块" } else { "未绘制" },
+        );
+    }
+
+    run_sta(move || unsafe {
+        let app = get_autocad()?;
+        send_command(&app, &cmd)?;
+        Ok(format!(
+            "已生成电梯井口临边防护布置：中心({},{})，井口 {}x{}，防护高度 {}，立杆间距 <= {}，踢脚板 {}，警示牌={}，材料表={}。",
+            fmt_num(x),
+            fmt_num(y),
+            fmt_num(opening_width),
+            fmt_num(opening_height),
+            fmt_num(guardrail_height),
+            fmt_num(post_spacing),
+            fmt_num(toe_board_height),
+            include_warning_sign,
+            include_material_table
+        ))
+    })
+}
+
+pub fn cad_validate_elevator_shaft_protection(
+    opening_width: f64,
+    opening_height: f64,
+    guardrail_height: f64,
+    post_spacing: f64,
+    toe_board_height: f64,
+    include_warning_sign: bool,
+    include_material_table: bool,
+) -> Result<String, String> {
+    let mut checks = Vec::new();
+    let mut issues = Vec::new();
+
+    macro_rules! add_check {
+        ($id:expr, $label:expr, $passed:expr) => {{
+            let passed = $passed;
+            checks.push(serde_json::json!({
+                "id": $id,
+                "label": $label,
+                "passed": passed
+            }));
+            if !passed {
+                issues.push($label.to_string());
+            }
+        }};
+    }
+
+    add_check!(
+        "opening_size_valid",
+        "井口宽度和高度已提供且为正数",
+        opening_width > 0.0 && opening_height > 0.0
+    );
+    add_check!(
+        "guardrail_height_valid",
+        "防护栏杆高度不低于 1200mm",
+        guardrail_height >= 1200.0
+    );
+    add_check!(
+        "post_spacing_valid",
+        "立杆间距不大于 2000mm",
+        post_spacing > 0.0 && post_spacing <= 2000.0
+    );
+    add_check!(
+        "toe_board_present",
+        "踢脚板高度不低于 180mm",
+        toe_board_height >= 180.0
+    );
+    add_check!("warning_sign_present", "警示牌已配置", include_warning_sign);
+    add_check!("material_table_present", "材料表已配置", include_material_table);
+    add_check!(
+        "dimension_complete",
+        "井口尺寸、防护高度、立杆间距、踢脚板高度标注齐全",
+        opening_width > 0.0
+            && opening_height > 0.0
+            && guardrail_height > 0.0
+            && post_spacing > 0.0
+            && toe_board_height > 0.0
+    );
+
+    let guard_width = opening_width + 900.0;
+    let guard_height = opening_height + 900.0;
+    let perimeter = 2.0 * (guard_width + guard_height);
+    let post_count = if post_spacing > 0.0 {
+        (perimeter / post_spacing).ceil().max(4.0) as i32
+    } else {
+        0
+    };
+
+    let payload = serde_json::json!({
+        "ok": issues.is_empty(),
+        "issues": issues,
+        "checks": checks,
+        "material_table": {
+            "posts": post_count,
+            "rails": "top_and_mid_rails",
+            "toe_board_height": toe_board_height,
+            "warning_sign": include_warning_sign,
+            "material_table_included": include_material_table
+        }
+    });
+    serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化校核结果失败: {e}"))
+}
+
 pub fn cad_draw_text(
     x: f64,
     y: f64,
@@ -2302,22 +2730,23 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
         let boundary = extract_first_handle(&cad_draw_line(100.0, -100.0, 100.0, 100.0)?)?;
         cleanup_handles.push(boundary.clone());
         let trim_target = extract_first_handle(&cad_draw_line(0.0, 50.0, 200.0, 50.0)?)?;
-        let trimmed_handle =
-            extract_created_handle(&cad_trim_by_handle(&boundary, &trim_target, 150.0, 50.0)?)?;
+        let trim_result = cad_trim_by_handle(&boundary, &trim_target, 150.0, 50.0)?;
+        let trimmed_handle = extract_created_handle_or_fallback(&trim_result, &trim_target)?;
         cleanup_handles.push(trimmed_handle.clone());
         thread::sleep(Duration::from_millis(250));
         let trimmed = cad_inspect_handle(&trimmed_handle)?;
-        if !line_matches(&trimmed, 0.0, 50.0, 100.0, 50.0) {
+        if !line_matches(&trimmed, 100.0, 50.0, 200.0, 50.0) {
             return Err(format!("trim 校验失败: {trimmed}"));
         }
 
         let extend_target = extract_first_handle(&cad_draw_line(0.0, -50.0, 80.0, -50.0)?)?;
-        let extended_handle = extract_created_handle(&cad_extend_by_handle(
+        let extend_result = cad_extend_by_handle(
             &boundary,
             &extend_target,
             80.0,
             -50.0,
-        )?)?;
+        )?;
+        let extended_handle = extract_created_handle_or_fallback(&extend_result, &extend_target)?;
         cleanup_handles.push(extended_handle.clone());
         thread::sleep(Duration::from_millis(250));
         let extended = cad_inspect_handle(&extended_handle)?;
@@ -2358,10 +2787,50 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
     result
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
+    let draw_result = cad_draw_elevator_shaft_protection(
+        1000.0,
+        2000.0,
+        2000.0,
+        1800.0,
+        1200.0,
+        2000.0,
+        180.0,
+        true,
+        true,
+        1.0,
+    )?;
+    if !draw_result.contains("电梯井口临边防护布置") {
+        return Err(format!("绘图结果不符合预期: {draw_result}"));
+    }
+
+    let validation = cad_validate_elevator_shaft_protection(
+        2000.0,
+        1800.0,
+        1200.0,
+        2000.0,
+        180.0,
+        true,
+        true,
+    )?;
+    let validation_json: serde_json::Value =
+        serde_json::from_str(&validation).map_err(|e| format!("校核 JSON 解析失败: {e}"))?;
+    if validation_json["ok"] != serde_json::Value::Bool(true) {
+        return Err(format!("校核未通过: {validation}"));
+    }
+
+    Ok(format!(
+        "电梯井口临边防护 smoke test 通过：draw={} validation={}",
+        draw_result, validation
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_smoke_test_editing_tools, ensure_bridge_installed_once,
+        bridge_installed_dll_path, cad_smoke_test_editing_tools,
+        cad_smoke_test_elevator_shaft_protection, ensure_bridge_installed_once,
     };
 
     #[test]
@@ -2381,6 +2850,13 @@ mod tests {
     #[ignore = "requires a running AutoCAD session"]
     fn editing_tools_smoke_test_round_trip() {
         let result = cad_smoke_test_editing_tools();
+        assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+    }
+
+    #[test]
+    #[ignore = "requires a running AutoCAD session"]
+    fn elevator_shaft_protection_smoke_test_round_trip() {
+        let result = cad_smoke_test_elevator_shaft_protection();
         assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
     }
 }

@@ -21,6 +21,7 @@ export const GLM_MODELS = [
 
 export const DEFAULT_VIEW: SettingsView = {
   provider: "glm",
+  work_mode: "competition_mode",
   model: "claude-opus-4-7",
   base_url: "https://api.anthropic.com",
   gemini_model: "gemini-2.0-flash",
