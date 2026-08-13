@@ -106,4 +106,4 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## License
 
-This project is licensed under the [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) — 非商业使用、禁止演绎，保留署名。© [Danub3](https://github.com/Danub3)
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — 非商业使用，可自由修改与学习，禁止商业用途。© [Danub3](https://github.com/Danub3)
