@@ -2062,10 +2062,12 @@ pub fn cad_draw_elevator_shaft_protection(
     // 单元格中心 Y（第 row 行，0 为表头）：用于文字垂直居中
     let cell_center_y = |row: usize| -> f64 { table_y - row_h * (row as f64 + 0.5) };
 
-    let perimeter = 2.0 * ((guard_right - guard_left) + (guard_top - guard_bottom));
-    let post_count = (perimeter / max_post_spacing).ceil().max(4.0) as i32;
     let side_post_count = ((guard_top - guard_bottom) / max_post_spacing).ceil().max(1.0) as i32;
     let top_post_count = ((guard_right - guard_left) / max_post_spacing).ceil().max(1.0) as i32;
+    // 实际立杆数：顶/底边各 (top_post_count+1) 根，左右侧边各 (side_post_count-1) 根。
+    // 材料表必须用这个真实值，不能再用「周长÷间距」估算（两者会不一致）。
+    let post_count =
+        ((top_post_count + 1) * 2 + side_post_count.saturating_sub(1) * 2) as i32;
 
     // 分批发送几何命令，文字单独通过 cad_draw_text 创建。
     // 原因：一次性 send_command 几十条命令时，长串后半段会被 AutoCAD 截断或破坏；
@@ -2313,11 +2315,14 @@ pub fn cad_validate_elevator_shaft_protection(
             && toe_board_height > 0.0
     );
 
+    // 立杆数：与绘制逻辑保持一致（顶/底边各 N+1 根，左右侧边各 N-1 根）。
+    // 这里用 900mm 边距（margin=450*2）对应绘图的护栏外框尺寸。
     let guard_width = opening_width + 900.0;
     let guard_height = opening_height + 900.0;
-    let perimeter = 2.0 * (guard_width + guard_height);
     let post_count = if post_spacing > 0.0 {
-        (perimeter / post_spacing).ceil().max(4.0) as i32
+        let top_post_count = (guard_width / post_spacing).ceil().max(1.0) as i32;
+        let side_post_count = (guard_height / post_spacing).ceil().max(1.0) as i32;
+        ((top_post_count + 1) * 2 + side_post_count.saturating_sub(1) * 2) as i32
     } else {
         0
     };
