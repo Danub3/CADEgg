@@ -1203,6 +1203,24 @@ fn fmt_num(n: f64) -> String {
     }
 }
 
+/// 估算文字在 AutoCAD 中的视觉宽度（绘图单位）。
+/// 中日韩全角字符约占 1.0 倍字高，ASCII 半角字符约占 0.55 倍字高。
+/// 用于在默认「左基线对齐」的文字上做视觉居中与单元格内定位，
+/// 避免依赖 bridge/COM 的 Alignment 属性。
+fn estimate_text_width(text: &str, height: f64) -> f64 {
+    let mut width = 0.0;
+    for ch in text.chars() {
+        let code = ch as u32;
+        let is_fullwidth = code >= 0x2E80
+            || matches!(
+                ch,
+                '，' | '。' | '（' | '）' | '：' | '；' | '、' | '！' | '？' | '「' | '」'
+            );
+        width += if is_fullwidth { height } else { 0.55 * height };
+    }
+    width
+}
+
 fn normalize_object_kind(object_name: &str) -> String {
     match object_name {
         "AcDbLine" => "LINE".to_string(),
@@ -1990,9 +2008,17 @@ pub fn cad_draw_elevator_shaft_protection(
     let toe_h = toe_board_height * scale;
     let max_post_spacing = post_spacing * scale;
     let margin = 450.0 * scale;
-    let text_h = (140.0 * scale).max(80.0);
     let post_size = (90.0 * scale).max(40.0);
     let rail_gap = (180.0 * scale).max(80.0);
+
+    // ── 字号分层：不同文字类型用不同高度，避免「一刀切过大」 ──
+    // 标题 / 说明 / 尺寸标注 / 表头 / 表格正文 / 警示文字
+    let title_h = (200.0 * scale).max(120.0); // 图面主标题
+    let note_h = (120.0 * scale).max(72.0); // 说明文字
+    let dim_h = (100.0 * scale).max(60.0); // 尺寸标注
+    let header_h = (110.0 * scale).max(64.0); // 表格表头
+    let cell_h = (95.0 * scale).max(56.0); // 表格正文
+    let sign_h_text = (130.0 * scale).max(72.0); // 警示牌文字
 
     let left = x - width / 2.0;
     let right = x + width / 2.0;
@@ -2002,6 +2028,35 @@ pub fn cad_draw_elevator_shaft_protection(
     let guard_right = right + margin;
     let guard_bottom = bottom - margin;
     let guard_top = top + margin;
+
+    // ── 顶部纵向布局：标题 / 说明 / 警示牌自下而上排列，避免互相遮挡 ──
+    // 各区块之间的垂直间隙，按字号留足安全距离。
+    let title_y = guard_top + 260.0 * scale;
+    let note_y = title_y + title_h + 160.0 * scale;
+    let sign_y1 = note_y + note_h + 160.0 * scale;
+    let sign_w = 560.0 * scale;
+    let sign_h = 300.0 * scale;
+    let sign_x1 = x - sign_w / 2.0;
+
+    // ── 材料表布局常量：表头 1 行 + 数据 4 行，两列 ──
+    // 表格放在护栏右侧，顶部与护栏顶对齐；第二列加宽以容纳长文字。
+    let table_x = guard_right + 760.0 * scale;
+    let table_y = guard_top;
+    let table_rows: usize = 5;
+    let row_h = 240.0 * scale;
+    let col_w0 = 720.0 * scale; // 第一列：材料
+    let col_w1 = 1100.0 * scale; // 第二列：数量/规格
+
+    // 单元格中心 X（用于文字水平居中）：第 col 列的中心横坐标
+    let cell_center_x = |col: usize| -> f64 {
+        if col == 0 {
+            table_x + col_w0 / 2.0
+        } else {
+            table_x + col_w0 + col_w1 / 2.0
+        }
+    };
+    // 单元格中心 Y（第 row 行，0 为表头）：用于文字垂直居中
+    let cell_center_y = |row: usize| -> f64 { table_y - row_h * (row as f64 + 0.5) };
 
     let perimeter = 2.0 * ((guard_right - guard_left) + (guard_top - guard_bottom));
     let post_count = (perimeter / max_post_spacing).ceil().max(4.0) as i32;
@@ -2056,10 +2111,6 @@ pub fn cad_draw_elevator_shaft_protection(
         );
     }
     if include_warning_sign {
-        let sign_w = 520.0 * scale;
-        let sign_h = 280.0 * scale;
-        let sign_x1 = x - sign_w / 2.0;
-        let sign_y1 = guard_top + 420.0 * scale;
         push_rect(&mut cmd_rects, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
     }
 
@@ -2083,64 +2134,89 @@ pub fn cad_draw_elevator_shaft_protection(
     push_line(&mut cmd_lines, dim_x - 60.0 * scale, bottom, dim_x + 60.0 * scale, bottom);
     push_line(&mut cmd_lines, dim_x - 60.0 * scale, top, dim_x + 60.0 * scale, top);
     if include_material_table {
-        let table_x = guard_right + 760.0 * scale;
-        let table_y = guard_top;
-        let row_h = 240.0 * scale;
-        let col_w = 720.0 * scale;
-        for row in 0..=5 {
+        let table_width = col_w0 + col_w1;
+        // 行线：5 行（表头 + 4 数据行），共 6 条横线
+        for row in 0..=table_rows {
             let y0 = table_y - row_h * row as f64;
-            push_line(&mut cmd_lines, table_x, y0, table_x + col_w * 2.0, y0);
+            push_line(&mut cmd_lines, table_x, y0, table_x + table_width, y0);
         }
-        for col in 0..=2 {
-            let x0 = table_x + col_w * col as f64;
-            push_line(&mut cmd_lines, x0, table_y, x0, table_y - row_h * 5.0);
-        }
+        // 列线：2 列，共 3 条竖线，贯穿全部 5 行（表头行同样分列）
+        let x_mid = table_x + col_w0;
+        push_line(&mut cmd_lines, x_mid, table_y, x_mid, table_y - row_h * table_rows as f64);
     }
 
     // ── 批 3：所有文字（bridge / COM AddText）──
     // 文字含中文，SendCommand 经 BSTR 传递可能损坏导致不创建，
     // 改为收集坐标后逐条调用 cad_draw_text（内部 bridge 优先，DBText 直接建中文）。
+    // 布局策略：
+    //   - 字号分层：标题 title_h / 说明 note_h / 标注 dim_h / 表头 header_h / 正文 cell_h / 警示 sign_h_text
+    //   - 尺寸标注：水平标注放在井口下方居中对齐，垂直标注放在右侧居中对齐
+    //   - 标题 + 说明：纵向排列在护栏上方，互不遮挡
+    //   - 表格文字：按 cell 中心定位（水平/垂直居中，估算文字宽度后左移半宽）
+    //   - 警示牌文字：在警示牌框内居中
     let mut text_items: Vec<(f64, f64, f64, String)> = Vec::new();
-    text_items.push((x - 260.0 * scale, dim_y - 180.0 * scale, text_h, format!("井口宽 {}", fmt_num(opening_width))));
-    text_items.push((dim_x + 80.0 * scale, y, text_h, format!("井口高 {}", fmt_num(opening_height))));
-    text_items.push((
-        guard_left,
-        guard_top + 180.0 * scale,
-        text_h,
-        format!(
-            "电梯井口临边防护 H={} 立杆间距<={} 踢脚板={}",
-            fmt_num(guardrail_height),
-            fmt_num(post_spacing),
-            fmt_num(toe_board_height)
-        ),
-    ));
+
+    // 尺寸标注（水平：井口宽，居中对齐在井口下方）
+    let dim_width_text = format!("井口宽 {}", fmt_num(opening_width));
+    let dim_width_x = x - estimate_text_width(&dim_width_text, dim_h) / 2.0;
+    text_items.push((dim_width_x, dim_y - 160.0 * scale, dim_h, dim_width_text));
+
+    // 尺寸标注（垂直：井口高，居中对齐在井口右侧）
+    let dim_height_text = format!("井口高 {}", fmt_num(opening_height));
+    let dim_height_x = dim_x + 120.0 * scale;
+    let dim_height_y = y - estimate_text_width(&dim_height_text, dim_h) / 2.0;
+    text_items.push((dim_height_x, dim_height_y, dim_h, dim_height_text));
+
+    // 主标题（居中对齐在护栏上方）
+    let title_text = "电梯井口临边防护".to_string();
+    let title_x = x - estimate_text_width(&title_text, title_h) / 2.0;
+    text_items.push((title_x, title_y, title_h, title_text));
+
+    // 说明文字（居中对齐在标题上方）
+    let note_text = format!(
+        "防护高度 H={}  立杆间距 ≤ {}  踢脚板 {}",
+        fmt_num(guardrail_height),
+        fmt_num(post_spacing),
+        fmt_num(toe_board_height)
+    );
+    let note_x = x - estimate_text_width(&note_text, note_h) / 2.0;
+    text_items.push((note_x, note_y, note_h, note_text));
+
     if include_warning_sign {
-        let sign_w = 520.0 * scale;
-        let sign_h = 280.0 * scale;
-        let sign_x1 = x - sign_w / 2.0;
-        let sign_y1 = guard_top + 420.0 * scale;
-        text_items.push((
-            sign_x1 + 80.0 * scale,
-            sign_y1 + sign_h / 2.0 - text_h / 2.0,
-            text_h,
-            "当心坠落 禁止跨越".to_string(),
-        ));
+        let sign_text = "当心坠落 禁止跨越".to_string();
+        let sign_text_w = estimate_text_width(&sign_text, sign_h_text);
+        let sign_tx = sign_x1 + (sign_w - sign_text_w) / 2.0;
+        let sign_ty = sign_y1 + (sign_h - sign_h_text) / 2.0;
+        text_items.push((sign_tx, sign_ty, sign_h_text, sign_text));
     }
+
     if include_material_table {
-        let table_x = guard_right + 760.0 * scale;
-        let table_y = guard_top;
-        let row_h = 240.0 * scale;
-        let col_w = 720.0 * scale;
-        text_items.push((table_x + 60.0 * scale, table_y - row_h * 0.7, text_h, "材料".to_string()));
-        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 0.7, text_h, "数量/规格".to_string()));
-        text_items.push((table_x + 60.0 * scale, table_y - row_h * 1.7, text_h, "立杆".to_string()));
-        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 1.7, text_h, format!("{} 根", post_count)));
-        text_items.push((table_x + 60.0 * scale, table_y - row_h * 2.7, text_h, "横杆".to_string()));
-        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 2.7, text_h, "上横杆+中横杆".to_string()));
-        text_items.push((table_x + 60.0 * scale, table_y - row_h * 3.7, text_h, "踢脚板".to_string()));
-        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 3.7, text_h, format!("高 {}", fmt_num(toe_board_height))));
-        text_items.push((table_x + 60.0 * scale, table_y - row_h * 4.7, text_h, "警示牌".to_string()));
-        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 4.7, text_h, if include_warning_sign { "1 块".to_string() } else { "未绘制".to_string() }));
+        // 表头行（第 0 行，居中）
+        let header_material = "材料".to_string();
+        let header_qty = "数量/规格".to_string();
+        let hx0 = cell_center_x(0) - estimate_text_width(&header_material, header_h) / 2.0;
+        let hx1 = cell_center_x(1) - estimate_text_width(&header_qty, header_h) / 2.0;
+        text_items.push((hx0, cell_center_y(0) - header_h / 2.0, header_h, header_material));
+        text_items.push((hx1, cell_center_y(0) - header_h / 2.0, header_h, header_qty));
+
+        // 数据行（第 1~4 行），每格文字居中
+        let data_rows: [(String, String); 4] = [
+            ("立杆".to_string(), format!("{} 根", post_count)),
+            ("横杆".to_string(), "上横杆+中横杆".to_string()),
+            ("踢脚板".to_string(), format!("高 {}", fmt_num(toe_board_height))),
+            (
+                "警示牌".to_string(),
+                if include_warning_sign { "1 块".to_string() } else { "未绘制".to_string() },
+            ),
+        ];
+        for (row_idx, (label, value)) in data_rows.iter().enumerate() {
+            let row = row_idx + 1; // 数据行从第 1 行开始
+            let lx = cell_center_x(0) - estimate_text_width(label, cell_h) / 2.0;
+            let vx = cell_center_x(1) - estimate_text_width(value, cell_h) / 2.0;
+            let cy = cell_center_y(row) - cell_h / 2.0;
+            text_items.push((lx, cy, cell_h, label.clone()));
+            text_items.push((vx, cy, cell_h, value.clone()));
+        }
     }
 
     // 先画几何（矩形 + 线，纯 ASCII 坐标，SendCommand 可靠）。
@@ -3066,5 +3142,19 @@ mod tests {
     fn elevator_shaft_protection_smoke_test_round_trip() {
         let result = cad_smoke_test_elevator_shaft_protection();
         assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+    }
+
+    #[test]
+    fn estimate_text_width_fullwidth_vs_ascii() {
+        // 全角中文字符 ≈ 1.0 字高，ASCII 半角 ≈ 0.55 字高
+        let h = 100.0;
+        let all_cjk = super::estimate_text_width("井口宽", h);
+        let all_ascii = super::estimate_text_width("ABC", h);
+        assert!((all_cjk - 300.0).abs() < 1e-6, "3 个全角字符应约 300，得到 {all_cjk}");
+        assert!((all_ascii - 165.0).abs() < 1e-6, "3 个半角字符应约 165，得到 {all_ascii}");
+        // 全角 > 半角
+        assert!(all_cjk > all_ascii);
+        // 空字符串宽度为 0
+        assert_eq!(super::estimate_text_width("", h), 0.0);
     }
 }
