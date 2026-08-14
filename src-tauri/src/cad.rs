@@ -2034,13 +2034,17 @@ pub fn cad_draw_elevator_shaft_protection(
     let title_y = guard_top + 260.0 * scale;
     let note_y = title_y + title_h + 160.0 * scale;
     let sign_y1 = note_y + note_h + 160.0 * scale;
-    let sign_w = 560.0 * scale;
-    let sign_h = 300.0 * scale;
+    // 警示牌框：宽高动态匹配警示文字宽度 + 内边距，避免文字溢出框外。
+    let sign_text = "当心坠落 禁止跨越".to_string();
+    let sign_pad = 80.0 * scale; // 框内左右各留的内边距
+    let sign_w = estimate_text_width(&sign_text, sign_h_text) + sign_pad * 2.0;
+    let sign_h = sign_h_text + sign_pad * 2.0;
     let sign_x1 = x - sign_w / 2.0;
 
     // ── 材料表布局常量：表头 1 行 + 数据 4 行，两列 ──
     // 表格放在护栏右侧，顶部与护栏顶对齐；第二列加宽以容纳长文字。
-    let table_x = guard_right + 760.0 * scale;
+    // 表格左边界向右移，避开右侧「井口高」垂直尺寸标注文字（否则水平重叠）。
+    let table_x = guard_right + 1300.0 * scale;
     let table_y = guard_top;
     let table_rows: usize = 5;
     let row_h = 240.0 * scale;
@@ -2164,7 +2168,8 @@ pub fn cad_draw_elevator_shaft_protection(
     // 尺寸标注（垂直：井口高，居中对齐在井口右侧）
     let dim_height_text = format!("井口高 {}", fmt_num(opening_height));
     let dim_height_x = dim_x + 120.0 * scale;
-    let dim_height_y = y - estimate_text_width(&dim_height_text, dim_h) / 2.0;
+    // 垂直居中：用字高的一半做偏移（不是文字宽度的一半），让文字落在标注线中点
+    let dim_height_y = y - dim_h / 2.0;
     text_items.push((dim_height_x, dim_height_y, dim_h, dim_height_text));
 
     // 主标题（居中对齐在护栏上方）
@@ -2183,11 +2188,11 @@ pub fn cad_draw_elevator_shaft_protection(
     text_items.push((note_x, note_y, note_h, note_text));
 
     if include_warning_sign {
-        let sign_text = "当心坠落 禁止跨越".to_string();
+        // 警示牌文字在框内水平+垂直居中；sign_w/sign_h 已在顶部按文字宽度动态计算
         let sign_text_w = estimate_text_width(&sign_text, sign_h_text);
         let sign_tx = sign_x1 + (sign_w - sign_text_w) / 2.0;
         let sign_ty = sign_y1 + (sign_h - sign_h_text) / 2.0;
-        text_items.push((sign_tx, sign_ty, sign_h_text, sign_text));
+        text_items.push((sign_tx, sign_ty, sign_h_text, sign_text.clone()));
     }
 
     if include_material_table {
