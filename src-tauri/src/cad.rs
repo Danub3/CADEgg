@@ -17,14 +17,20 @@ use crate::tools::SessionObject;
 use windows::core::{IUnknown, Interface, BSTR, GUID, PCWSTR, VARIANT};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoInitializeEx, CoUninitialize, IDispatch, COINIT_APARTMENTTHREADED,
-    DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPPARAMS,
+    DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPPARAMS,
 };
-use windows::Win32::System::Ole::GetActiveObject;
-use windows::Win32::System::Variant::{VariantClear, VariantGetDoubleElem, VariantGetElementCount};
+use windows::Win32::System::Ole::{
+    GetActiveObject, SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement,
+};
+use windows::Win32::System::Variant::{
+    VariantClear, VariantGetDoubleElem, VariantGetElementCount, VT_R8,
+};
 
 const LOCALE_USER_DEFAULT: u32 = 0x0400;
 const IID_NULL: GUID = GUID::zeroed();
 const VT_DISPATCH_U16: u16 = 9;
+const VT_ARRAY_R8_U16: u16 = 0x2000 | 5;
+const DISPID_PROPERTYPUT: i32 = -3;
 const RPC_E_CALL_REJECTED: i32 = 0x80010001u32 as i32;
 const RPC_E_SERVERCALL_RETRYLATER: i32 = 0x8001010Au32 as i32;
 const COM_RETRY_LIMIT: usize = 8;
@@ -32,7 +38,7 @@ const COM_RETRY_DELAY_MS: u64 = 120;
 const AUTO_ATTACH_WAIT_ROUNDS: usize = 18;
 const AUTO_ATTACH_WAIT_MS: u64 = 750;
 const BRIDGE_PORT: u16 = 50471;
-const BRIDGE_VERSION: &str = "0.2.9.0";
+const BRIDGE_VERSION: &str = "0.3.4.0";
 const BRIDGE_BUNDLE_NAME: &str = "CADEggBridge.bundle";
 const BRIDGE_DLL_BASENAME: &str = "CADEggBridge";
 const BRIDGE_BUILD_STAMP: &str = "bridge-version.txt";
@@ -83,6 +89,32 @@ unsafe fn variant_as_dispatch(v: &VARIANT) -> Result<IDispatch, String> {
     Ok(borrowed.clone())
 }
 
+unsafe fn variant_from_point3d(x: f64, y: f64, z: f64) -> Result<VARIANT, String> {
+    let values = [x, y, z];
+    let psa = SafeArrayCreateVector(VT_R8, 0, values.len() as u32);
+    if psa.is_null() {
+        return Err("创建 SAFEARRAY 失败".to_string());
+    }
+
+    for (index, value) in values.iter().enumerate() {
+        let idx = index as i32;
+        if let Err(error) = SafeArrayPutElement(
+            psa,
+            &idx,
+            value as *const f64 as *const core::ffi::c_void,
+        ) {
+            let _ = SafeArrayDestroy(psa);
+            return Err(format!("写入 SAFEARRAY[{index}] 失败: {error}"));
+        }
+    }
+
+    let mut variant = VARIANT::new();
+    let shadow: &mut VariantShadow = &mut *(&mut variant as *mut VARIANT as *mut VariantShadow);
+    shadow.vt = VT_ARRAY_R8_U16;
+    shadow.data = psa as *mut core::ffi::c_void;
+    Ok(variant)
+}
+
 fn run_sta<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce() -> Result<R, String> + Send + 'static,
@@ -99,6 +131,40 @@ where
     })
     .join()
     .map_err(|_| "COM thread panicked".to_string())?
+}
+
+/// `run_sta` 的带超时版本。当 AutoCAD 忙、弹对话框或命令行卡在提示符时，
+/// `SendCommand` / COM 调用可能永久阻塞，`thread::join()` 也会跟着挂起。
+/// 该版本在超时后放弃等待并返回明确错误，避免测试或调用方无限期卡死。
+/// 注意：超时后后台线程仍在运行，但其结果会被丢弃（无法安全终止阻塞中的 COM 调用）。
+fn run_sta_with_timeout<F, R>(f: F, timeout: Duration) -> Result<R, String>
+where
+    F: FnOnce() -> Result<R, String> + Send + 'static,
+    R: Send + 'static,
+{
+    let handle = thread::spawn(move || unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if hr.is_err() {
+            return Err(format!("CoInitializeEx failed: 0x{:08X}", hr.0));
+        }
+        let result = f();
+        CoUninitialize();
+        result
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if handle.is_finished() {
+            return handle.join().map_err(|_| "COM thread panicked".to_string())?;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "AutoCAD 调用超时（超过 {:?} 无响应）。AutoCAD 可能正忙、弹出了对话框，或命令行卡在等待输入的提示符。请按 Esc 取消当前命令，或关闭对话框后重试。",
+                timeout
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn is_retryable_com_error(error: &windows::core::Error) -> bool {
@@ -403,12 +469,25 @@ fn bridge_build_root() -> Result<PathBuf, String> {
 }
 
 fn bridge_build_source_path() -> Result<PathBuf, String> {
-    // Versioned build artifacts avoid stale file locks from prior bridge builds.
-    Ok(bridge_build_root()?.join(format!("CADEggBridge-{BRIDGE_VERSION}.cs")))
+    // 固定文件名：csproj 的 Compile Include 指向这个固定名，
+    // 版本区分靠 dll/deps.json 文件名（通过 -p:AssemblyName 传入版本号）。
+    Ok(bridge_build_root()?.join("CADEggBridge.cs"))
+}
+
+fn bridge_build_csproj_path() -> Result<PathBuf, String> {
+    Ok(bridge_build_root()?.join("CADEggBridge.csproj"))
 }
 
 fn bridge_build_dll_path() -> Result<PathBuf, String> {
     Ok(bridge_build_root()?.join(bridge_versioned_dll_name()))
+}
+
+fn bridge_build_deps_path() -> Result<PathBuf, String> {
+    Ok(bridge_build_root()?.join(bridge_versioned_deps_name()))
+}
+
+fn bridge_versioned_deps_name() -> String {
+    format!("{BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}.deps.json")
 }
 
 fn bridge_package_contents_xml() -> String {
@@ -418,8 +497,9 @@ fn bridge_package_contents_xml() -> String {
 <ApplicationPackage SchemaVersion="1.0" AppVersion="{version}" ProductCode="{{7E25C0E2-8AF7-4D39-93E9-6B2681A4FBA5}}" Name="CADEggBridge" Description="CADEgg AutoCAD internal bridge" Author="CADEgg">
   <CompanyDetails Name="CADEgg" />
   <Components>
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.0" />
-    <ComponentEntry AppName="CADEggBridge" Version="{version}" ModuleName="./Contents/Windows/{dll}" AppDescription="CADEgg AutoCAD bridge" AppType=".Net" LoadOnAutoCADStartup="True" LoadOnAppearance="True" />
+    <ComponentEntry AppName="CADEggBridge" Version="{version}" ModuleName="./Contents/Windows/{dll}" AppDescription="CADEgg AutoCAD bridge" AppType=".Net" LoadOnAutoCADStartup="True" LoadOnAppearance="True">
+      <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.9" />
+    </ComponentEntry>
   </Components>
 </ApplicationPackage>
 "#,
@@ -432,16 +512,63 @@ fn bridge_versioned_dll_name() -> String {
     format!("{BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}.dll")
 }
 
-fn bridge_framework_dir() -> PathBuf {
-    PathBuf::from(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319")
+/// 探测 dotnet.exe（.NET SDK 的 CLI 宿主）。
+/// 用于 dotnet build 编译 net10.0 目标的 bridge。
+fn find_dotnet_exe() -> Result<PathBuf, String> {
+    for candidate in [
+        r"C:\Program Files\dotnet\dotnet.exe",
+        r"C:\Program Files (x86)\dotnet\dotnet.exe",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    // 回退到 PATH 里的 dotnet
+    if let Ok(output) = Command::new("where").arg("dotnet").output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(first) = stdout.lines().next() {
+                let path = PathBuf::from(first.trim());
+                if path.exists() {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+    Err("未找到 dotnet.exe（.NET SDK）。请安装 .NET 10 SDK。".to_string())
 }
 
-fn bridge_csc_path() -> PathBuf {
-    bridge_framework_dir().join("csc.exe")
-}
-
-fn bridge_system_web_extensions_path() -> PathBuf {
-    bridge_framework_dir().join("System.Web.Extensions.dll")
+/// 生成 bridge 的 csproj 模板。acad_dir 是 AutoCAD 安装目录（含 acmgd.dll 等）。
+/// 关键：目标框架 net10.0-windows，产出 .dll + .deps.json。
+/// .NET 10 插件必须有 .deps.json 才能被 AutoCAD 2027 的 Autoloader 加载。
+fn bridge_csproj_template(acad_dir: &Path) -> String {
+    let acad = acad_dir.display();
+    format!(
+        r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>Library</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>CADEggBridge</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="CADEggBridge.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Acmgd"><HintPath>{acad}\acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Acdbmgd"><HintPath>{acad}\acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="accoremgd"><HintPath>{acad}\accoremgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>
+"#
+    )
 }
 
 fn find_managed_api_dir() -> Result<PathBuf, String> {
@@ -465,48 +592,66 @@ fn build_bridge_dll() -> Result<PathBuf, String> {
     let build_root = bridge_build_root()?;
     fs::create_dir_all(&build_root).map_err(|e| format!("创建 bridge 构建目录失败: {e}"))?;
 
+    // 写 C# 源码（固定文件名，csproj 的 Compile Include 指向它）
     let source_path = bridge_build_source_path()?;
     fs::write(&source_path, bridge_source_code())
         .map_err(|e| format!("写 bridge 源码失败: {e}"))?;
 
-    let output_dll = bridge_build_dll_path()?;
+    // 写 csproj（内嵌模板，动态注入 AutoCAD API 目录路径）
+    let csproj_path = bridge_build_csproj_path()?;
     let api_dir = find_managed_api_dir()?;
-    let acmgd = api_dir.join("acmgd.dll");
-    let acdbmgd = api_dir.join("acdbmgd.dll");
-    let accoremgd = api_dir.join("accoremgd.dll");
-    let csc = bridge_csc_path();
-    let web_ext = bridge_system_web_extensions_path();
+    fs::write(&csproj_path, bridge_csproj_template(&api_dir))
+        .map_err(|e| format!("写 bridge csproj 失败: {e}"))?;
 
-    if !csc.exists() {
-        return Err(format!("未找到 C# 编译器: {}", csc.display()));
-    }
-    if !web_ext.exists() {
-        return Err(format!(
-            "未找到 System.Web.Extensions.dll: {}",
-            web_ext.display()
-        ));
-    }
+    let output_dll = bridge_build_dll_path()?;
+    let output_deps = bridge_build_deps_path()?;
 
-    let output = Command::new(&csc)
-        .arg("/nologo")
-        .arg("/target:library")
-        .arg("/platform:x64")
-        .arg(format!("/out:{}", output_dll.display()))
-        .arg(format!("/reference:{}", acmgd.display()))
-        .arg(format!("/reference:{}", acdbmgd.display()))
-        .arg(format!("/reference:{}", accoremgd.display()))
-        .arg(format!("/reference:{}", web_ext.display()))
-        .arg(source_path.as_os_str())
+    // 用 .NET SDK 的 dotnet build 编译，产出 .dll + .deps.json。
+    // .NET 10 插件必须带 .deps.json 才能被 AutoCAD 2027 的 Autoloader 正确加载；
+    // 之前用裸 Roslyn csc 只产出 .dll、缺 deps.json，导致 bridge 从未被加载。
+    let dotnet = find_dotnet_exe()?;
+    let output = Command::new(&dotnet)
+        .arg("build")
+        .arg(csproj_path.as_os_str())
+        .arg("-c")
+        .arg("Release")
+        .arg(format!("-p:AssemblyName={BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}"))
         .output()
-        .map_err(|e| format!("启动 C# 编译器失败: {e}"))?;
+        .map_err(|e| format!("启动 dotnet build 失败: {e}"))?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "编译 AutoCAD bridge 失败。\nstdout:\n{}\nstderr:\n{}",
+            "编译 AutoCAD bridge（dotnet build / net10.0-windows）失败。\nstdout:\n{}\nstderr:\n{}",
             stdout.trim(),
             stderr.trim()
+        ));
+    }
+
+    // dotnet build 输出到 bin/Release/ 下，名称为 AssemblyName 拼上 .dll/.deps.json。
+    // 由于 csproj 设置了 AppendTargetFrameworkToOutputPath=false 和
+    // AppendRuntimeIdentifierToOutputPath=false，产物就在 bin/Release/ 直接目录下。
+    let bin_dir = build_root.join("bin").join("Release");
+    let built_dll = bin_dir.join(format!("{BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}.dll"));
+    let built_deps = bin_dir.join(format!("{BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}.deps.json"));
+
+    if !built_dll.exists() {
+        return Err(format!(
+            "dotnet build 未产出预期 DLL：{}",
+            built_dll.display()
+        ));
+    }
+    // 复制到 build_root 下的统一命名位置，供 install_bridge_bundle 使用。
+    fs::copy(&built_dll, &output_dll)
+        .map_err(|e| format!("复制 bridge DLL 失败: {e}"))?;
+    if built_deps.exists() {
+        fs::copy(&built_deps, &output_deps)
+            .map_err(|e| format!("复制 bridge deps.json 失败: {e}"))?;
+    } else {
+        return Err(format!(
+            "dotnet build 未产出 deps.json：{}",
+            built_deps.display()
         ));
     }
 
@@ -527,6 +672,13 @@ fn install_bridge_bundle() -> Result<PathBuf, String> {
     let contents_dir = bridge_bundle_contents_dir()?;
     fs::create_dir_all(&contents_dir).map_err(|e| format!("创建 bridge bundle 目录失败: {e}"))?;
     fs::copy(&built_dll, &installed_dll).map_err(|e| format!("复制 bridge DLL 失败: {e}"))?;
+    // 复制 deps.json（.NET 10 插件被 Autoloader 加载的关键文件）
+    let built_deps = bridge_build_deps_path()?;
+    if built_deps.exists() {
+        let installed_deps = contents_dir.join(bridge_versioned_deps_name());
+        fs::copy(&built_deps, &installed_deps)
+            .map_err(|e| format!("复制 bridge deps.json 失败: {e}"))?;
+    }
     fs::write(
         bridge_bundle_root()?.join("PackageContents.xml"),
         bridge_package_contents_xml(),
@@ -809,8 +961,40 @@ unsafe fn invoke_method(
     Ok(result)
 }
 
+unsafe fn put_property(
+    d: &IDispatch,
+    name: &str,
+    value: &mut VARIANT,
+) -> Result<(), String> {
+    let id = get_dispid(d, name)?;
+    let mut dispid_named = DISPID_PROPERTYPUT;
+    retry_com(&format!("Invoke PROPERTYPUT {name}"), || {
+        let params = DISPPARAMS {
+            rgvarg: value as *mut VARIANT,
+            rgdispidNamedArgs: &mut dispid_named,
+            cArgs: 1,
+            cNamedArgs: 1,
+        };
+        d.Invoke(
+            id,
+            &IID_NULL,
+            LOCALE_USER_DEFAULT,
+            DISPATCH_PROPERTYPUT,
+            &params,
+            None,
+            None,
+            None,
+        )
+    })?;
+    Ok(())
+}
+
 unsafe fn get_active_document(app: &IDispatch) -> Result<IDispatch, String> {
-    let doc_v = get_property(app, "ActiveDocument")?;
+    let doc_v = get_property(app, "ActiveDocument").map_err(|e| {
+        format!(
+            "{e}（AutoCAD 可能停在开始页，尚未打开任何 DWG 文档；请先新建或打开一个图纸文档）"
+        )
+    })?;
     variant_as_dispatch(&doc_v)
 }
 
@@ -925,10 +1109,89 @@ unsafe fn get_object_by_handle(doc: &IDispatch, handle: &str) -> Result<IDispatc
 /// Caller is responsible for newline termination per AutoCAD's command parser.
 unsafe fn send_command(app: &IDispatch, cmd: &str) -> Result<(), String> {
     let doc = get_active_document(app)?;
+    send_command_to_doc(&doc, cmd)
+}
+
+/// 内部版本：向已知 ActiveDocument 发送命令。供批量出图复用同一 doc 句柄，
+/// 避免每次 send_command 都重新获取 ActiveDocument 并触发额外的 COM 调用。
+unsafe fn send_command_to_doc(doc: &IDispatch, cmd: &str) -> Result<(), String> {
+    wait_until_autocad_idle(doc)?;
     let bstr = BSTR::from(cmd);
     let mut args = [VARIANT::from(bstr)];
-    invoke_method(&doc, "SendCommand", &mut args)?;
+    invoke_method(doc, "SendCommand", &mut args)?;
     Ok(())
+}
+
+unsafe fn add_text_via_com(
+    doc: &IDispatch,
+    x: f64,
+    y: f64,
+    text: &str,
+    height: f64,
+    rotation_deg: f64,
+) -> Result<IDispatch, String> {
+    wait_until_autocad_idle(doc)?;
+    let model_space = get_model_space(doc)?;
+    let insertion_point = variant_from_point3d(x, y, 0.0)?;
+    let text_value = VARIANT::from(BSTR::from(text));
+    let insertion_value = insertion_point;
+    let height_value = VARIANT::from(height);
+    let mut args = [text_value, insertion_value, height_value];
+    let text_object = invoke_method(
+        &model_space,
+        "AddText",
+        &mut args,
+    )?;
+    let text_dispatch = variant_as_dispatch(&text_object)?;
+    if rotation_deg.abs() > f64::EPSILON {
+        let mut rotation_value = VARIANT::from(rotation_deg.to_radians());
+        put_property(&text_dispatch, "Rotation", &mut rotation_value)?;
+    }
+    Ok(text_dispatch)
+}
+
+/// 等待 AutoCAD 命令行空闲（无正在执行的命令）。
+/// 通过读取 CMDNAMES 系统变量判断：命令执行中其值非空，空闲时为空字符串。
+/// 若 AutoCAD 一直忙（例如卡在等待输入的提示符、弹出了对话框），超时后返回明确错误。
+unsafe fn wait_until_autocad_idle(doc: &IDispatch) -> Result<(), String> {
+    const MAX_WAIT: Duration = Duration::from_secs(10);
+    let poll = Duration::from_millis(100);
+    let mut waited = Duration::ZERO;
+    loop {
+        match get_variable_string(doc, "CMDNAMES") {
+            Ok(cmd_names) if cmd_names.trim().is_empty() => return Ok(()),
+            Ok(cmd_names) => {
+                if waited >= MAX_WAIT {
+                    return Err(format!(
+                        "AutoCAD 命令 '{cmd_names}' 仍在执行中，等待空闲超时（{} 秒）。请按 Esc 取消当前命令，或关闭弹出的对话框后重试。",
+                        MAX_WAIT.as_secs()
+                    ));
+                }
+            }
+            Err(e) => {
+                // GetVariable 本身失败（AutoCAD 忙/拒绝），先静默继续轮询。
+                // 等到它空闲时再判断 CMDNAMES。
+                if waited >= MAX_WAIT {
+                    return Err(format!(
+                        "等待 AutoCAD 空闲超时（{} 秒），最后错误：{e}。AutoCAD 可能正忙、弹出了对话框，或命令行卡在等待输入的提示符。请按 Esc 取消当前命令后重试。",
+                        MAX_WAIT.as_secs()
+                    ));
+                }
+            }
+        }
+        thread::sleep(poll);
+        waited += poll;
+    }
+}
+
+/// 读取文档系统变量（字符串类型）。用 GetVariable 方法。
+unsafe fn get_variable_string(doc: &IDispatch, name: &str) -> Result<String, String> {
+    let bstr_name = BSTR::from(name);
+    let mut args = [VARIANT::from(bstr_name)];
+    let value = invoke_method(doc, "GetVariable", &mut args)?;
+    BSTR::try_from(&value)
+        .map(|b| b.to_string())
+        .or_else(|_| Ok(value.to_string()))
 }
 
 fn fmt_num(n: f64) -> String {
@@ -1721,16 +1984,6 @@ pub fn cad_draw_elevator_shaft_protection(
         cmd.push_str("C\n");
     }
 
-    fn push_text(cmd: &mut String, x: f64, y: f64, height: f64, text: &str) {
-        cmd.push_str(&format!(
-            "_.TEXT\n{},{}\n{}\n0\n{}\n",
-            fmt_num(x),
-            fmt_num(y),
-            fmt_num(height),
-            text
-        ));
-    }
-
     let width = opening_width * scale;
     let height = opening_height * scale;
     let rail_h = guardrail_height * scale;
@@ -1755,90 +2008,29 @@ pub fn cad_draw_elevator_shaft_protection(
     let side_post_count = ((guard_top - guard_bottom) / max_post_spacing).ceil().max(1.0) as i32;
     let top_post_count = ((guard_right - guard_left) / max_post_spacing).ceil().max(1.0) as i32;
 
-    let mut cmd = String::new();
-    push_rect(&mut cmd, left, bottom, right, top);
-    push_rect(&mut cmd, guard_left, guard_bottom, guard_right, guard_top);
-    push_rect(
-        &mut cmd,
-        guard_left,
-        guard_bottom,
-        guard_right,
-        guard_bottom + toe_h,
-    );
-    push_rect(&mut cmd, guard_left, guard_top - toe_h, guard_right, guard_top);
-    push_rect(&mut cmd, guard_left, guard_bottom, guard_left + toe_h, guard_top);
-    push_rect(&mut cmd, guard_right - toe_h, guard_bottom, guard_right, guard_top);
+    // 分批发送几何命令，文字单独通过 cad_draw_text 创建。
+    // 原因：一次性 send_command 几十条命令时，长串后半段会被 AutoCAD 截断或破坏；
+    // 文字若走命令行 TEXT 还可能把 AutoCAD 留在输入提示符中。
 
-    let mid_offset = rail_h * 0.5;
-    push_line(
-        &mut cmd,
-        guard_left,
-        guard_bottom + rail_gap,
-        guard_right,
-        guard_bottom + rail_gap,
-    );
-    push_line(
-        &mut cmd,
-        guard_left,
-        guard_bottom + rail_gap + mid_offset,
-        guard_right,
-        guard_bottom + rail_gap + mid_offset,
-    );
-    push_line(
-        &mut cmd,
-        guard_left,
-        guard_top - rail_gap,
-        guard_right,
-        guard_top - rail_gap,
-    );
-    push_line(
-        &mut cmd,
-        guard_left,
-        guard_top - rail_gap - mid_offset,
-        guard_right,
-        guard_top - rail_gap - mid_offset,
-    );
-    push_line(
-        &mut cmd,
-        guard_left + rail_gap,
-        guard_bottom,
-        guard_left + rail_gap,
-        guard_top,
-    );
-    push_line(
-        &mut cmd,
-        guard_left + rail_gap + mid_offset,
-        guard_bottom,
-        guard_left + rail_gap + mid_offset,
-        guard_top,
-    );
-    push_line(
-        &mut cmd,
-        guard_right - rail_gap,
-        guard_bottom,
-        guard_right - rail_gap,
-        guard_top,
-    );
-    push_line(
-        &mut cmd,
-        guard_right - rail_gap - mid_offset,
-        guard_bottom,
-        guard_right - rail_gap - mid_offset,
-        guard_top,
-    );
-
+    // ── 批 1：所有矩形（PLINE）──
+    let mut cmd_rects = String::new();
+    push_rect(&mut cmd_rects, left, bottom, right, top); // 井口轮廓
+    push_rect(&mut cmd_rects, guard_left, guard_bottom, guard_right, guard_top); // 护栏外框
+    // 踢脚板：井口底部独立的横跨矮矩形带（高度 toe_h，宽度 = 井口宽），
+    // 而不是贴在护栏外框四边的细条（细条会和护栏框视觉重合看不出）。
+    push_rect(&mut cmd_rects, left, bottom, right, bottom + toe_h);
     for i in 0..=top_post_count {
         let t = i as f64 / top_post_count as f64;
         let px = guard_left + (guard_right - guard_left) * t;
         push_rect(
-            &mut cmd,
+            &mut cmd_rects,
             px - post_size / 2.0,
             guard_bottom - post_size / 2.0,
             px + post_size / 2.0,
             guard_bottom + post_size / 2.0,
         );
         push_rect(
-            &mut cmd,
+            &mut cmd_rects,
             px - post_size / 2.0,
             guard_top - post_size / 2.0,
             px + post_size / 2.0,
@@ -1849,71 +2041,47 @@ pub fn cad_draw_elevator_shaft_protection(
         let t = i as f64 / side_post_count as f64;
         let py = guard_bottom + (guard_top - guard_bottom) * t;
         push_rect(
-            &mut cmd,
+            &mut cmd_rects,
             guard_left - post_size / 2.0,
             py - post_size / 2.0,
             guard_left + post_size / 2.0,
             py + post_size / 2.0,
         );
         push_rect(
-            &mut cmd,
+            &mut cmd_rects,
             guard_right - post_size / 2.0,
             py - post_size / 2.0,
             guard_right + post_size / 2.0,
             py + post_size / 2.0,
         );
     }
-
-    let dim_y = guard_bottom - 300.0 * scale;
-    let dim_x = guard_right + 300.0 * scale;
-    push_line(&mut cmd, left, dim_y, right, dim_y);
-    push_line(&mut cmd, left, dim_y - 60.0 * scale, left, dim_y + 60.0 * scale);
-    push_line(&mut cmd, right, dim_y - 60.0 * scale, right, dim_y + 60.0 * scale);
-    push_text(
-        &mut cmd,
-        x - 260.0 * scale,
-        dim_y - 180.0 * scale,
-        text_h,
-        &format!("井口宽 {}", fmt_num(opening_width)),
-    );
-    push_line(&mut cmd, dim_x, bottom, dim_x, top);
-    push_line(&mut cmd, dim_x - 60.0 * scale, bottom, dim_x + 60.0 * scale, bottom);
-    push_line(&mut cmd, dim_x - 60.0 * scale, top, dim_x + 60.0 * scale, top);
-    push_text(
-        &mut cmd,
-        dim_x + 80.0 * scale,
-        y,
-        text_h,
-        &format!("井口高 {}", fmt_num(opening_height)),
-    );
-    push_text(
-        &mut cmd,
-        guard_left,
-        guard_top + 180.0 * scale,
-        text_h,
-        &format!(
-            "电梯井口临边防护 H={} 立杆间距<={} 踢脚板={}",
-            fmt_num(guardrail_height),
-            fmt_num(post_spacing),
-            fmt_num(toe_board_height)
-        ),
-    );
-
     if include_warning_sign {
         let sign_w = 520.0 * scale;
         let sign_h = 280.0 * scale;
         let sign_x1 = x - sign_w / 2.0;
         let sign_y1 = guard_top + 420.0 * scale;
-        push_rect(&mut cmd, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
-        push_text(
-            &mut cmd,
-            sign_x1 + 80.0 * scale,
-            sign_y1 + sign_h / 2.0 - text_h / 2.0,
-            text_h,
-            "当心坠落 禁止跨越",
-        );
+        push_rect(&mut cmd_rects, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
     }
 
+    // ── 批 2：所有直线（LINE）──
+    let mut cmd_lines = String::new();
+    let mid_offset = rail_h * 0.5;
+    push_line(&mut cmd_lines, guard_left, guard_bottom + rail_gap, guard_right, guard_bottom + rail_gap);
+    push_line(&mut cmd_lines, guard_left, guard_bottom + rail_gap + mid_offset, guard_right, guard_bottom + rail_gap + mid_offset);
+    push_line(&mut cmd_lines, guard_left, guard_top - rail_gap, guard_right, guard_top - rail_gap);
+    push_line(&mut cmd_lines, guard_left, guard_top - rail_gap - mid_offset, guard_right, guard_top - rail_gap - mid_offset);
+    push_line(&mut cmd_lines, guard_left + rail_gap, guard_bottom, guard_left + rail_gap, guard_top);
+    push_line(&mut cmd_lines, guard_left + rail_gap + mid_offset, guard_bottom, guard_left + rail_gap + mid_offset, guard_top);
+    push_line(&mut cmd_lines, guard_right - rail_gap, guard_bottom, guard_right - rail_gap, guard_top);
+    push_line(&mut cmd_lines, guard_right - rail_gap - mid_offset, guard_bottom, guard_right - rail_gap - mid_offset, guard_top);
+    let dim_y = guard_bottom - 300.0 * scale;
+    let dim_x = guard_right + 300.0 * scale;
+    push_line(&mut cmd_lines, left, dim_y, right, dim_y);
+    push_line(&mut cmd_lines, left, dim_y - 60.0 * scale, left, dim_y + 60.0 * scale);
+    push_line(&mut cmd_lines, right, dim_y - 60.0 * scale, right, dim_y + 60.0 * scale);
+    push_line(&mut cmd_lines, dim_x, bottom, dim_x, top);
+    push_line(&mut cmd_lines, dim_x - 60.0 * scale, bottom, dim_x + 60.0 * scale, bottom);
+    push_line(&mut cmd_lines, dim_x - 60.0 * scale, top, dim_x + 60.0 * scale, top);
     if include_material_table {
         let table_x = guard_right + 760.0 * scale;
         let table_y = guard_top;
@@ -1921,94 +2089,89 @@ pub fn cad_draw_elevator_shaft_protection(
         let col_w = 720.0 * scale;
         for row in 0..=5 {
             let y0 = table_y - row_h * row as f64;
-            push_line(&mut cmd, table_x, y0, table_x + col_w * 2.0, y0);
+            push_line(&mut cmd_lines, table_x, y0, table_x + col_w * 2.0, y0);
         }
         for col in 0..=2 {
             let x0 = table_x + col_w * col as f64;
-            push_line(&mut cmd, x0, table_y, x0, table_y - row_h * 5.0);
+            push_line(&mut cmd_lines, x0, table_y, x0, table_y - row_h * 5.0);
         }
-        push_text(&mut cmd, table_x + 60.0 * scale, table_y - row_h * 0.7, text_h, "材料");
-        push_text(
-            &mut cmd,
-            table_x + col_w + 60.0 * scale,
-            table_y - row_h * 0.7,
-            text_h,
-            "数量/规格",
-        );
-        push_text(
-            &mut cmd,
-            table_x + 60.0 * scale,
-            table_y - row_h * 1.7,
-            text_h,
-            "立杆",
-        );
-        push_text(
-            &mut cmd,
-            table_x + col_w + 60.0 * scale,
-            table_y - row_h * 1.7,
-            text_h,
-            &format!("{} 根", post_count),
-        );
-        push_text(
-            &mut cmd,
-            table_x + 60.0 * scale,
-            table_y - row_h * 2.7,
-            text_h,
-            "横杆",
-        );
-        push_text(
-            &mut cmd,
-            table_x + col_w + 60.0 * scale,
-            table_y - row_h * 2.7,
-            text_h,
-            "上横杆+中横杆",
-        );
-        push_text(
-            &mut cmd,
-            table_x + 60.0 * scale,
-            table_y - row_h * 3.7,
-            text_h,
-            "踢脚板",
-        );
-        push_text(
-            &mut cmd,
-            table_x + col_w + 60.0 * scale,
-            table_y - row_h * 3.7,
-            text_h,
-            &format!("高 {}", fmt_num(toe_board_height)),
-        );
-        push_text(
-            &mut cmd,
-            table_x + 60.0 * scale,
-            table_y - row_h * 4.7,
-            text_h,
-            "警示牌",
-        );
-        push_text(
-            &mut cmd,
-            table_x + col_w + 60.0 * scale,
-            table_y - row_h * 4.7,
-            text_h,
-            if include_warning_sign { "1 块" } else { "未绘制" },
-        );
     }
 
-    run_sta(move || unsafe {
-        let app = get_autocad()?;
-        send_command(&app, &cmd)?;
-        Ok(format!(
-            "已生成电梯井口临边防护布置：中心({},{})，井口 {}x{}，防护高度 {}，立杆间距 <= {}，踢脚板 {}，警示牌={}，材料表={}。",
-            fmt_num(x),
-            fmt_num(y),
-            fmt_num(opening_width),
-            fmt_num(opening_height),
+    // ── 批 3：所有文字（bridge / COM AddText）──
+    // 文字含中文，SendCommand 经 BSTR 传递可能损坏导致不创建，
+    // 改为收集坐标后逐条调用 cad_draw_text（内部 bridge 优先，DBText 直接建中文）。
+    let mut text_items: Vec<(f64, f64, f64, String)> = Vec::new();
+    text_items.push((x - 260.0 * scale, dim_y - 180.0 * scale, text_h, format!("井口宽 {}", fmt_num(opening_width))));
+    text_items.push((dim_x + 80.0 * scale, y, text_h, format!("井口高 {}", fmt_num(opening_height))));
+    text_items.push((
+        guard_left,
+        guard_top + 180.0 * scale,
+        text_h,
+        format!(
+            "电梯井口临边防护 H={} 立杆间距<={} 踢脚板={}",
             fmt_num(guardrail_height),
             fmt_num(post_spacing),
-            fmt_num(toe_board_height),
-            include_warning_sign,
-            include_material_table
-        ))
-    })
+            fmt_num(toe_board_height)
+        ),
+    ));
+    if include_warning_sign {
+        let sign_w = 520.0 * scale;
+        let sign_h = 280.0 * scale;
+        let sign_x1 = x - sign_w / 2.0;
+        let sign_y1 = guard_top + 420.0 * scale;
+        text_items.push((
+            sign_x1 + 80.0 * scale,
+            sign_y1 + sign_h / 2.0 - text_h / 2.0,
+            text_h,
+            "当心坠落 禁止跨越".to_string(),
+        ));
+    }
+    if include_material_table {
+        let table_x = guard_right + 760.0 * scale;
+        let table_y = guard_top;
+        let row_h = 240.0 * scale;
+        let col_w = 720.0 * scale;
+        text_items.push((table_x + 60.0 * scale, table_y - row_h * 0.7, text_h, "材料".to_string()));
+        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 0.7, text_h, "数量/规格".to_string()));
+        text_items.push((table_x + 60.0 * scale, table_y - row_h * 1.7, text_h, "立杆".to_string()));
+        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 1.7, text_h, format!("{} 根", post_count)));
+        text_items.push((table_x + 60.0 * scale, table_y - row_h * 2.7, text_h, "横杆".to_string()));
+        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 2.7, text_h, "上横杆+中横杆".to_string()));
+        text_items.push((table_x + 60.0 * scale, table_y - row_h * 3.7, text_h, "踢脚板".to_string()));
+        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 3.7, text_h, format!("高 {}", fmt_num(toe_board_height))));
+        text_items.push((table_x + 60.0 * scale, table_y - row_h * 4.7, text_h, "警示牌".to_string()));
+        text_items.push((table_x + col_w + 60.0 * scale, table_y - row_h * 4.7, text_h, if include_warning_sign { "1 块".to_string() } else { "未绘制".to_string() }));
+    }
+
+    // 先画几何（矩形 + 线，纯 ASCII 坐标，SendCommand 可靠）。
+    run_sta_with_timeout(
+        move || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            send_command_to_doc(&doc, &cmd_rects)?;
+            send_command_to_doc(&doc, &cmd_lines)?;
+            Ok(())
+        },
+        Duration::from_secs(60),
+    )?;
+
+    // 再逐条画文字（bridge 优先；失败时用 COM AddText，避免命令行 TEXT）。
+    for (tx, ty, th, tt) in &text_items {
+        cad_draw_text(*tx, *ty, tt, *th, 0.0)?;
+    }
+
+    Ok(format!(
+        "已生成电梯井口临边防护布置：中心({},{})，井口 {}x{}，防护高度 {}，立杆间距 <= {}，踢脚板 {}，警示牌={}，材料表={}。",
+        fmt_num(x),
+        fmt_num(y),
+        fmt_num(opening_width),
+        fmt_num(opening_height),
+        fmt_num(guardrail_height),
+        fmt_num(post_spacing),
+        fmt_num(toe_board_height),
+        include_warning_sign,
+        include_material_table
+    ))
 }
 
 pub fn cad_validate_elevator_shaft_protection(
@@ -2108,32 +2271,68 @@ pub fn cad_draw_text(
         return Err("文字内容不能为空".to_string());
     }
 
-    run_sta(move || unsafe {
-        let app = get_autocad()?;
-        let doc = get_active_document(&app)?;
-        let model_space = get_model_space(&doc)?;
-        let before_count = get_i32_property(&model_space, "Count")?;
-        let cmd = format!(
-            "_.TEXT\n{},{}\n{}\n{}\n{}\n",
-            fmt_num(x),
-            fmt_num(y),
-            fmt_num(height),
-            fmt_num(rotation_deg),
-            text
-        );
-        send_command(&app, &cmd)?;
-        let obj = wait_for_new_model_space_object(&doc, before_count, Duration::from_secs(3))?;
-        let handle = get_bstr_property(&obj, "Handle")?;
-        Ok(format!(
-            "已画文字 \"{}\" @ ({},{}) 高{} 旋转{}°，handle={}",
-            text,
-            fmt_num(x),
-            fmt_num(y),
-            fmt_num(height),
-            fmt_num(rotation_deg),
-            handle
-        ))
-    })
+    let text_for_com = text.clone();
+    let _ = ensure_bridge_installed_once();
+    let bridge_result = bridge_send_request(
+        "draw_text",
+        serde_json::json!({
+            "x": x,
+            "y": y,
+            "text": text,
+            "height": height,
+            "rotation": rotation_deg
+        }),
+    );
+    let bridge_error = match bridge_result {
+        Ok(response) if response.ok => {
+            let handle = response
+                .data
+                .get("handle")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            return Ok(format!(
+                "已画文字 \"{}\" @ ({},{}) 高{} 旋转{}°，handle={}",
+                text,
+                fmt_num(x),
+                fmt_num(y),
+                fmt_num(height),
+                fmt_num(rotation_deg),
+                handle
+            ));
+        }
+        Ok(response) => Some(format!("bridge draw_text failed: {}", response.message)),
+        Err(error) => Some(error),
+    };
+
+    let fallback = run_sta_with_timeout(
+        move || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            let text_obj = add_text_via_com(&doc, x, y, &text_for_com, height, rotation_deg)?;
+            let handle = get_bstr_property(&text_obj, "Handle")?;
+            Ok(format!(
+                "已画文字 \"{}\" @ ({},{}) 高{} 旋转{}°，handle={}",
+                text,
+                fmt_num(x),
+                fmt_num(y),
+                fmt_num(height),
+                fmt_num(rotation_deg),
+                handle
+            ))
+        },
+        Duration::from_secs(15),
+    );
+
+    match fallback {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            if let Some(bridge_error) = bridge_error {
+                Err(format!("{error}；bridge 也失败：{bridge_error}"))
+            } else {
+                Err(error)
+            }
+        }
+    }
 }
 
 pub fn cad_erase_last() -> Result<String, String> {
@@ -2829,7 +3028,7 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_smoke_test_editing_tools,
+        bridge_installed_dll_path, cad_draw_text, cad_smoke_test_editing_tools,
         cad_smoke_test_elevator_shaft_protection, ensure_bridge_installed_once,
     };
 
@@ -2850,6 +3049,15 @@ mod tests {
     #[ignore = "requires a running AutoCAD session"]
     fn editing_tools_smoke_test_round_trip() {
         let result = cad_smoke_test_editing_tools();
+        assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+    }
+
+    #[test]
+    #[ignore = "requires a running AutoCAD session"]
+    fn text_english_diagnostic() {
+        // 诊断：cad_draw_text 是否能在 bridge 不可用时通过 COM AddText 创建文字。
+        // 该路径不应触发命令行 TEXT，也不应让 AutoCAD 卡在文字输入提示符。
+        let result = cad_draw_text(0.0, 0.0, "TEST_ABC_123", 200.0, 0.0);
         assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
     }
 

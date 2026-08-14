@@ -5,7 +5,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using System.Web.Script.Serialization;
+using System.Text.Json;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
@@ -20,9 +20,13 @@ namespace CADEggBridge
     public sealed class BridgeEntry : IExtensionApplication
     {
         private const int BridgePort = 50471;
-        private const string BridgeVersion = "0.2.9.0";
+        private const string BridgeVersion = "0.3.4.0";
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+        {
+            IncludeFields = true,
+            PropertyNameCaseInsensitive = true
+        };
 
-        private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
         private static TcpListener _listener;
         private static Thread _listenerThread;
         private static volatile bool _running;
@@ -142,29 +146,33 @@ namespace CADEggBridge
                     var line = reader.ReadLine();
                     if (string.IsNullOrWhiteSpace(line))
                     {
-                        writer.WriteLine(Json.Serialize(new BridgeResponse
+                        writer.WriteLine(JsonSerializer.Serialize(new BridgeResponse
                         {
                             ok = false,
                             message = "empty request",
                             data = new Dictionary<string, object>()
-                        }));
+                        }, JsonOptions));
                         return;
                     }
 
-                    var request = Json.Deserialize<BridgeRequest>(line);
+                    var request = JsonSerializer.Deserialize<BridgeRequest>(line, JsonOptions);
+                    if (request == null)
+                    {
+                        throw new InvalidOperationException("empty bridge request");
+                    }
                     Log("Received command: " + (request.command ?? string.Empty));
                     var response = ExecuteRequest(request);
-                    writer.WriteLine(Json.Serialize(response));
+                    writer.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
                 }
                 catch (System.Exception ex)
                 {
                     Log("HandleClient error: " + ex);
-                    writer.WriteLine(Json.Serialize(new BridgeResponse
+                    writer.WriteLine(JsonSerializer.Serialize(new BridgeResponse
                     {
                         ok = false,
                         message = ex.Message,
                         data = new Dictionary<string, object>()
-                    }));
+                    }, JsonOptions));
                 }
             }
         }
@@ -206,6 +214,8 @@ namespace CADEggBridge
                     return DrawLine(request.args);
                 case "draw_circle":
                     return DrawCircle(request.args);
+                case "draw_text":
+                    return DrawText(request.args);
                 case "inspect_handle":
                     return InspectHandle(request.args);
                 case "erase_handle":
@@ -234,7 +244,7 @@ namespace CADEggBridge
             };
         }
 
-        private static Dictionary<string, object> DrawLine(Dictionary<string, object> args)
+        private static Dictionary<string, object> DrawLine(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -268,7 +278,7 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> DrawCircle(Dictionary<string, object> args)
+        private static Dictionary<string, object> DrawCircle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -305,7 +315,54 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> InspectHandle(Dictionary<string, object> args)
+        private static Dictionary<string, object> DrawText(Dictionary<string, JsonElement> args)
+        {
+            var doc = AcApp.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                throw new InvalidOperationException("no active AutoCAD document");
+            }
+
+            var x = ToDouble(args, "x");
+            var y = ToDouble(args, "y");
+            var text = ToRequiredString(args, "text");
+            var height = args != null && args.ContainsKey("height")
+                ? ToDouble(args, "height")
+                : 140.0;
+            var rotation = args != null && args.ContainsKey("rotation")
+                ? ToDouble(args, "rotation")
+                : 0.0;
+
+            using (doc.LockDocument())
+            {
+                var db = doc.Database;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var blockTable = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    var modelSpace = (BlockTableRecord)tr.GetObject(
+                        blockTable[BlockTableRecord.ModelSpace],
+                        OpenMode.ForWrite
+                    );
+
+                    var dbText = new DBText
+                    {
+                        Position = new Point3d(x, y, 0.0),
+                        Height = height,
+                        Rotation = rotation * Math.PI / 180.0,
+                        TextString = text,
+                        HorizontalMode = TextHorizontalMode.TextLeft,
+                        VerticalMode = TextVerticalMode.TextBase
+                    };
+                    modelSpace.AppendEntity(dbText);
+                    tr.AddNewlyCreatedDBObject(dbText, true);
+                    var summary = SummarizeObject(dbText, "TEXT");
+                    tr.Commit();
+                    return summary;
+                }
+            }
+        }
+
+        private static Dictionary<string, object> InspectHandle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -326,7 +383,7 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> EraseHandle(Dictionary<string, object> args)
+        private static Dictionary<string, object> EraseHandle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -350,7 +407,7 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> MirrorHandle(Dictionary<string, object> args)
+        private static Dictionary<string, object> MirrorHandle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -403,7 +460,7 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> OffsetHandle(Dictionary<string, object> args)
+        private static Dictionary<string, object> OffsetHandle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -473,7 +530,7 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> TrimByHandle(Dictionary<string, object> args)
+        private static Dictionary<string, object> TrimByHandle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -540,7 +597,7 @@ namespace CADEggBridge
             }
         }
 
-        private static Dictionary<string, object> ExtendByHandle(Dictionary<string, object> args)
+        private static Dictionary<string, object> ExtendByHandle(Dictionary<string, JsonElement> args)
         {
             var doc = AcApp.DocumentManager.MdiActiveDocument;
             if (doc == null)
@@ -606,24 +663,41 @@ namespace CADEggBridge
             }
         }
 
-        private static double ToDouble(Dictionary<string, object> args, string key)
+        private static double ToDouble(Dictionary<string, JsonElement> args, string key)
         {
             if (args == null || !args.ContainsKey(key))
             {
                 throw new InvalidOperationException("missing bridge arg: " + key);
             }
 
-            return Convert.ToDouble(args[key]);
+            var value = args[key];
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+            {
+                return number;
+            }
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString();
+                if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+
+            throw new InvalidOperationException("invalid bridge numeric arg: " + key);
         }
 
-        private static string ToRequiredString(Dictionary<string, object> args, string key)
+        private static string ToRequiredString(Dictionary<string, JsonElement> args, string key)
         {
             if (args == null || !args.ContainsKey(key))
             {
                 throw new InvalidOperationException("missing bridge arg: " + key);
             }
 
-            var value = Convert.ToString(args[key]) ?? string.Empty;
+            var json = args[key];
+            var value = json.ValueKind == JsonValueKind.String ? json.GetString() : json.ToString();
+            value = value ?? string.Empty;
             value = value.Trim();
             if (value.Length == 0)
             {
@@ -1005,7 +1079,7 @@ namespace CADEggBridge
     public sealed class BridgeRequest
     {
         public string command;
-        public Dictionary<string, object> args;
+        public Dictionary<string, JsonElement> args;
     }
 
     public sealed class BridgeResponse

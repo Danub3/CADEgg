@@ -15,6 +15,16 @@ dist-ssr
 # WorkBuddy workspace memory (local-only, never commit)
 .workbuddy/
 
+# 个人开发记录 / 会话记录（绝不上传 GitHub）
+session-log/
+开发记录-*.md
+*-会话记录.md
+*-完整记录.md
+AutoCAD Agent - Brainstorm*.md
+
+# 本地测试图纸（个人文件，绝不上传 GitHub）
+test/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
