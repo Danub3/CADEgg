@@ -529,6 +529,12 @@ fn all_tool_specs() -> Vec<ToolSpec> {
             parameters: params_empty,
         },
         ToolSpec {
+            name: "modelspace_snapshot",
+            layer: ToolLayer::Query,
+            description: "图面快照：枚举模型空间所有对象，返回对象总数、类型分布、整体包围盒和每个对象的 handle/类型/图层/颜色/几何信息。用于自动化审查与验收，无需人工目视即可了解 CAD 图面内容。无参数。",
+            parameters: params_empty,
+        },
+        ToolSpec {
             name: "import_selection",
             layer: ToolLayer::Selection,
             description: "把用户当前在 AutoCAD 中预先圈选的对象导入会话对象表，便于后续用 handle 或“刚才选中的那条线”继续引用。无参数。",
@@ -634,6 +640,7 @@ pub fn select_tooling_context(
             "draw_text",
             "zoom_extents",
             "inspect_handle",
+            "modelspace_snapshot",
         ];
         if contains_any(&text, &["选中", "选择集", "圈选", "预选"]) {
             selected.push("list_selection");
@@ -717,6 +724,7 @@ pub fn select_tooling_context(
         ],
     ) {
         selected.push("inspect_handle");
+        selected.push("modelspace_snapshot");
     }
     if contains_any(&text, &["选中", "选择集", "圈选", "预选"]) {
         selected.push("list_selection");
@@ -1347,6 +1355,8 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
         "inspect_handle" => crate::cad::cad_inspect_handle(s(&call.args, "handle")?),
         #[cfg(windows)]
         "list_selection" => crate::cad::cad_list_selection(),
+        #[cfg(windows)]
+        "modelspace_snapshot" => crate::cad::cad_modelspace_snapshot(),
         #[cfg(windows)]
         "import_selection" => Err("import_selection 应由专门分支处理".to_string()),
         #[cfg(windows)]

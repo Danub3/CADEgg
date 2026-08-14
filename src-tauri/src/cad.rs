@@ -2914,6 +2914,118 @@ pub fn cad_list_selection() -> Result<String, String> {
     })
 }
 
+/// 图面快照：枚举模型空间所有对象，输出结构化报告。
+/// 让后端（agent）能独立"看"到 CAD 里画了什么，用于自动化审查与验收，
+/// 不必依赖人工目视。报告含：对象总数、类型分布、每个对象的 handle/类型/图层/颜色/几何。
+pub fn cad_modelspace_snapshot() -> Result<String, String> {
+    run_sta_with_timeout(
+        || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            let model_space = get_model_space(&doc)?;
+            let count = get_i32_property(&model_space, "Count")?;
+
+            if count == 0 {
+                return Ok("图面快照：模型空间为空（0 个对象）。".to_string());
+            }
+
+            let mut tally: std::collections::BTreeMap<String, i32> = std::collections::BTreeMap::new();
+            let mut details: Vec<String> = Vec::with_capacity(count as usize);
+            let mut min_x = f64::INFINITY;
+            let mut min_y = f64::INFINITY;
+            let mut max_x = f64::NEG_INFINITY;
+            let mut max_y = f64::NEG_INFINITY;
+
+            for i in 0..count {
+                let item = match collection_item(&model_space, i) {
+                    Ok(it) => it,
+                    Err(_) => continue,
+                };
+                let object_name = get_bstr_property(&item, "ObjectName")
+                    .unwrap_or_else(|_| "Unknown".to_string());
+                let kind = normalize_object_kind(&object_name);
+                *tally.entry(kind.clone()).or_insert(0) += 1;
+
+                let handle = get_bstr_property(&item, "Handle").unwrap_or_else(|_| "?".to_string());
+                let layer = get_bstr_property(&item, "Layer").unwrap_or_else(|_| "?".to_string());
+                let color = get_i32_property(&item, "Color").unwrap_or(-1);
+                let geom = describe_object_geometry(&item, &kind, "");
+
+                // 收集几何包围盒（能取到坐标的类型）
+                if kind == "LINE" {
+                    if let (Ok((x1, y1, _)), Ok((x2, y2, _))) =
+                        (get_point_property(&item, "StartPoint"), get_point_property(&item, "EndPoint"))
+                    {
+                        min_x = min_x.min(x1).min(x2);
+                        max_x = max_x.max(x1).max(x2);
+                        min_y = min_y.min(y1).min(y2);
+                        max_y = max_y.max(y1).max(y2);
+                    }
+                } else if kind == "CIRCLE" {
+                    if let (Ok((cx, cy, _)), Ok(r)) =
+                        (get_point_property(&item, "Center"), get_f64_property(&item, "Radius"))
+                    {
+                        min_x = min_x.min(cx - r);
+                        max_x = max_x.max(cx + r);
+                        min_y = min_y.min(cy - r);
+                        max_y = max_y.max(cy + r);
+                    }
+                } else if kind == "TEXT" || kind == "MTEXT" {
+                    if let Ok((x, y, _)) = get_point_property(&item, "InsertionPoint") {
+                        min_x = min_x.min(x);
+                        max_x = max_x.max(x);
+                        min_y = min_y.min(y);
+                        max_y = max_y.max(y);
+                    }
+                } else if kind == "LWPOLYLINE" {
+                    if let Ok(coords) = get_f64_array_property(&item, "Coordinates") {
+                        for chunk in coords.chunks(2) {
+                            let (px, py) = (chunk[0], chunk[1]);
+                            min_x = min_x.min(px);
+                            max_x = max_x.max(px);
+                            min_y = min_y.min(py);
+                            max_y = max_y.max(py);
+                        }
+                    }
+                }
+
+                let mut line = format!("#{i} {kind} handle={handle} 图层={layer} 颜色={color}");
+                if !geom.is_empty() {
+                    line.push_str(&format!(" | {geom}"));
+                }
+                details.push(line);
+            }
+
+            let mut parts: Vec<String> = tally
+                .iter()
+                .map(|(k, v)| format!("{v}×{k}"))
+                .collect();
+            parts.sort();
+            let mut report = format!(
+                "图面快照：模型空间共 {} 个对象（{}）。\n",
+                count,
+                parts.join("、")
+            );
+            if min_x != f64::INFINITY {
+                report.push_str(&format!(
+                    "整体包围盒：X [{} ~ {}]，Y [{} ~ {}]\n",
+                    fmt_num(min_x),
+                    fmt_num(max_x),
+                    fmt_num(min_y),
+                    fmt_num(max_y)
+                ));
+            }
+            report.push_str("对象明细：\n");
+            for line in details {
+                report.push_str(&line);
+                report.push('\n');
+            }
+            Ok(report)
+        },
+        Duration::from_secs(30),
+    )
+}
+
 pub fn cad_run_lisp(code: &str) -> Result<String, String> {
     let code = code.trim();
     if code.is_empty() {
@@ -3109,9 +3221,22 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_draw_text, cad_smoke_test_editing_tools,
-        cad_smoke_test_elevator_shaft_protection, ensure_bridge_installed_once,
+        bridge_installed_dll_path, cad_draw_text, cad_modelspace_snapshot,
+        cad_smoke_test_editing_tools, cad_smoke_test_elevator_shaft_protection,
+        ensure_bridge_installed_once,
     };
+
+    #[test]
+    #[ignore = "requires a running AutoCAD session"]
+    fn modelspace_snapshot_reports_objects() {
+        let report = cad_modelspace_snapshot();
+        assert!(report.is_ok(), "{}", report.err().unwrap_or_default());
+        let text = report.unwrap();
+        assert!(
+            text.contains("图面快照") && text.contains("对象"),
+            "快照报告格式异常: {text}"
+        );
+    }
 
     #[test]
     #[ignore = "requires local AutoCAD managed assemblies and writes ApplicationPlugins bundle"]
