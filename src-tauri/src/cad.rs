@@ -2243,6 +2243,20 @@ pub fn cad_draw_elevator_shaft_protection(
         cad_draw_text(*tx, *ty, tt, *th, 0.0)?;
     }
 
+    // bridge 的 DBText 走 .NET 事务写入，Commit 后不会自动触发屏幕重绘，
+    // 导致文字画进数据库却看不见（线走 SendCommand 会自动刷新所以可见）。
+    // 这里显式触发一次重绘 + 缩放全图，确保文字上屏。
+    run_sta_with_timeout(
+        move || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            send_command_to_doc(&doc, "_.REGEN\n")?;
+            send_command_to_doc(&doc, "_.ZOOM\n_E\n")?;
+            Ok(())
+        },
+        Duration::from_secs(30),
+    )?;
+
     Ok(format!(
         "已生成电梯井口临边防护布置：中心({},{})，井口 {}x{}，防护高度 {}，立杆间距 <= {}，踢脚板 {}，警示牌={}，材料表={}。",
         fmt_num(x),
