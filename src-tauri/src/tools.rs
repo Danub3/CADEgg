@@ -650,6 +650,7 @@ pub fn select_tooling_context(
             "安全防护 demo 模式：只暴露电梯井口临边防护专用工具、校核工具、文字和最少查询工具。".to_string(),
             "优先调用 draw_elevator_shaft_protection；绘图完成后调用 validate_elevator_shaft_protection 输出 JSON 校核结果。".to_string(),
             "缺少 opening_width/opening_height/guardrail_height/post_spacing/toe_board_height 时，先向用户追问，不要编造尺寸。".to_string(),
+            "用户未指定绘图位置时，x/y 默认取 0（井口中心落在原点），不要因缺少坐标而追问或停止出图。".to_string(),
         ];
         if let Some(prompt) = safety_clarification_prompt(user_input) {
             lines.push(prompt);

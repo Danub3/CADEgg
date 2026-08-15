@@ -71,6 +71,14 @@ pub fn render_scene_context(scene: &str) -> Option<String> {
             }
         }
     }
+    if let Some(items) = v.get("drawing_conventions").and_then(|a| a.as_array()) {
+        lines.push("绘图约定：".to_string());
+        for it in items {
+            if let Some(s) = it.as_str() {
+                lines.push(format!("  - {s}"));
+            }
+        }
+    }
     if let Some(items) = v.get("forbidden_items").and_then(|a| a.as_array()) {
         lines.push("禁忌项（不得违反）：".to_string());
         for it in items {
@@ -118,6 +126,9 @@ mod tests {
         assert!(ctx.contains("1200"));
         assert!(ctx.contains("2000"));
         assert!(ctx.contains("180"));
+        // 绘图约定（坐标默认原点）也必须注入，避免模型卡在追要 x/y。
+        assert!(ctx.contains("绘图约定"));
+        assert!(ctx.contains("x=0, y=0"));
     }
 
     #[test]
