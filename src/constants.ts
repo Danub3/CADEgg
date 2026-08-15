@@ -27,7 +27,7 @@ export const DEFAULT_VIEW: SettingsView = {
   gemini_model: "gemini-2.0-flash",
   gemini_base_url: "https://generativelanguage.googleapis.com",
   glm_model: "glm-4-flash",
-  glm_strong_model: "glm-4.5",
+  glm_strong_model: "glm-4.5-flash",
   glm_base_url: "https://open.bigmodel.cn/api/paas/v4",
   anthropic_api_key_set: false,
   anthropic_api_key_preview: "",

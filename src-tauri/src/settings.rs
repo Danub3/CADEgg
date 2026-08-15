@@ -73,7 +73,7 @@ fn default_glm_model() -> String {
     "glm-4-flash".to_string()
 }
 fn default_glm_strong_model() -> String {
-    "glm-4.5".to_string()
+    "glm-4.5-flash".to_string()
 }
 fn default_glm_base_url() -> String {
     "https://open.bigmodel.cn/api/paas/v4".to_string()
