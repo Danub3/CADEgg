@@ -23,6 +23,43 @@ const SYSTEM_PROMPT: &str = "你是 CADEgg，一名 AutoCAD 助理。\n\
 
 // ---------------- Wire format (frontend ↔ backend) ----------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskTier {
+    /// 低成本模型：纯问答、分类、摘要、格式化。
+    Cheap,
+    /// 强模型：规划、出图、工具选择、复核。
+    Strong,
+}
+
+/// 确定性任务分级（不靠模型自己判断，符合「规则优先」路线）。
+///
+/// 强模型触发条件：涉及绘图/编辑/生成等需要规划与工具选择的动作，
+/// 或复核/校核类请求，或复杂几何（楼梯等）。其余纯问答/解释走便宜模型。
+fn classify_task(user_input: &str) -> TaskTier {
+    let text = user_input.to_lowercase();
+    let wants_action = contains_any(
+        &text,
+        &[
+            "画", "绘制", "生成", "做", "出图", "创建", "设计", "建模", "加", "改", "修", "调整",
+            "移动", "旋转", "复制", "镜像", "删除", "偏移", "修剪", "延伸", "标注", "布置",
+        ],
+    );
+    let wants_review = contains_any(&text, &["校核", "复核", "检查", "审查", "验证", "核对", "验收"]);
+    // 注意：不在这里放「防护」，因为「电梯井口防护要满足什么规范」这类纯问答不该走强模型；
+    // 安全防护请求由 is_safety_request 在上层强制 Strong。这里只保留需要规划的复杂几何场景。
+    let wants_complex = contains_any(&text, &["楼梯", "双跑", "折返", "休息平台", "临边"]);
+
+    if wants_action || wants_review || wants_complex {
+        TaskTier::Strong
+    } else {
+        TaskTier::Cheap
+    }
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum MessageView {
@@ -1028,16 +1065,31 @@ pub async fn run_agent(
     let settings = crate::settings::load(&app)?;
     let user_text = user_input.trim().to_string();
     let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
+
+    // 确定性任务分级：出图/规划/复核走强模型，纯问答走便宜模型。
+    // 安全防护请求（需严格按知识卡出图/校核）强制走强模型，保证质量。
+    let tier = if tools::is_safety_request(&user_text) {
+        TaskTier::Strong
+    } else {
+        classify_task(&user_text)
+    };
+
     let provider = match settings.provider.as_str() {
         "gemini" => Provider::Gemini(GeminiProvider {
             api_key: settings.gemini_api_key.clone(),
-            model: settings.gemini_model.clone(),
+            model: match tier {
+                TaskTier::Strong => settings.gemini_strong_model.clone(),
+                TaskTier::Cheap => settings.gemini_model.clone(),
+            },
             base_url: settings.gemini_base_url.clone(),
             selected_tools: tooling.tool_names.clone(),
         }),
         "glm" => Provider::Glm(GlmProvider {
             api_key: settings.glm_api_key.clone(),
-            model: settings.glm_model.clone(),
+            model: match tier {
+                TaskTier::Strong => settings.glm_strong_model.clone(),
+                TaskTier::Cheap => settings.glm_model.clone(),
+            },
             base_url: settings.glm_base_url.clone(),
             selected_tools: tooling.tool_names.clone(),
         }),
@@ -1223,4 +1275,24 @@ pub fn confirm_tool_call(app: AppHandle, call: ToolCall) -> Result<ToolResult, S
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_strong_for_drawing_and_review() {
+        assert_eq!(classify_task("画一条线"), TaskTier::Strong);
+        assert_eq!(classify_task("生成电梯井口临边防护图"), TaskTier::Strong);
+        assert_eq!(classify_task("校核一下这个防护"), TaskTier::Strong);
+        assert_eq!(classify_task("画一个双跑楼梯"), TaskTier::Strong);
+    }
+
+    #[test]
+    fn classify_cheap_for_qa() {
+        assert_eq!(classify_task("电梯井口防护要满足什么规范？"), TaskTier::Cheap);
+        assert_eq!(classify_task("你好"), TaskTier::Cheap);
+        assert_eq!(classify_task("立杆间距最大多少"), TaskTier::Cheap);
+    }
 }

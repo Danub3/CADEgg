@@ -32,6 +32,8 @@ pub struct Settings {
     pub gemini_api_key: String,
     #[serde(default = "default_gemini_model")]
     pub gemini_model: String,
+    #[serde(default = "default_gemini_strong_model")]
+    pub gemini_strong_model: String,
     #[serde(default = "default_gemini_base_url")]
     pub gemini_base_url: String,
 
@@ -40,6 +42,8 @@ pub struct Settings {
     pub glm_api_key: String,
     #[serde(default = "default_glm_model")]
     pub glm_model: String,
+    #[serde(default = "default_glm_strong_model")]
+    pub glm_strong_model: String,
     #[serde(default = "default_glm_base_url")]
     pub glm_base_url: String,
 }
@@ -59,11 +63,17 @@ fn default_claude_base_url() -> String {
 fn default_gemini_model() -> String {
     "gemini-2.0-flash".to_string()
 }
+fn default_gemini_strong_model() -> String {
+    "gemini-2.5-pro".to_string()
+}
 fn default_gemini_base_url() -> String {
     "https://generativelanguage.googleapis.com".to_string()
 }
 fn default_glm_model() -> String {
     "glm-4-flash".to_string()
+}
+fn default_glm_strong_model() -> String {
+    "glm-4.5".to_string()
 }
 fn default_glm_base_url() -> String {
     "https://open.bigmodel.cn/api/paas/v4".to_string()
@@ -79,9 +89,11 @@ impl Default for Settings {
             base_url: default_claude_base_url(),
             gemini_api_key: String::new(),
             gemini_model: default_gemini_model(),
+            gemini_strong_model: default_gemini_strong_model(),
             gemini_base_url: default_gemini_base_url(),
             glm_api_key: String::new(),
             glm_model: default_glm_model(),
+            glm_strong_model: default_glm_strong_model(),
             glm_base_url: default_glm_base_url(),
         }
     }
@@ -97,6 +109,7 @@ pub struct SettingsView {
     pub gemini_model: String,
     pub gemini_base_url: String,
     pub glm_model: String,
+    pub glm_strong_model: String,
     pub glm_base_url: String,
     pub anthropic_api_key_set: bool,
     pub anthropic_api_key_preview: String,
@@ -130,6 +143,7 @@ impl From<&Settings> for SettingsView {
             gemini_model: s.gemini_model.clone(),
             gemini_base_url: s.gemini_base_url.clone(),
             glm_model: s.glm_model.clone(),
+            glm_strong_model: s.glm_strong_model.clone(),
             glm_base_url: s.glm_base_url.clone(),
             anthropic_api_key_set: !s.anthropic_api_key.trim().is_empty(),
             anthropic_api_key_preview: preview(&s.anthropic_api_key),
@@ -153,6 +167,7 @@ pub struct SettingsUpdate {
     pub gemini_model: String,
     pub gemini_base_url: String,
     pub glm_model: String,
+    pub glm_strong_model: String,
     pub glm_base_url: String,
     #[serde(default)]
     pub anthropic_api_key: Option<String>,
@@ -196,6 +211,7 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
     current.gemini_model = update.gemini_model;
     current.gemini_base_url = update.gemini_base_url;
     current.glm_model = update.glm_model;
+    current.glm_strong_model = update.glm_strong_model;
     current.glm_base_url = update.glm_base_url;
     if let Some(k) = update.anthropic_api_key {
         current.anthropic_api_key = k;

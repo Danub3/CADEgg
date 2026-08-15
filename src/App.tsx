@@ -316,6 +316,7 @@ export default function App() {
           gemini_model: settings.gemini_model,
           gemini_base_url: settings.gemini_base_url,
           glm_model: settings.glm_model,
+          glm_strong_model: settings.glm_strong_model,
           glm_base_url: settings.glm_base_url,
           anthropic_api_key: claudeKeyDraft,
           gemini_api_key: geminiKeyDraft,
@@ -1012,6 +1013,29 @@ export default function App() {
                     }
                   />
                   <datalist id="glm-models">
+                    {GLM_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </Field>
+
+                <Field
+                  label="强模型（规划/出图）"
+                  hint="复杂出图、规划、校核自动走此模型；纯问答走上面的便宜模型"
+                >
+                  <input
+                    type="text"
+                    list="glm-strong-models"
+                    className={inputCls}
+                    placeholder="glm-4.5"
+                    value={settings.glm_strong_model}
+                    onChange={(e) =>
+                      setSettings({ ...settings, glm_strong_model: e.target.value })
+                    }
+                  />
+                  <datalist id="glm-strong-models">
                     {GLM_MODELS.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label}

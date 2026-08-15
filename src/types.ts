@@ -95,6 +95,7 @@ export interface SettingsView {
   gemini_model: string;
   gemini_base_url: string;
   glm_model: string;
+  glm_strong_model: string;
   glm_base_url: string;
   anthropic_api_key_set: boolean;
   anthropic_api_key_preview: string;
