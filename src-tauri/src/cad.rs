@@ -1195,7 +1195,9 @@ fn fmt_num(n: f64) -> String {
 }
 
 /// 估算文字在 AutoCAD 中的视觉宽度（绘图单位）。
-/// 中日韩全角字符约占 1.0 倍字高，ASCII 半角字符约占 0.55 倍字高。
+/// AutoCAD 默认 DBText 中文字体的实际包围盒明显宽于“1 字高 = 1 字宽”的经验值；
+/// 这里按实测值保守估算，避免警示牌、表格单元格看起来已经居中但真实渲染外溢。
+/// 中日韩全角字符约占 1.36 倍字高，ASCII 半角字符约占 0.72 倍字高。
 /// 用于在默认「左基线对齐」的文字上做视觉居中与单元格内定位，
 /// 避免依赖 bridge/COM 的 Alignment 属性。
 fn estimate_text_width(text: &str, height: f64) -> f64 {
@@ -1207,9 +1209,27 @@ fn estimate_text_width(text: &str, height: f64) -> f64 {
                 ch,
                 '，' | '。' | '（' | '）' | '：' | '；' | '、' | '！' | '？' | '「' | '」'
             );
-        width += if is_fullwidth { height } else { 0.55 * height };
+        width += if is_fullwidth {
+            1.36 * height
+        } else {
+            0.72 * height
+        };
     }
     width
+}
+
+fn fit_text_height_to_width(text: &str, base_height: f64, max_width: f64, min_height: f64) -> f64 {
+    if base_height <= 0.0 || max_width <= 0.0 {
+        return base_height;
+    }
+    let width = estimate_text_width(text, base_height);
+    if width <= max_width || width <= 0.0 {
+        base_height
+    } else {
+        (base_height * max_width / width)
+            .max(min_height)
+            .min(base_height)
+    }
 }
 
 fn normalize_object_kind(object_name: &str) -> String {
@@ -2040,14 +2060,7 @@ pub fn cad_draw_elevator_shaft_protection(
     // 原因：直线若走 COM SendCommand，AutoCAD 忙时会被拒（0x80010001）导致整批 60s 超时；
     // bridge 走 .NET 事务直写数据库，不经命令行，稳定不卡。
     let mut line_list: Vec<[f64; 4]> = Vec::new();
-    fn push_line(
-        cmd: &mut String,
-        lines: &mut Vec<[f64; 4]>,
-        x1: f64,
-        y1: f64,
-        x2: f64,
-        y2: f64,
-    ) {
+    fn push_line(cmd: &mut String, lines: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
         cmd.push_str(&format!(
             "_.LINE\n{},{}\n{},{}\n\n",
             fmt_num(x1),
@@ -2100,15 +2113,12 @@ pub fn cad_draw_elevator_shaft_protection(
     let title_y = top + 260.0 * scale;
     let note_y = title_y + title_h + 160.0 * scale;
     let sign_y1 = note_y + note_h + 160.0 * scale;
-    // 警示牌框：宽高动态匹配警示文字宽度 + 内边距，避免文字溢出框外。
-    // 注意：estimate_text_width 按全角=1.0 字高、半角=0.55 字高估算，
-    // 但 AutoCAD 实际中文字体（宋体/仿宋）渲染宽度常略超该估算值，故加安全余量系数，
-    // 否则文字会溢出框外（实测问题：框未完全框住文字）。
+    // 警示牌框：按 AutoCAD DBText 实测宽度估算，并保留明确内边距，避免文字溢出框外。
     let sign_text = "当心坠落 严禁抛物".to_string();
-    let sign_pad_x = 100.0 * scale; // 框内左右各留的内边距
+    let sign_pad_x = 180.0 * scale; // 框内左右各留的内边距
     let sign_pad_y = 60.0 * scale; // 框内上下各留的内边距
     let sign_text_w = estimate_text_width(&sign_text, sign_h_text);
-    let sign_w = sign_text_w * 1.18 + sign_pad_x * 2.0; // 水平加 18% 安全余量
+    let sign_w = sign_text_w + sign_pad_x * 2.0;
     let sign_h = sign_h_text + sign_pad_y * 2.0;
     let sign_x1 = x - sign_w / 2.0;
 
@@ -2119,7 +2129,9 @@ pub fn cad_draw_elevator_shaft_protection(
     let table_rows: usize = 4;
     let row_h = 240.0 * scale;
     let col_w0 = 720.0 * scale; // 第一列：材料
-    let col_w1 = 1100.0 * scale; // 第二列：数量/规格
+    let col_w1 = 1450.0 * scale; // 第二列：数量/规格，给长警示语留出左右余量
+    let cell_pad_x = 90.0 * scale;
+    let min_table_text_h = (70.0 * scale).max(42.0);
 
     // 单元格中心 X（用于文字水平居中）：第 col 列的中心横坐标
     let cell_center_x = |col: usize| -> f64 {
@@ -2221,29 +2233,92 @@ pub fn cad_draw_elevator_shaft_protection(
 
     // —— 水平尺寸（井口宽）——
     // 尺寸界线（细实线，从轮廓引出，超出尺寸线）
-    push_line(&mut cmd_lines, &mut line_list, left, bottom - gap, left, dim_y - ext);
-    push_line(&mut cmd_lines, &mut line_list, right, bottom - gap, right, dim_y - ext);
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        left,
+        bottom - gap,
+        left,
+        dim_y - ext,
+    );
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        right,
+        bottom - gap,
+        right,
+        dim_y - ext,
+    );
     // 尺寸线（水平，平行于被注长度）
     push_line(&mut cmd_lines, &mut line_list, left, dim_y, right, dim_y);
     // 尺寸起止符号（45°中粗斜短线，向尺寸线内侧倾斜）
-    push_line(&mut cmd_lines, &mut line_list, left, dim_y, left + tick, dim_y - tick);
-    push_line(&mut cmd_lines, &mut line_list, right, dim_y, right - tick, dim_y - tick);
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        left,
+        dim_y,
+        left + tick,
+        dim_y - tick,
+    );
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        right,
+        dim_y,
+        right - tick,
+        dim_y - tick,
+    );
 
     // —— 垂直尺寸（井口高）——
     // 尺寸界线（细实线，从轮廓引出，超出尺寸线）
-    push_line(&mut cmd_lines, &mut line_list, right + gap, bottom, dim_x + ext, bottom);
-    push_line(&mut cmd_lines, &mut line_list, right + gap, top, dim_x + ext, top);
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        right + gap,
+        bottom,
+        dim_x + ext,
+        bottom,
+    );
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        right + gap,
+        top,
+        dim_x + ext,
+        top,
+    );
     // 尺寸线（垂直，平行于被注长度）
     push_line(&mut cmd_lines, &mut line_list, dim_x, bottom, dim_x, top);
     // 尺寸起止符号（45°中粗斜短线）
-    push_line(&mut cmd_lines, &mut line_list, dim_x, bottom, dim_x + tick, bottom + tick);
-    push_line(&mut cmd_lines, &mut line_list, dim_x, top, dim_x + tick, top - tick);
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        dim_x,
+        bottom,
+        dim_x + tick,
+        bottom + tick,
+    );
+    push_line(
+        &mut cmd_lines,
+        &mut line_list,
+        dim_x,
+        top,
+        dim_x + tick,
+        top - tick,
+    );
     if include_material_table {
         let table_width = col_w0 + col_w1;
         // 行线：4 行（表头 + 3 数据行），共 5 条横线
         for row in 0..=table_rows {
             let y0 = table_y - row_h * row as f64;
-            push_line(&mut cmd_lines, &mut line_list, table_x, y0, table_x + table_width, y0);
+            push_line(
+                &mut cmd_lines,
+                &mut line_list,
+                table_x,
+                y0,
+                table_x + table_width,
+                y0,
+            );
         }
         // 列线：2 列，共 3 条竖线（左外框 + 中间分列线 + 右外框），贯穿全部 4 行。
         // 修复：此前只画了中间一条竖线，左右外框竖线缺失，导致"表格两边没有线"。
@@ -2252,7 +2327,14 @@ pub fn cad_draw_elevator_shaft_protection(
         let x_mid = table_x + col_w0;
         let x_right = table_x + table_width;
         for xcol in [x_left, x_mid, x_right] {
-            push_line(&mut cmd_lines, &mut line_list, xcol, table_y, xcol, table_bottom);
+            push_line(
+                &mut cmd_lines,
+                &mut line_list,
+                xcol,
+                table_y,
+                xcol,
+                table_bottom,
+            );
         }
     }
 
@@ -2280,20 +2362,30 @@ pub fn cad_draw_elevator_shaft_protection(
     let dim_height_y = y - dim_h / 2.0;
     text_items.push((dim_height_x, dim_height_y, dim_h, dim_height_text));
 
-    // 主标题（居中对齐在井口上方）
-    let title_text = "电梯井口防护（上翻式防护门）".to_string();
-    let title_x = x - estimate_text_width(&title_text, title_h) / 2.0;
-    text_items.push((title_x, title_y, title_h, title_text));
+    let top_text_min_x = left + 80.0 * scale;
 
-    // 说明文字（居中对齐在标题上方）
+    // 主标题：长标题按井口宽度限宽，且不越过井口左侧，避免 AutoCAD 视图缩放后左侧裁字。
+    let title_text = "电梯井口防护（上翻式防护门）".to_string();
+    let title_draw_h = fit_text_height_to_width(
+        &title_text,
+        title_h,
+        width * 1.45,
+        (130.0 * scale).max(96.0),
+    );
+    let title_x = (x - estimate_text_width(&title_text, title_draw_h) / 2.0).max(top_text_min_x);
+    text_items.push((title_x, title_y, title_draw_h, title_text));
+
+    // 说明文字：说明较长，按井口宽度压到更适合图面浏览的字号，并同样限制左边界。
     let note_text = format!(
         "防护门高 {}  踢脚板 {}  门宽规格 {}m（按井口选型）",
         fmt_num(guard_height),
         fmt_num(toe_board_height),
         door_spec_m
     );
-    let note_x = x - estimate_text_width(&note_text, note_h) / 2.0;
-    text_items.push((note_x, note_y, note_h, note_text));
+    let note_draw_h =
+        fit_text_height_to_width(&note_text, note_h, width * 1.55, (72.0 * scale).max(56.0));
+    let note_x = (x - estimate_text_width(&note_text, note_draw_h) / 2.0).max(top_text_min_x);
+    text_items.push((note_x, note_y, note_draw_h, note_text));
 
     if include_warning_sign {
         // 警示牌文字在框内水平+垂直居中；sign_w/sign_h 已在顶部按文字宽度动态计算
@@ -2306,15 +2398,32 @@ pub fn cad_draw_elevator_shaft_protection(
         // 表头行（第 0 行，居中）
         let header_material = "材料".to_string();
         let header_qty = "数量/规格".to_string();
-        let hx0 = cell_center_x(0) - estimate_text_width(&header_material, header_h) / 2.0;
-        let hx1 = cell_center_x(1) - estimate_text_width(&header_qty, header_h) / 2.0;
+        let header0_h = fit_text_height_to_width(
+            &header_material,
+            header_h,
+            col_w0 - cell_pad_x * 2.0,
+            min_table_text_h,
+        );
+        let header1_h = fit_text_height_to_width(
+            &header_qty,
+            header_h,
+            col_w1 - cell_pad_x * 2.0,
+            min_table_text_h,
+        );
+        let hx0 = cell_center_x(0) - estimate_text_width(&header_material, header0_h) / 2.0;
+        let hx1 = cell_center_x(1) - estimate_text_width(&header_qty, header1_h) / 2.0;
         text_items.push((
             hx0,
-            cell_center_y(0) - header_h / 2.0,
-            header_h,
+            cell_center_y(0) - header0_h / 2.0,
+            header0_h,
             header_material,
         ));
-        text_items.push((hx1, cell_center_y(0) - header_h / 2.0, header_h, header_qty));
+        text_items.push((
+            hx1,
+            cell_center_y(0) - header1_h / 2.0,
+            header1_h,
+            header_qty,
+        ));
 
         // 数据行（第 1~3 行），每格文字居中
         let data_rows: [(String, String); 3] = [
@@ -2334,11 +2443,32 @@ pub fn cad_draw_elevator_shaft_protection(
         ];
         for (row_idx, (label, value)) in data_rows.iter().enumerate() {
             let row = row_idx + 1; // 数据行从第 1 行开始
-            let lx = cell_center_x(0) - estimate_text_width(label, cell_h) / 2.0;
-            let vx = cell_center_x(1) - estimate_text_width(value, cell_h) / 2.0;
-            let cy = cell_center_y(row) - cell_h / 2.0;
-            text_items.push((lx, cy, cell_h, label.clone()));
-            text_items.push((vx, cy, cell_h, value.clone()));
+            let label_h = fit_text_height_to_width(
+                label,
+                cell_h,
+                col_w0 - cell_pad_x * 2.0,
+                min_table_text_h,
+            );
+            let value_h = fit_text_height_to_width(
+                value,
+                cell_h,
+                col_w1 - cell_pad_x * 2.0,
+                min_table_text_h,
+            );
+            let lx = cell_center_x(0) - estimate_text_width(label, label_h) / 2.0;
+            let vx = cell_center_x(1) - estimate_text_width(value, value_h) / 2.0;
+            text_items.push((
+                lx,
+                cell_center_y(row) - label_h / 2.0,
+                label_h,
+                label.clone(),
+            ));
+            text_items.push((
+                vx,
+                cell_center_y(row) - value_h / 2.0,
+                value_h,
+                value.clone(),
+            ));
         }
     }
 
@@ -3397,17 +3527,17 @@ mod tests {
 
     #[test]
     fn estimate_text_width_fullwidth_vs_ascii() {
-        // 全角中文字符 ≈ 1.0 字高，ASCII 半角 ≈ 0.55 字高
+        // AutoCAD 默认 DBText 实测下，全角中文约 1.36 字高，ASCII 半角约 0.72 字高。
         let h = 100.0;
         let all_cjk = super::estimate_text_width("井口宽", h);
         let all_ascii = super::estimate_text_width("ABC", h);
         assert!(
-            (all_cjk - 300.0).abs() < 1e-6,
-            "3 个全角字符应约 300，得到 {all_cjk}"
+            (all_cjk - 408.0).abs() < 1e-6,
+            "3 个全角字符应约 408，得到 {all_cjk}"
         );
         assert!(
-            (all_ascii - 165.0).abs() < 1e-6,
-            "3 个半角字符应约 165，得到 {all_ascii}"
+            (all_ascii - 216.0).abs() < 1e-6,
+            "3 个半角字符应约 216，得到 {all_ascii}"
         );
         // 全角 > 半角
         assert!(all_cjk > all_ascii);
