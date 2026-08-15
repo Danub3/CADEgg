@@ -1054,6 +1054,12 @@ pub async fn run_agent(
         });
     }
     if tools::is_safety_request(&user_text) {
+        // 闭环第 3 步：检索标准图册知识卡并注入上下文，让模型基于受控规则出图/追问，而非自由发挥。
+        if let Some(card) = crate::knowledge::render_scene_context("elevator_shaft_protection") {
+            msgs.push(MessageView::User {
+                content: format!("系统提醒（标准图册知识卡，出图/追问须遵守）：\n{card}"),
+            });
+        }
         if let Some(prompt) = tools::safety_clarification_prompt(&user_text) {
             msgs.push(MessageView::User {
                 content: format!("系统提醒（安全防护缺参追问）：\n{}", prompt),

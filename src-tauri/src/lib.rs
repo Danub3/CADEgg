@@ -2,6 +2,7 @@ use tauri::{Manager, PhysicalPosition};
 
 #[cfg(windows)]
 mod cad;
+mod knowledge;
 mod llm;
 mod settings;
 mod tools;
