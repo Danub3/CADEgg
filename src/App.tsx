@@ -50,6 +50,7 @@ export default function App() {
 
   const [demoLog, setDemoLog] = useState<DemoLogEntry[]>([]);
   const [lastValidation, setLastValidation] = useState<ElevatorValidation | null>(null);
+  const [lastDrawParams, setLastDrawParams] = useState<Record<string, unknown> | null>(null);
 
   const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -170,6 +171,10 @@ export default function App() {
           }
         }
         if (e.result.name === "draw_elevator_shaft_protection") {
+          if (e.result.ok) {
+            const call = pendingToolCallsRef.current[e.result.id];
+            if (call) setLastDrawParams(call.args);
+          }
           if (pendingLogRef.current) {
             pendingLogRef.current.summary = e.result.ok
               ? e.result.content
@@ -494,6 +499,24 @@ export default function App() {
   const providerLabel =
     settings.provider === "gemini" ? "Gemini" : settings.provider === "glm" ? "GLM" : "Claude";
   const objectReferenceHints = getObjectReferenceHints(sessionObjects);
+  const currentKeySet =
+    settings.provider === "gemini"
+      ? settings.gemini_api_key_set
+      : settings.provider === "glm"
+      ? settings.glm_api_key_set
+      : settings.anthropic_api_key_set;
+  const quickPrompts =
+    settings.work_mode === "safety_demo_mode"
+      ? [
+          "画一个电梯井口防护门，井口宽 2000，高 1800",
+          "画一个电梯井口防护门，井口宽 2400，高 2000，含警示牌和材料表",
+          "帮我校核刚才画的防护门是否合规",
+        ]
+      : [
+          "画一条 7000mm 的直线",
+          "画一个半径 3000 的圆",
+          "画一个双跑楼梯，层高 3000",
+        ];
 
   return (
     <div className="absolute right-0 top-0 h-full flex items-center justify-end pointer-events-none">
@@ -646,6 +669,44 @@ export default function App() {
                 )}
               </div>
 
+              {/* Draw result card */}
+              {lastDrawParams && (
+                <div className="rounded-2xl bg-slate-50/80 border border-slate-200/70 p-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">
+                      本次出图
+                    </span>
+                    <span className="text-[10px] text-slate-400">已生成电梯井口防护门</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 text-[11px] text-slate-700">
+                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
+                      <span className="block text-[10px] text-slate-400">井口宽度</span>
+                      {String(lastDrawParams.opening_width ?? "—")} mm
+                    </div>
+                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
+                      <span className="block text-[10px] text-slate-400">井口高度</span>
+                      {String(lastDrawParams.opening_height ?? "—")} mm
+                    </div>
+                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
+                      <span className="block text-[10px] text-slate-400">防护门高</span>
+                      {String(lastDrawParams.guard_height ?? "1500")} mm
+                    </div>
+                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
+                      <span className="block text-[10px] text-slate-400">踢脚板</span>
+                      {String(lastDrawParams.toe_board_height ?? "200")} mm
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-600">
+                      警示牌 {lastDrawParams.include_warning_sign === false ? "未配" : "已配"}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-600">
+                      材料表 {lastDrawParams.include_material_table === false ? "未配" : "已配"}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Validation panel */}
               {lastValidation && (
                 <div
@@ -746,14 +807,50 @@ export default function App() {
 
               {/* Messages */}
               {messages.length === 0 && (
-                <div className="flex-1 flex flex-col items-center justify-center text-center py-6 gap-2">
-                  <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${accent} opacity-90 shadow-lg flex items-center justify-center text-white text-xl`}>
-                    ✦
+                <div className="flex flex-col items-stretch text-center gap-3 py-2">
+                  <div className="flex flex-col items-center gap-2 pt-2">
+                    <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${accent} opacity-90 shadow-lg flex items-center justify-center text-white text-xl`}>
+                      ✦
+                    </div>
+                    <div>
+                      <p className="text-slate-700 text-sm font-semibold">我是 CADEgg，你的 CAD 绘图助手</p>
+                      <p className="text-slate-500 text-xs mt-1 leading-relaxed">
+                        {settings.work_mode === "safety_demo_mode"
+                          ? "用一句话，帮你在 AutoCAD 里生成符合规范的\n电梯井口防护门布置图，并自动校核。"
+                          : "用一句话，帮你在 AutoCAD 里画线、画圆、画楼梯，\n也能导入选中对象继续编辑。"}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-slate-600 text-sm font-medium">开始一段 CAD 对话</p>
-                  <p className="text-slate-400 text-xs leading-relaxed">
-                    在 AutoCAD 中选中对象，<br />或直接告诉我你想画什么
-                  </p>
+
+                  {!currentKeySet && (
+                    <button
+                      onClick={() => setView("settings")}
+                      className="flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-left hover:bg-amber-100 transition-colors"
+                    >
+                      <span className="shrink-0 w-6 h-6 rounded-full bg-amber-400 text-white flex items-center justify-center text-xs font-bold">
+                        !
+                      </span>
+                      <span className="flex-1 text-[11px] leading-snug text-amber-800">
+                        还没配置 {providerLabel} API Key，现在还画不了图。
+                        <span className="block text-amber-600 font-medium">点这里去配置 →</span>
+                      </span>
+                    </button>
+                  )}
+
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">
+                      试试这样说
+                    </p>
+                    {quickPrompts.map((prompt) => (
+                      <button
+                        key={prompt}
+                        onClick={() => setInput(prompt)}
+                        className="rounded-xl bg-white border border-slate-200 px-3 py-2 text-left text-xs text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 transition-colors"
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {messages.map((m, i) => renderMessage(m, i, accent, handleConfirmToolCall))}
@@ -1012,6 +1109,29 @@ export default function App() {
                   onDraftChange={setGlmKeyDraft}
                   placeholder="xxxxxxxx.xxxx（在 bigmodel.cn 控制台获取）"
                 />
+
+                {!settings.glm_api_key_set && (
+                  <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 p-3 flex flex-col gap-2">
+                    <p className="text-[11px] font-medium text-emerald-800">还没有 Key？三步搞定：</p>
+                    <ol className="flex flex-col gap-1.5 text-[11px] text-emerald-900 leading-snug">
+                      <li className="flex gap-1.5">
+                        <span className="shrink-0 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">1</span>
+                        <span>打开 open.bigmodel.cn 注册并登录</span>
+                      </li>
+                      <li className="flex gap-1.5">
+                        <span className="shrink-0 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">2</span>
+                        <span>控制台「API 密钥」里新建一个密钥并复制</span>
+                      </li>
+                      <li className="flex gap-1.5">
+                        <span className="shrink-0 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">3</span>
+                        <span>粘到上面的输入框，点底部「保存」即可</span>
+                      </li>
+                    </ol>
+                    <p className="text-[10px] text-emerald-700/80">
+                      GLM-4-Flash / 4.5-Flash 有免费额度，国内直连无需代理。
+                    </p>
+                  </div>
+                )}
 
                 <Field
                   label="API Base URL"

@@ -1698,6 +1698,38 @@ fn draw_polyline_via_bridge(points: &[f64], closed: bool) -> Result<String, Stri
     ))
 }
 
+/// 通过 bridge 直接建一条直线（Line）。用于替代 COM SendCommand 的 _.LINE，
+/// 避免 AutoCAD 忙时 COM 被拒（0x80010001）导致整批 60s 超时。
+/// 失败时返回 Err，由调用方决定是否回退到 SendCommand。
+fn draw_line_via_bridge(x1: f64, y1: f64, x2: f64, y2: f64) -> Result<String, String> {
+    let _ = ensure_bridge_installed_once();
+    let response = bridge_send_request(
+        "draw_line",
+        serde_json::json!({
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2
+        }),
+    )?;
+    if !response.ok {
+        return Err(format!("bridge draw_line failed: {}", response.message));
+    }
+    let handle = response
+        .data
+        .get("handle")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    Ok(format!(
+        "已画直线 ({},{}) → ({},{})，handle={}",
+        fmt_num(x1),
+        fmt_num(y1),
+        fmt_num(x2),
+        fmt_num(y2),
+        handle
+    ))
+}
+
 pub fn cad_draw_regular_polygon(
     cx: f64,
     cy: f64,
@@ -2004,7 +2036,18 @@ pub fn cad_draw_elevator_shaft_protection(
         return Err(format!("scale 必须为正数，收到 {scale}"));
     }
 
-    fn push_line(cmd: &mut String, x1: f64, y1: f64, x2: f64, y2: f64) {
+    // 直线坐标收集表：与 cmd_lines 并行维护，供 bridge 通道直接绘制。
+    // 原因：直线若走 COM SendCommand，AutoCAD 忙时会被拒（0x80010001）导致整批 60s 超时；
+    // bridge 走 .NET 事务直写数据库，不经命令行，稳定不卡。
+    let mut line_list: Vec<[f64; 4]> = Vec::new();
+    fn push_line(
+        cmd: &mut String,
+        lines: &mut Vec<[f64; 4]>,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) {
         cmd.push_str(&format!(
             "_.LINE\n{},{}\n{},{}\n\n",
             fmt_num(x1),
@@ -2012,6 +2055,7 @@ pub fn cad_draw_elevator_shaft_protection(
             fmt_num(x2),
             fmt_num(y2)
         ));
+        lines.push([x1, y1, x2, y2]);
     }
 
     fn push_rect(cmd: &mut String, rects: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
@@ -2138,6 +2182,7 @@ pub fn cad_draw_elevator_shaft_protection(
     // 防护门上口两端翻转轴（Φ16 钢筋）：在门顶边左右两端做短竖标记。
     push_line(
         &mut cmd_lines,
+        &mut line_list,
         left,
         door_top - hinge_size,
         left,
@@ -2145,6 +2190,7 @@ pub fn cad_draw_elevator_shaft_protection(
     );
     push_line(
         &mut cmd_lines,
+        &mut line_list,
         right,
         door_top - hinge_size,
         right,
@@ -2153,6 +2199,7 @@ pub fn cad_draw_elevator_shaft_protection(
     // 门扇中缝（对开分隔线）
     push_line(
         &mut cmd_lines,
+        &mut line_list,
         door_mid_x,
         door_bottom,
         door_mid_x,
@@ -2169,34 +2216,35 @@ pub fn cad_draw_elevator_shaft_protection(
 
     // —— 水平尺寸（井口宽）——
     // 尺寸界线（细实线，从轮廓引出，超出尺寸线）
-    push_line(&mut cmd_lines, left, bottom - gap, left, dim_y - ext);
-    push_line(&mut cmd_lines, right, bottom - gap, right, dim_y - ext);
+    push_line(&mut cmd_lines, &mut line_list, left, bottom - gap, left, dim_y - ext);
+    push_line(&mut cmd_lines, &mut line_list, right, bottom - gap, right, dim_y - ext);
     // 尺寸线（水平，平行于被注长度）
-    push_line(&mut cmd_lines, left, dim_y, right, dim_y);
+    push_line(&mut cmd_lines, &mut line_list, left, dim_y, right, dim_y);
     // 尺寸起止符号（45°中粗斜短线，向尺寸线内侧倾斜）
-    push_line(&mut cmd_lines, left, dim_y, left + tick, dim_y - tick);
-    push_line(&mut cmd_lines, right, dim_y, right - tick, dim_y - tick);
+    push_line(&mut cmd_lines, &mut line_list, left, dim_y, left + tick, dim_y - tick);
+    push_line(&mut cmd_lines, &mut line_list, right, dim_y, right - tick, dim_y - tick);
 
     // —— 垂直尺寸（井口高）——
     // 尺寸界线（细实线，从轮廓引出，超出尺寸线）
-    push_line(&mut cmd_lines, right + gap, bottom, dim_x + ext, bottom);
-    push_line(&mut cmd_lines, right + gap, top, dim_x + ext, top);
+    push_line(&mut cmd_lines, &mut line_list, right + gap, bottom, dim_x + ext, bottom);
+    push_line(&mut cmd_lines, &mut line_list, right + gap, top, dim_x + ext, top);
     // 尺寸线（垂直，平行于被注长度）
-    push_line(&mut cmd_lines, dim_x, bottom, dim_x, top);
+    push_line(&mut cmd_lines, &mut line_list, dim_x, bottom, dim_x, top);
     // 尺寸起止符号（45°中粗斜短线）
-    push_line(&mut cmd_lines, dim_x, bottom, dim_x + tick, bottom + tick);
-    push_line(&mut cmd_lines, dim_x, top, dim_x + tick, top - tick);
+    push_line(&mut cmd_lines, &mut line_list, dim_x, bottom, dim_x + tick, bottom + tick);
+    push_line(&mut cmd_lines, &mut line_list, dim_x, top, dim_x + tick, top - tick);
     if include_material_table {
         let table_width = col_w0 + col_w1;
         // 行线：4 行（表头 + 3 数据行），共 5 条横线
         for row in 0..=table_rows {
             let y0 = table_y - row_h * row as f64;
-            push_line(&mut cmd_lines, table_x, y0, table_x + table_width, y0);
+            push_line(&mut cmd_lines, &mut line_list, table_x, y0, table_x + table_width, y0);
         }
         // 列线：2 列，共 3 条竖线，贯穿全部 4 行（表头行同样分列）
         let x_mid = table_x + col_w0;
         push_line(
             &mut cmd_lines,
+            &mut line_list,
             x_mid,
             table_y,
             x_mid,
@@ -2291,9 +2339,11 @@ pub fn cad_draw_elevator_shaft_protection(
         }
     }
 
-    // ── 几何绘制（COM 稳定性改造）──
-    // 矩形（PLINE）优先走 bridge 事务通道（与文字一致，避免命令行 PLINE 截断/卡死）；
-    // bridge 全部失败时，回退到 SendCommand 批量发送（原逻辑兜底）。
+    // ── 几何绘制（COM 稳定性改造：全部优先走 bridge 事务通道）──
+    // 矩形（PLINE）与直线（LINE）都优先走 bridge；bridge 失败才回退到 SendCommand。
+    // 关键修复：此前直线走 COM SendCommand，AutoCAD 忙时被拒（0x80010001）导致整批 60s 超时，
+    // 且矩形（bridge 成功）+ 直线（COM 失败）的混用会在回退时重复绘制矩形。
+    // 现在两批各自独立判断，失败互不影响，避免重复画图。
     let rects_bridge_ok = {
         let mut ok = true;
         for rect in &rect_list {
@@ -2308,26 +2358,39 @@ pub fn cad_draw_elevator_shaft_protection(
         ok
     };
 
-    // 直线（LINE）：保持 SendCommand（简单可靠，无截断风险——数量少、纯 ASCII）。
+    let lines_bridge_ok = {
+        let mut ok = true;
+        for line in &line_list {
+            if draw_line_via_bridge(line[0], line[1], line[2], line[3]).is_err() {
+                ok = false;
+                break;
+            }
+        }
+        ok
+    };
+
+    // 矩形回退：仅当 bridge 建矩形失败时，才用 SendCommand 重发矩形批次。
     if !rects_bridge_ok {
-        // bridge 建矩形失败，矩形回退到 SendCommand；线一并走 SendCommand。
+        let cmd_rects_owned = cmd_rects.clone();
         run_sta_with_timeout(
             move || unsafe {
                 let app = get_autocad()?;
                 let doc = get_active_document(&app)?;
-                send_command_to_doc(&doc, &cmd_rects)?;
-                send_command_to_doc(&doc, &cmd_lines)?;
+                send_command_to_doc(&doc, &cmd_rects_owned)?;
                 Ok(())
             },
             Duration::from_secs(60),
         )?;
-    } else {
-        // 矩形已走 bridge，线单独走 SendCommand。
+    }
+
+    // 直线回退：仅当 bridge 建直线失败时，才用 SendCommand 重发直线批次。
+    if !lines_bridge_ok {
+        let cmd_lines_owned = cmd_lines.clone();
         run_sta_with_timeout(
             move || unsafe {
                 let app = get_autocad()?;
                 let doc = get_active_document(&app)?;
-                send_command_to_doc(&doc, &cmd_lines)?;
+                send_command_to_doc(&doc, &cmd_lines_owned)?;
                 Ok(())
             },
             Duration::from_secs(60),
@@ -2340,9 +2403,10 @@ pub fn cad_draw_elevator_shaft_protection(
     }
 
     // bridge 的 DBText 走 .NET 事务写入，Commit 后不会自动触发屏幕重绘，
-    // 导致文字画进数据库却看不见（线走 SendCommand 会自动刷新所以可见）。
-    // 这里显式触发一次重绘 + 缩放全图，确保文字上屏。
-    run_sta_with_timeout(
+    // 导致文字画进数据库却看不见。这里显式触发一次重绘 + 缩放全图，确保文字上屏。
+    // 注意：REGEN/ZOOM 走 COM SendCommand，AutoCAD 忙时可能被拒；但图元已写入数据库，
+    // 故此处降级为「尽力而为」——失败不致命，不阻断出图结果返回（仅影响即时上屏）。
+    let _ = run_sta_with_timeout(
         move || unsafe {
             let app = get_autocad()?;
             let doc = get_active_document(&app)?;
@@ -2351,7 +2415,7 @@ pub fn cad_draw_elevator_shaft_protection(
             Ok(())
         },
         Duration::from_secs(30),
-    )?;
+    );
 
     Ok(format!(
         "已生成电梯井口防护（上翻式防护门）：中心({},{})，井口 {}x{}，防护门高 {}，踢脚板 {}，门宽规格 {}m，警示牌={}，材料表={}。依据：建办质函〔2019〕90号指导图册 2.7.4。",
