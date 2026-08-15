@@ -2101,10 +2101,15 @@ pub fn cad_draw_elevator_shaft_protection(
     let note_y = title_y + title_h + 160.0 * scale;
     let sign_y1 = note_y + note_h + 160.0 * scale;
     // 警示牌框：宽高动态匹配警示文字宽度 + 内边距，避免文字溢出框外。
+    // 注意：estimate_text_width 按全角=1.0 字高、半角=0.55 字高估算，
+    // 但 AutoCAD 实际中文字体（宋体/仿宋）渲染宽度常略超该估算值，故加安全余量系数，
+    // 否则文字会溢出框外（实测问题：框未完全框住文字）。
     let sign_text = "当心坠落 严禁抛物".to_string();
-    let sign_pad = 80.0 * scale; // 框内左右各留的内边距
-    let sign_w = estimate_text_width(&sign_text, sign_h_text) + sign_pad * 2.0;
-    let sign_h = sign_h_text + sign_pad * 2.0;
+    let sign_pad_x = 100.0 * scale; // 框内左右各留的内边距
+    let sign_pad_y = 60.0 * scale; // 框内上下各留的内边距
+    let sign_text_w = estimate_text_width(&sign_text, sign_h_text);
+    let sign_w = sign_text_w * 1.18 + sign_pad_x * 2.0; // 水平加 18% 安全余量
+    let sign_h = sign_h_text + sign_pad_y * 2.0;
     let sign_x1 = x - sign_w / 2.0;
 
     // ── 材料表布局常量：表头 1 行 + 数据 3 行，两列 ──
@@ -2240,16 +2245,15 @@ pub fn cad_draw_elevator_shaft_protection(
             let y0 = table_y - row_h * row as f64;
             push_line(&mut cmd_lines, &mut line_list, table_x, y0, table_x + table_width, y0);
         }
-        // 列线：2 列，共 3 条竖线，贯穿全部 4 行（表头行同样分列）
+        // 列线：2 列，共 3 条竖线（左外框 + 中间分列线 + 右外框），贯穿全部 4 行。
+        // 修复：此前只画了中间一条竖线，左右外框竖线缺失，导致"表格两边没有线"。
+        let table_bottom = table_y - row_h * table_rows as f64;
+        let x_left = table_x;
         let x_mid = table_x + col_w0;
-        push_line(
-            &mut cmd_lines,
-            &mut line_list,
-            x_mid,
-            table_y,
-            x_mid,
-            table_y - row_h * table_rows as f64,
-        );
+        let x_right = table_x + table_width;
+        for xcol in [x_left, x_mid, x_right] {
+            push_line(&mut cmd_lines, &mut line_list, xcol, table_y, xcol, table_bottom);
+        }
     }
 
     // ── 批 3：所有文字（bridge / COM AddText）──
@@ -2293,7 +2297,6 @@ pub fn cad_draw_elevator_shaft_protection(
 
     if include_warning_sign {
         // 警示牌文字在框内水平+垂直居中；sign_w/sign_h 已在顶部按文字宽度动态计算
-        let sign_text_w = estimate_text_width(&sign_text, sign_h_text);
         let sign_tx = sign_x1 + (sign_w - sign_text_w) / 2.0;
         let sign_ty = sign_y1 + (sign_h - sign_h_text) / 2.0;
         text_items.push((sign_tx, sign_ty, sign_h_text, sign_text.clone()));
