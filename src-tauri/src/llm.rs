@@ -99,6 +99,7 @@ struct ExecutedBatch {
     summary: String,
 }
 
+#[derive(Clone, Debug)]
 enum Provider {
     Gemini(GeminiProvider),
     Glm(GlmProvider),
@@ -115,8 +116,130 @@ impl Provider {
             }
         }
     }
+
+    /// 是否已配置（有 key、可用）。用于 failover 链里跳过未配置的 provider。
+    fn is_configured(&self) -> bool {
+        match self {
+            Provider::Gemini(g) => !g.api_key.trim().is_empty(),
+            Provider::Glm(g) => !g.api_key.trim().is_empty(),
+            Provider::Claude => false,
+        }
+    }
 }
 
+/// 构建 provider 链（主模型 + 备用模型），供 failover 依次尝试。
+///
+/// 顺序：
+///   1) 主 provider 的指定档位模型；
+///   2) 同 provider 的另一档位（strong↔cheap 降级/升级，覆盖"强模型临时不可用"场景）；
+///   3) 另一个 provider（若已配 key，覆盖"整个 provider 断连"场景）。
+fn build_provider_chain(
+    settings: &crate::settings::Settings,
+    tool_names: &[String],
+    tier: TaskTier,
+) -> Vec<Provider> {
+    let glm_primary = Provider::Glm(GlmProvider {
+        api_key: settings.glm_api_key.clone(),
+        model: match tier {
+            TaskTier::Strong => settings.glm_strong_model.clone(),
+            TaskTier::Cheap => settings.glm_model.clone(),
+        },
+        base_url: settings.glm_base_url.clone(),
+        selected_tools: tool_names.to_vec(),
+    });
+    let glm_fallback = Provider::Glm(GlmProvider {
+        api_key: settings.glm_api_key.clone(),
+        model: match tier {
+            TaskTier::Strong => settings.glm_model.clone(), // 降级到便宜模型
+            TaskTier::Cheap => settings.glm_strong_model.clone(), // 升级到强模型
+        },
+        base_url: settings.glm_base_url.clone(),
+        selected_tools: tool_names.to_vec(),
+    });
+    let gemini_primary = Provider::Gemini(GeminiProvider {
+        api_key: settings.gemini_api_key.clone(),
+        model: match tier {
+            TaskTier::Strong => settings.gemini_strong_model.clone(),
+            TaskTier::Cheap => settings.gemini_model.clone(),
+        },
+        base_url: settings.gemini_base_url.clone(),
+        selected_tools: tool_names.to_vec(),
+    });
+    let gemini_fallback = Provider::Gemini(GeminiProvider {
+        api_key: settings.gemini_api_key.clone(),
+        model: match tier {
+            TaskTier::Strong => settings.gemini_model.clone(),
+            TaskTier::Cheap => settings.gemini_strong_model.clone(),
+        },
+        base_url: settings.gemini_base_url.clone(),
+        selected_tools: tool_names.to_vec(),
+    });
+
+    let mut chain = Vec::new();
+    match settings.provider.as_str() {
+        "glm" => {
+            chain.push(glm_primary);
+            chain.push(glm_fallback);
+            chain.push(gemini_primary);
+            chain.push(gemini_fallback);
+        }
+        "gemini" => {
+            chain.push(gemini_primary);
+            chain.push(gemini_fallback);
+            chain.push(glm_primary);
+            chain.push(glm_fallback);
+        }
+        _ => chain.push(Provider::Claude),
+    }
+    // 去重：保留顺序，过滤掉未配置（无 key）的 provider。
+    let mut seen = std::collections::HashSet::new();
+    chain
+        .into_iter()
+        .filter(|p| {
+            let key = format!("{:?}", p);
+            if !p.is_configured() || seen.contains(&key) {
+                false
+            } else {
+                seen.insert(key);
+                true
+            }
+        })
+        .collect()
+}
+
+/// 依次尝试 provider 链，第一个成功的返回；全部失败返回最后一个错误（带 failover 提示）。
+async fn step_with_failover(
+    providers: &[Provider],
+    history: &[MessageView],
+    app: &AppHandle,
+) -> Result<StepOutput, String> {
+    let mut last_err = String::new();
+    let total = providers.len();
+    for (i, p) in providers.iter().enumerate() {
+        match p.step(history, app).await {
+            Ok(out) => return Ok(out),
+            Err(e) => {
+                last_err = e;
+                if i + 1 < total {
+                    // 通知前端：主模型失败，正在切换备用模型（比赛"自动切换"亮点）。
+                    let _ = app.emit(
+                        "agent:event",
+                        AgentEvent::AssistantDelta {
+                            delta: &format!("\n[模型切换] 当前模型不可用，正在切换到备用模型（{}→{}）…\n", i + 1, i + 2),
+                        },
+                    );
+                }
+            }
+        }
+    }
+    Err(format!(
+        "所有模型均不可用（已尝试 {} 个）：{}",
+        total, last_err
+    ))
+}
+
+
+#[derive(Clone, Debug)]
 struct GeminiProvider {
     api_key: String,
     model: String,
@@ -293,6 +416,7 @@ fn history_to_gemini_contents(history: &[MessageView]) -> Vec<Value> {
 
 // ---------------- Zhipu GLM (OpenAI-compatible) ----------------
 
+#[derive(Clone, Debug)]
 struct GlmProvider {
     api_key: String,
     model: String,
@@ -1074,27 +1198,13 @@ pub async fn run_agent(
         classify_task(&user_text)
     };
 
-    let provider = match settings.provider.as_str() {
-        "gemini" => Provider::Gemini(GeminiProvider {
-            api_key: settings.gemini_api_key.clone(),
-            model: match tier {
-                TaskTier::Strong => settings.gemini_strong_model.clone(),
-                TaskTier::Cheap => settings.gemini_model.clone(),
-            },
-            base_url: settings.gemini_base_url.clone(),
-            selected_tools: tooling.tool_names.clone(),
-        }),
-        "glm" => Provider::Glm(GlmProvider {
-            api_key: settings.glm_api_key.clone(),
-            model: match tier {
-                TaskTier::Strong => settings.glm_strong_model.clone(),
-                TaskTier::Cheap => settings.glm_model.clone(),
-            },
-            base_url: settings.glm_base_url.clone(),
-            selected_tools: tooling.tool_names.clone(),
-        }),
-        _ => Provider::Claude,
-    };
+    // 构建 provider 链：主模型 + 备用模型（failover）。
+    // 兜底顺序：
+    //   1) 主 provider 的指定档位模型（strong/cheap）；
+    //   2) 同 provider 降级到另一档位（strong 失败降 cheap，或 cheap 失败升 strong）；
+    //   3) 另一个 provider（若已配 key）。
+    // 每步失败后自动切下一个，避免单点断连导致整个请求失败。
+    let providers = build_provider_chain(&settings, &tooling.tool_names, tier);
 
     let mut msgs = history;
     if let Some(context) = session_object_context(&session_objects) {
@@ -1141,7 +1251,8 @@ pub async fn run_agent(
     let mut undo_group_open = false;
     let mut last_executed_batch: Option<ExecutedBatch> = None;
     for _turn in 0..MAX_TURNS {
-        let step = provider.step(&msgs, &app).await;
+        // failover：主模型失败时依次尝试备用模型，全部失败才报错。
+        let step = step_with_failover(&providers, &msgs, &app).await;
         let step = match step {
             Ok(s) => s,
             Err(e) => {
@@ -1303,5 +1414,51 @@ mod tests {
         assert_eq!(classify_task("电梯井口防护要满足什么规范？"), TaskTier::Cheap);
         assert_eq!(classify_task("你好"), TaskTier::Cheap);
         assert_eq!(classify_task("立杆间距最大多少"), TaskTier::Cheap);
+    }
+
+    #[test]
+    fn provider_chain_glm_primary_filters_unconfigured() {
+        let settings = crate::settings::Settings {
+            provider: "glm".to_string(),
+            glm_api_key: "glm-key-12345678".to_string(),
+            glm_model: "glm-4-flash".to_string(),
+            glm_strong_model: "glm-4.5".to_string(),
+            // Gemini 未配 key
+            gemini_api_key: String::new(),
+            ..Default::default()
+        };
+        let chain = build_provider_chain(&settings, &[], TaskTier::Strong);
+        // 只应包含 GLM 的 strong + 降级 cheap，Gemini 因无 key 被过滤。
+        assert_eq!(chain.len(), 2);
+        assert!(matches!(chain[0], Provider::Glm(_)));
+        assert!(matches!(chain[1], Provider::Glm(_)));
+    }
+
+    #[test]
+    fn provider_chain_strong_fallback_downgrades_to_cheap() {
+        let settings = crate::settings::Settings {
+            provider: "glm".to_string(),
+            glm_api_key: "glm-key-12345678".to_string(),
+            glm_model: "glm-4-flash".to_string(),
+            glm_strong_model: "glm-4.5".to_string(),
+            ..Default::default()
+        };
+        let chain = build_provider_chain(&settings, &[], TaskTier::Strong);
+        // 主模型是 strong（glm-4.5），备用是 cheap（glm-4-flash）。
+        match &chain[0] {
+            Provider::Glm(g) => assert_eq!(g.model, "glm-4.5"),
+            _ => panic!("chain[0] should be Glm"),
+        }
+        match &chain[1] {
+            Provider::Glm(g) => assert_eq!(g.model, "glm-4-flash"),
+            _ => panic!("chain[1] should be Glm"),
+        }
+    }
+
+    #[test]
+    fn provider_chain_no_key_returns_empty() {
+        let settings = crate::settings::Settings::default(); // 全空 key
+        let chain = build_provider_chain(&settings, &[], TaskTier::Cheap);
+        assert!(chain.is_empty());
     }
 }
