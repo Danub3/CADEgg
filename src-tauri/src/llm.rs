@@ -1216,8 +1216,15 @@ pub async fn run_agent(
         });
     }
     if tools::is_safety_request(&user_text) {
-        // 闭环第 3 步：检索标准图册知识卡并注入上下文，让模型基于受控规则出图/追问，而非自由发挥。
-        if let Some(card) = crate::knowledge::render_scene_context("elevator_shaft_protection") {
+        // 闭环第 3 步：按用户输入关键词检索知识卡（search_scenes 多卡命中），
+        // 让模型基于受控规则出图/追问，而非自由发挥。
+        // 兜底：若关键词检索未命中，回退到电梯井口这张默认卡。
+        let scenes = crate::knowledge::search_scenes(&user_text);
+        let scene = scenes
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("elevator_shaft_protection");
+        if let Some(card) = crate::knowledge::render_scene_context(scene) {
             msgs.push(MessageView::User {
                 content: format!("系统提醒（标准图册知识卡，出图/追问须遵守）：\n{card}"),
             });

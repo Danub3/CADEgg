@@ -38,7 +38,7 @@ const COM_RETRY_DELAY_MS: u64 = 120;
 const AUTO_ATTACH_WAIT_ROUNDS: usize = 18;
 const AUTO_ATTACH_WAIT_MS: u64 = 750;
 const BRIDGE_PORT: u16 = 50471;
-const BRIDGE_VERSION: &str = "0.3.4.0";
+const BRIDGE_VERSION: &str = "0.3.5.0";
 const BRIDGE_BUNDLE_NAME: &str = "CADEggBridge.bundle";
 const BRIDGE_DLL_BASENAME: &str = "CADEggBridge";
 const BRIDGE_BUILD_STAMP: &str = "bridge-version.txt";
@@ -1678,6 +1678,31 @@ pub fn cad_draw_circle(cx: f64, cy: f64, r: f64) -> Result<String, String> {
     })
 }
 
+/// 通过 bridge 直接建一条闭合多段线（Polyline）。用于替代 SendCommand 的 PLINE，
+/// 避免命令行批量命令被截断/卡死。失败时返回 Err，由调用方决定是否回退。
+///
+/// points 为平铺坐标 [x1,y1, x2,y2, ...]；closed=true 表示闭合（矩形等）。
+/// 这是 COM 稳定性改造的核心：几何图元走 .NET 事务通道，与文字一致。
+fn draw_polyline_via_bridge(points: &[f64], closed: bool) -> Result<String, String> {
+    let _ = ensure_bridge_installed_once();
+    let response = bridge_send_request(
+        "draw_polyline",
+        serde_json::json!({
+            "points": points,
+            "closed": if closed { 1.0 } else { 0.0 }
+        }),
+    )?;
+    if !response.ok {
+        return Err(format!("bridge draw_polyline failed: {}", response.message));
+    }
+    let handle = response
+        .data
+        .get("handle")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    Ok(format!("已画闭合多段线 {} 点，handle={}", points.len() / 2, handle))
+}
+
 pub fn cad_draw_regular_polygon(
     cx: f64,
     cy: f64,
@@ -1992,13 +2017,15 @@ pub fn cad_draw_elevator_shaft_protection(
         ));
     }
 
-    fn push_rect(cmd: &mut String, x1: f64, y1: f64, x2: f64, y2: f64) {
+    fn push_rect(cmd: &mut String, rects: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
         cmd.push_str("_.PLINE\n");
         cmd.push_str(&format!("{},{}\n", fmt_num(x1), fmt_num(y1)));
         cmd.push_str(&format!("{},{}\n", fmt_num(x2), fmt_num(y1)));
         cmd.push_str(&format!("{},{}\n", fmt_num(x2), fmt_num(y2)));
         cmd.push_str(&format!("{},{}\n", fmt_num(x1), fmt_num(y2)));
         cmd.push_str("C\n");
+        // 同时记录矩形坐标，供 bridge 通道使用（COM 稳定性改造：几何优先走 bridge 事务）。
+        rects.push([x1, y1, x2, y2]);
     }
 
     let width = opening_width * scale; // 井口宽（水平）
@@ -2068,16 +2095,17 @@ pub fn cad_draw_elevator_shaft_protection(
 
     // ── 批 1：所有矩形（PLINE）──
     let mut cmd_rects = String::new();
+    let mut rect_list: Vec<[f64; 4]> = Vec::new();
     // 井口轮廓（洞口范围示意）
-    push_rect(&mut cmd_rects, left, bottom, right, top);
+    push_rect(&mut cmd_rects, &mut rect_list, left, bottom, right, top);
     // 防护门扇（上翻式，两扇对开）：门框覆盖洞口，门高 door_h，从井口底边向上。
     // 左扇 + 右扇，中缝在井口中心 x 处。
-    push_rect(&mut cmd_rects, left, door_bottom, door_mid_x, door_top);
-    push_rect(&mut cmd_rects, door_mid_x, door_bottom, right, door_top);
+    push_rect(&mut cmd_rects, &mut rect_list, left, door_bottom, door_mid_x, door_top);
+    push_rect(&mut cmd_rects, &mut rect_list, door_mid_x, door_bottom, right, door_top);
     // 踢脚板：门底部横跨矮矩形带（高度 toe_h，宽度 = 井口宽）。
-    push_rect(&mut cmd_rects, left, door_bottom, right, door_bottom + toe_h);
+    push_rect(&mut cmd_rects, &mut rect_list, left, door_bottom, right, door_bottom + toe_h);
     if include_warning_sign {
-        push_rect(&mut cmd_rects, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
+        push_rect(&mut cmd_rects, &mut rect_list, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
     }
 
     // ── 批 2：所有直线（LINE）──
@@ -2202,17 +2230,46 @@ pub fn cad_draw_elevator_shaft_protection(
         }
     }
 
-    // 先画几何（矩形 + 线，纯 ASCII 坐标，SendCommand 可靠）。
-    run_sta_with_timeout(
-        move || unsafe {
-            let app = get_autocad()?;
-            let doc = get_active_document(&app)?;
-            send_command_to_doc(&doc, &cmd_rects)?;
-            send_command_to_doc(&doc, &cmd_lines)?;
-            Ok(())
-        },
-        Duration::from_secs(60),
-    )?;
+    // ── 几何绘制（COM 稳定性改造）──
+    // 矩形（PLINE）优先走 bridge 事务通道（与文字一致，避免命令行 PLINE 截断/卡死）；
+    // bridge 全部失败时，回退到 SendCommand 批量发送（原逻辑兜底）。
+    let rects_bridge_ok = {
+        let mut ok = true;
+        for rect in &rect_list {
+            let points = [rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]];
+            if draw_polyline_via_bridge(&points, true).is_err() {
+                ok = false;
+                break;
+            }
+        }
+        ok
+    };
+
+    // 直线（LINE）：保持 SendCommand（简单可靠，无截断风险——数量少、纯 ASCII）。
+    if !rects_bridge_ok {
+        // bridge 建矩形失败，矩形回退到 SendCommand；线一并走 SendCommand。
+        run_sta_with_timeout(
+            move || unsafe {
+                let app = get_autocad()?;
+                let doc = get_active_document(&app)?;
+                send_command_to_doc(&doc, &cmd_rects)?;
+                send_command_to_doc(&doc, &cmd_lines)?;
+                Ok(())
+            },
+            Duration::from_secs(60),
+        )?;
+    } else {
+        // 矩形已走 bridge，线单独走 SendCommand。
+        run_sta_with_timeout(
+            move || unsafe {
+                let app = get_autocad()?;
+                let doc = get_active_document(&app)?;
+                send_command_to_doc(&doc, &cmd_lines)?;
+                Ok(())
+            },
+            Duration::from_secs(60),
+        )?;
+    }
 
     // 再逐条画文字（bridge 优先；失败时用 COM AddText，避免命令行 TEXT）。
     for (tx, ty, th, tt) in &text_items {

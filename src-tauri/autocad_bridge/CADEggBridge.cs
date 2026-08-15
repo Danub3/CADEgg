@@ -20,7 +20,7 @@ namespace CADEggBridge
     public sealed class BridgeEntry : IExtensionApplication
     {
         private const int BridgePort = 50471;
-        private const string BridgeVersion = "0.3.4.0";
+        private const string BridgeVersion = "0.3.5.0";
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             IncludeFields = true,
@@ -212,6 +212,8 @@ namespace CADEggBridge
                     return Ping();
                 case "draw_line":
                     return DrawLine(request.args);
+                case "draw_polyline":
+                    return DrawPolyline(request.args);
                 case "draw_circle":
                     return DrawCircle(request.args);
                 case "draw_text":
@@ -272,6 +274,71 @@ namespace CADEggBridge
                     modelSpace.AppendEntity(line);
                     tr.AddNewlyCreatedDBObject(line, true);
                     var summary = SummarizeObject(line, "LINE");
+                    tr.Commit();
+                    return summary;
+                }
+            }
+        }
+
+        private static Dictionary<string, object> DrawPolyline(Dictionary<string, JsonElement> args)
+        {
+            var doc = AcApp.DocumentManager.MdiActiveDocument;
+            if (doc == null)
+            {
+                throw new InvalidOperationException("no active AutoCAD document");
+            }
+
+            // args: "points" 为 [x1,y1, x2,y2, ...] 平铺数组；"closed" 是否闭合（默认 true）。
+            if (args == null || !args.ContainsKey("points"))
+            {
+                throw new InvalidOperationException("missing bridge arg: points");
+            }
+            var pointsJson = args["points"];
+            if (pointsJson.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidOperationException("points must be an array");
+            }
+            var closed = !args.ContainsKey("closed") || ToDouble(args, "closed") != 0.0;
+
+            // 平铺数组 [x1,y1, x2,y2, ...]。
+            var flat = new List<double>();
+            foreach (var item in pointsJson.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var v))
+                {
+                    flat.Add(v);
+                }
+            }
+            if (flat.Count < 4 || flat.Count % 2 != 0)
+            {
+                throw new InvalidOperationException("points must contain at least 2 (x,y) pairs");
+            }
+
+            using (doc.LockDocument())
+            {
+                var db = doc.Database;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var blockTable = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                    var modelSpace = (BlockTableRecord)tr.GetObject(
+                        blockTable[BlockTableRecord.ModelSpace],
+                        OpenMode.ForWrite
+                    );
+
+                    var polyline = new Polyline();
+                    var vertexCount = flat.Count / 2;
+                    for (var i = 0; i < vertexCount; i++)
+                    {
+                        polyline.AddVertexAt(i, new Point2d(flat[i * 2], flat[i * 2 + 1]), 0.0, 0.0, 0.0);
+                    }
+                    if (closed && vertexCount >= 2)
+                    {
+                        polyline.Closed = true;
+                    }
+
+                    modelSpace.AppendEntity(polyline);
+                    tr.AddNewlyCreatedDBObject(polyline, true);
+                    var summary = SummarizeObject(polyline, "LWPOLYLINE");
                     tr.Commit();
                     return summary;
                 }

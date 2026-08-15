@@ -125,6 +125,7 @@ pub fn search_scenes(query: &str) -> Vec<String> {
 }
 
 /// 列出当前所有可用场景名。
+#[allow(dead_code)]
 pub fn list_scenes() -> Vec<String> {
     let mut scenes: Vec<String> = all_cards()
         .iter()
