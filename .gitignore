@@ -25,6 +25,10 @@ AutoCAD Agent - Brainstorm*.md
 # 本地测试图纸（个人文件，绝不上传 GitHub）
 test/
 
+# 住建部规范源文件 PDF（体积大，个人下载，绝不上传 GitHub）
+# 提取的结构化摘录在 data/sources/，知识卡在 data/atlas/，随代码提交
+resources/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

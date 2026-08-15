@@ -1,5 +1,6 @@
 {
   "scene": "elevator_shaft_protection",
+  "spec_source": "房屋市政工程安全生产标准化指导图册（建办质函〔2019〕90号）第2.7.4条 室内电梯井口防护",
   "checks": [
     {
       "id": "opening_size_valid",
@@ -7,23 +8,23 @@
       "rule": "opening_width > 0 且 opening_height > 0"
     },
     {
-      "id": "guardrail_height_valid",
-      "label": "防护栏杆高度不低于 1200mm",
-      "rule": "guardrail_height >= 1200"
+      "id": "guard_door_height_valid",
+      "label": "防护门高度为 1500mm（1.5m）",
+      "rule": "guard_height == 1500"
     },
     {
-      "id": "post_spacing_valid",
-      "label": "立杆间距不大于 2000mm",
-      "rule": "post_spacing > 0 且 post_spacing <= 2000"
+      "id": "guard_door_width_valid",
+      "label": "防护门宽度为 1.5m 或 2.1m 两种规格之一",
+      "rule": "guard_width ∈ {1500, 2100}（按井口尺寸选定）"
     },
     {
       "id": "toe_board_present",
-      "label": "踢脚板高度不低于 180mm",
-      "rule": "toe_board_height >= 180"
+      "label": "防护门底部安装 200mm 高踢脚板",
+      "rule": "toe_board_height == 200"
     },
     {
       "id": "warning_sign_present",
-      "label": "警示牌已配置",
+      "label": "外侧警示牌「当心坠落 严禁抛物」已配置",
       "rule": "include_warning_sign == true"
     },
     {
@@ -33,16 +34,15 @@
     },
     {
       "id": "dimension_complete",
-      "label": "井口尺寸、防护高度、立杆间距、踢脚板高度标注齐全",
+      "label": "井口尺寸、防护门高、踢脚板高标注齐全",
       "rule": "全部关键尺寸 > 0"
     }
   ],
   "material_table": {
-    "posts": "ceil(perimeter / post_spacing)，至少 4 根",
-    "rails": "top_and_mid_rails（上横杆 + 中横杆）",
-    "toe_board_height": "按输入值",
-    "warning_sign": "按 include_warning_sign",
+    "guard_door": "按井口宽度选 1.5m 或 2.1m 规格",
+    "toe_board_height": "200mm",
+    "warning_sign": "「当心坠落 严禁抛物」1 块",
     "material_table_included": "按 include_material_table"
   },
-  "note": "本文件与 src-tauri/src/cad.rs 中 cad_validate_elevator_shaft_protection 的确定性校核规则保持一致，供 RAG 引用与人工核对。"
+  "note": "本文件与 src-tauri/src/cad.rs 中 cad_validate_elevator_shaft_protection 的确定性校核规则保持一致。场景依据：指导图册 2.7.4 室内电梯井口防护（上翻式/三件套式防护门），与 2.7.2 临边防护栏杆（上杆1.2m、立杆≤2m、挡脚板≥180mm）是不同场景，不可混用。"
 }

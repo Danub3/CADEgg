@@ -689,11 +689,8 @@ export default function App() {
                     </div>
                   )}
                   <div className="rounded-lg bg-white/70 border border-slate-200/70 px-2 py-1.5 text-[11px] text-slate-700">
-                    材料表：立杆 {lastValidation.material_table.posts} 根 ·{" "}
-                    {lastValidation.material_table.rails === "top_and_mid_rails"
-                      ? "上横杆+中横杆"
-                      : lastValidation.material_table.rails}
-                    {" · "}踢脚板 {lastValidation.material_table.toe_board_height}mm · 警示牌{" "}
+                    材料表：防护门 {lastValidation.material_table.guard_door} · 踢脚板{" "}
+                    {lastValidation.material_table.toe_board_height}mm · 警示牌{" "}
                     {lastValidation.material_table.warning_sign ? "已配" : "未配"}
                   </div>
                 </div>

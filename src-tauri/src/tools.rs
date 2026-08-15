@@ -349,12 +349,11 @@ fn params_draw_elevator_shaft_protection() -> Value {
         "properties": {
             "x": {"type": "number", "description": "电梯井口中心 X"},
             "y": {"type": "number", "description": "电梯井口中心 Y"},
-            "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0"},
-            "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0"},
-            "guardrail_height": {"type": "number", "description": "防护栏杆高度，毫米，常用 1200"},
-            "post_spacing": {"type": "number", "description": "立杆最大间距，毫米，常用 2000"},
-            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，常用 180"},
-            "include_warning_sign": {"type": "boolean", "description": "是否绘制警示牌，默认 true"},
+            "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0（现场实测）"},
+            "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0（现场实测）"},
+            "guard_height": {"type": "number", "description": "防护门高度，毫米，规范定值 1500（1.5m），缺省按 1500"},
+            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，规范定值 200，缺省按 200"},
+            "include_warning_sign": {"type": "boolean", "description": "是否绘制警示牌「当心坠落 严禁抛物」，默认 true"},
             "include_material_table": {"type": "boolean", "description": "是否绘制材料表，默认 true"},
             "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"}
         },
@@ -362,10 +361,7 @@ fn params_draw_elevator_shaft_protection() -> Value {
             "x",
             "y",
             "opening_width",
-            "opening_height",
-            "guardrail_height",
-            "post_spacing",
-            "toe_board_height"
+            "opening_height"
         ]
     })
 }
@@ -376,17 +372,15 @@ fn params_validate_elevator_shaft_protection() -> Value {
         "properties": {
             "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0"},
             "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0"},
-            "guardrail_height": {"type": "number", "description": "防护栏杆高度，毫米"},
-            "post_spacing": {"type": "number", "description": "立杆最大间距，毫米"},
-            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米"},
+            "guard_height": {"type": "number", "description": "防护门高度，毫米，规范 1500"},
+            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，规范 200"},
             "include_warning_sign": {"type": "boolean", "description": "是否包含警示牌"},
             "include_material_table": {"type": "boolean", "description": "是否包含材料表"}
         },
         "required": [
             "opening_width",
             "opening_height",
-            "guardrail_height",
-            "post_spacing",
+            "guard_height",
             "toe_board_height",
             "include_warning_sign",
             "include_material_table"
@@ -588,18 +582,7 @@ pub fn safety_missing_params(user_input: &str) -> Vec<&'static str> {
     if !contains_any(&text, &["高", "进深", "height"]) {
         missing.push("井口高度/进深");
     }
-    // 防护栏杆高度
-    if !contains_any(&text, &["栏杆", "防护高", "护栏"]) {
-        missing.push("防护栏杆高度");
-    }
-    // 立杆间距
-    if !contains_any(&text, &["立杆", "间距", "spacing"]) {
-        missing.push("立杆间距");
-    }
-    // 踢脚板高度
-    if !contains_any(&text, &["踢脚板", "挡脚板", "toe"]) {
-        missing.push("踢脚板高度");
-    }
+    // 注：防护门高度（1.5m）、踢脚板高度（200mm）是规范定值，无需追问，缺省按规范值。
 
     // 仅当用户确实想画图且确实缺关键尺寸时返回缺项；纯闲聊/只问规则不算缺参。
     if !wants_draw || missing.is_empty() {
@@ -615,12 +598,14 @@ pub fn safety_clarification_prompt(user_input: &str) -> Option<String> {
         return None;
     }
     let mut lines = vec![
-        "用户请求绘制电梯井口临边防护，但缺少以下关键尺寸，请先向用户追问确认，不要自行编造：".to_string(),
+        "用户请求绘制电梯井口防护，但缺少以下关键尺寸，请先向用户追问确认，不要自行编造：".to_string(),
     ];
     for (i, field) in missing.iter().enumerate() {
         lines.push(format!("{}. {}", i + 1, field));
     }
-    lines.push("另外还需确认：是否包含警示牌、是否输出材料表。".to_string());
+    lines.push(
+        "防护门高度（1.5m）、踢脚板（200mm）按规范定值，无需追问；另需确认是否包含警示牌、是否输出材料表。".to_string(),
+    );
     Some(lines.join("\n"))
 }
 
@@ -649,7 +634,7 @@ pub fn select_tooling_context(
         let mut lines = vec![
             "安全防护 demo 模式：只暴露电梯井口临边防护专用工具、校核工具、文字和最少查询工具。".to_string(),
             "优先调用 draw_elevator_shaft_protection；绘图完成后调用 validate_elevator_shaft_protection 输出 JSON 校核结果。".to_string(),
-            "缺少 opening_width/opening_height/guardrail_height/post_spacing/toe_board_height 时，先向用户追问，不要编造尺寸。".to_string(),
+            "缺少 opening_width/opening_height 时，先向用户追问，不要编造尺寸；防护门高 guard_height(1500)、踢脚板 toe_board_height(200) 是规范定值，缺省即用规范值。".to_string(),
             "用户未指定绘图位置时，x/y 默认取 0（井口中心落在原点），不要因缺少坐标而追问或停止出图。".to_string(),
         ];
         if let Some(prompt) = safety_clarification_prompt(user_input) {
@@ -1247,9 +1232,14 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
             num(&call.args, "y")?,
             num(&call.args, "opening_width")?,
             num(&call.args, "opening_height")?,
-            num(&call.args, "guardrail_height")?,
-            num(&call.args, "post_spacing")?,
-            num(&call.args, "toe_board_height")?,
+            call.args
+                .get("guard_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1500.0),
+            call.args
+                .get("toe_board_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(200.0),
             call.args
                 .get("include_warning_sign")
                 .and_then(|v| v.as_bool())
@@ -1268,9 +1258,14 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
             crate::cad::cad_validate_elevator_shaft_protection(
                 num(&call.args, "opening_width")?,
                 num(&call.args, "opening_height")?,
-                num(&call.args, "guardrail_height")?,
-                num(&call.args, "post_spacing")?,
-                num(&call.args, "toe_board_height")?,
+                call.args
+                    .get("guard_height")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1500.0),
+                call.args
+                    .get("toe_board_height")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(200.0),
                 call.args
                     .get("include_warning_sign")
                     .and_then(|v| v.as_bool())
@@ -1454,12 +1449,12 @@ mod tests {
     fn safety_missing_params_detects_incomplete_request() {
         let missing = safety_missing_params("画一个电梯井口防护");
         assert!(missing.iter().any(|m| *m == "井口宽度"));
-        assert!(missing.iter().any(|m| *m == "防护栏杆高度"));
+        assert!(missing.iter().any(|m| *m == "井口高度/进深"));
+        // 防护门高、踢脚板是规范定值，不应再作为缺参追问。
+        assert!(!missing.iter().any(|m| *m == "防护门高度"));
 
-        // 已给出完整尺寸时不应报告缺参
-        let missing = safety_missing_params(
-            "画一个电梯井口临边防护，井口宽 2000，高 1800，防护栏杆 1200，立杆间距 2000，踢脚板 180",
-        );
+        // 已给出井口宽高时不应报告缺参（防护门高/踢脚板无需追问）
+        let missing = safety_missing_params("画一个电梯井口防护，井口宽 2000，高 1800");
         assert!(missing.is_empty());
     }
 

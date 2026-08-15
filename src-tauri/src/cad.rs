@@ -1960,8 +1960,7 @@ pub fn cad_draw_elevator_shaft_protection(
     y: f64,
     opening_width: f64,
     opening_height: f64,
-    guardrail_height: f64,
-    post_spacing: f64,
+    guard_height: f64,
     toe_board_height: f64,
     include_warning_sign: bool,
     include_material_table: bool,
@@ -1973,10 +1972,10 @@ pub fn cad_draw_elevator_shaft_protection(
             opening_width, opening_height
         ));
     }
-    if guardrail_height <= 0.0 || post_spacing <= 0.0 || toe_board_height <= 0.0 {
+    if guard_height <= 0.0 || toe_board_height <= 0.0 {
         return Err(format!(
-            "guardrail_height、post_spacing、toe_board_height 必须为正数，收到 {}, {}, {}",
-            guardrail_height, post_spacing, toe_board_height
+            "guard_height、toe_board_height 必须为正数，收到 {}, {}",
+            guard_height, toe_board_height
         ));
     }
     if scale <= 0.0 {
@@ -2002,14 +2001,11 @@ pub fn cad_draw_elevator_shaft_protection(
         cmd.push_str("C\n");
     }
 
-    let width = opening_width * scale;
-    let height = opening_height * scale;
-    let rail_h = guardrail_height * scale;
-    let toe_h = toe_board_height * scale;
-    let max_post_spacing = post_spacing * scale;
-    let margin = 450.0 * scale;
-    let post_size = (90.0 * scale).max(40.0);
-    let rail_gap = (180.0 * scale).max(80.0);
+    let width = opening_width * scale; // 井口宽（水平）
+    let height = opening_height * scale; // 井口高（竖直，门洞高）
+    let door_h = guard_height * scale; // 防护门高（规范定值 1500）
+    let toe_h = toe_board_height * scale; // 踢脚板高（规范定值 200）
+    let hinge_size = (60.0 * scale).max(30.0); // 上口两端翻转轴（Φ16）标记尺寸
 
     // ── 字号分层：不同文字类型用不同高度，避免「一刀切过大」 ──
     // 标题 / 说明 / 尺寸标注 / 表头 / 表格正文 / 警示文字
@@ -2020,33 +2016,34 @@ pub fn cad_draw_elevator_shaft_protection(
     let cell_h = (95.0 * scale).max(56.0); // 表格正文
     let sign_h_text = (130.0 * scale).max(72.0); // 警示牌文字
 
+    // 井口轮廓（洞口范围，以中心 x,y 为基准）
     let left = x - width / 2.0;
     let right = x + width / 2.0;
     let bottom = y - height / 2.0;
     let top = y + height / 2.0;
-    let guard_left = left - margin;
-    let guard_right = right + margin;
-    let guard_bottom = bottom - margin;
-    let guard_top = top + margin;
+
+    // 防护门：安装在井口外侧，覆盖洞口；门高 door_h（1.5m），从井口底边向上。
+    // 门扇对开，中线在井口中心 x 处。
+    let door_bottom = bottom;
+    let door_top = bottom + door_h;
+    let door_mid_x = x;
 
     // ── 顶部纵向布局：标题 / 说明 / 警示牌自下而上排列，避免互相遮挡 ──
-    // 各区块之间的垂直间隙，按字号留足安全距离。
-    let title_y = guard_top + 260.0 * scale;
+    let title_y = top + 260.0 * scale;
     let note_y = title_y + title_h + 160.0 * scale;
     let sign_y1 = note_y + note_h + 160.0 * scale;
     // 警示牌框：宽高动态匹配警示文字宽度 + 内边距，避免文字溢出框外。
-    let sign_text = "当心坠落 禁止跨越".to_string();
+    let sign_text = "当心坠落 严禁抛物".to_string();
     let sign_pad = 80.0 * scale; // 框内左右各留的内边距
     let sign_w = estimate_text_width(&sign_text, sign_h_text) + sign_pad * 2.0;
     let sign_h = sign_h_text + sign_pad * 2.0;
     let sign_x1 = x - sign_w / 2.0;
 
-    // ── 材料表布局常量：表头 1 行 + 数据 4 行，两列 ──
-    // 表格放在护栏右侧，顶部与护栏顶对齐；第二列加宽以容纳长文字。
-    // 表格左边界向右移，避开右侧「井口高」垂直尺寸标注文字（否则水平重叠）。
-    let table_x = guard_right + 1300.0 * scale;
-    let table_y = guard_top;
-    let table_rows: usize = 5;
+    // ── 材料表布局常量：表头 1 行 + 数据 3 行，两列 ──
+    // 表格放在井口右侧，顶部与井口顶对齐；第二列加宽以容纳长文字。
+    let table_x = right + 1300.0 * scale;
+    let table_y = top;
+    let table_rows: usize = 4;
     let row_h = 240.0 * scale;
     let col_w0 = 720.0 * scale; // 第一列：材料
     let col_w1 = 1100.0 * scale; // 第二列：数量/规格
@@ -2062,12 +2059,8 @@ pub fn cad_draw_elevator_shaft_protection(
     // 单元格中心 Y（第 row 行，0 为表头）：用于文字垂直居中
     let cell_center_y = |row: usize| -> f64 { table_y - row_h * (row as f64 + 0.5) };
 
-    let side_post_count = ((guard_top - guard_bottom) / max_post_spacing).ceil().max(1.0) as i32;
-    let top_post_count = ((guard_right - guard_left) / max_post_spacing).ceil().max(1.0) as i32;
-    // 实际立杆数：顶/底边各 (top_post_count+1) 根，左右侧边各 (side_post_count-1) 根。
-    // 材料表必须用这个真实值，不能再用「周长÷间距」估算（两者会不一致）。
-    let post_count =
-        ((top_post_count + 1) * 2 + side_post_count.saturating_sub(1) * 2) as i32;
+    // 防护门宽度规格选型：规范给出 1.5m / 2.1m 两种，按井口宽度就近选型（仅用于材料表说明）。
+    let door_spec_m = if opening_width <= 1800.0 { 1.5 } else { 2.1 };
 
     // 分批发送几何命令，文字单独通过 cad_draw_text 创建。
     // 原因：一次性 send_command 几十条命令时，长串后半段会被 AutoCAD 截断或破坏；
@@ -2075,64 +2068,28 @@ pub fn cad_draw_elevator_shaft_protection(
 
     // ── 批 1：所有矩形（PLINE）──
     let mut cmd_rects = String::new();
-    push_rect(&mut cmd_rects, left, bottom, right, top); // 井口轮廓
-    push_rect(&mut cmd_rects, guard_left, guard_bottom, guard_right, guard_top); // 护栏外框
-    // 踢脚板：井口底部独立的横跨矮矩形带（高度 toe_h，宽度 = 井口宽），
-    // 而不是贴在护栏外框四边的细条（细条会和护栏框视觉重合看不出）。
-    push_rect(&mut cmd_rects, left, bottom, right, bottom + toe_h);
-    for i in 0..=top_post_count {
-        let t = i as f64 / top_post_count as f64;
-        let px = guard_left + (guard_right - guard_left) * t;
-        push_rect(
-            &mut cmd_rects,
-            px - post_size / 2.0,
-            guard_bottom - post_size / 2.0,
-            px + post_size / 2.0,
-            guard_bottom + post_size / 2.0,
-        );
-        push_rect(
-            &mut cmd_rects,
-            px - post_size / 2.0,
-            guard_top - post_size / 2.0,
-            px + post_size / 2.0,
-            guard_top + post_size / 2.0,
-        );
-    }
-    for i in 1..side_post_count {
-        let t = i as f64 / side_post_count as f64;
-        let py = guard_bottom + (guard_top - guard_bottom) * t;
-        push_rect(
-            &mut cmd_rects,
-            guard_left - post_size / 2.0,
-            py - post_size / 2.0,
-            guard_left + post_size / 2.0,
-            py + post_size / 2.0,
-        );
-        push_rect(
-            &mut cmd_rects,
-            guard_right - post_size / 2.0,
-            py - post_size / 2.0,
-            guard_right + post_size / 2.0,
-            py + post_size / 2.0,
-        );
-    }
+    // 井口轮廓（洞口范围示意）
+    push_rect(&mut cmd_rects, left, bottom, right, top);
+    // 防护门扇（上翻式，两扇对开）：门框覆盖洞口，门高 door_h，从井口底边向上。
+    // 左扇 + 右扇，中缝在井口中心 x 处。
+    push_rect(&mut cmd_rects, left, door_bottom, door_mid_x, door_top);
+    push_rect(&mut cmd_rects, door_mid_x, door_bottom, right, door_top);
+    // 踢脚板：门底部横跨矮矩形带（高度 toe_h，宽度 = 井口宽）。
+    push_rect(&mut cmd_rects, left, door_bottom, right, door_bottom + toe_h);
     if include_warning_sign {
         push_rect(&mut cmd_rects, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
     }
 
     // ── 批 2：所有直线（LINE）──
     let mut cmd_lines = String::new();
-    let mid_offset = rail_h * 0.5;
-    push_line(&mut cmd_lines, guard_left, guard_bottom + rail_gap, guard_right, guard_bottom + rail_gap);
-    push_line(&mut cmd_lines, guard_left, guard_bottom + rail_gap + mid_offset, guard_right, guard_bottom + rail_gap + mid_offset);
-    push_line(&mut cmd_lines, guard_left, guard_top - rail_gap, guard_right, guard_top - rail_gap);
-    push_line(&mut cmd_lines, guard_left, guard_top - rail_gap - mid_offset, guard_right, guard_top - rail_gap - mid_offset);
-    push_line(&mut cmd_lines, guard_left + rail_gap, guard_bottom, guard_left + rail_gap, guard_top);
-    push_line(&mut cmd_lines, guard_left + rail_gap + mid_offset, guard_bottom, guard_left + rail_gap + mid_offset, guard_top);
-    push_line(&mut cmd_lines, guard_right - rail_gap, guard_bottom, guard_right - rail_gap, guard_top);
-    push_line(&mut cmd_lines, guard_right - rail_gap - mid_offset, guard_bottom, guard_right - rail_gap - mid_offset, guard_top);
-    let dim_y = guard_bottom - 300.0 * scale;
-    let dim_x = guard_right + 300.0 * scale;
+    // 防护门上口两端翻转轴（Φ16 钢筋）：在门顶边左右两端做短竖标记。
+    push_line(&mut cmd_lines, left, door_top - hinge_size, left, door_top + hinge_size);
+    push_line(&mut cmd_lines, right, door_top - hinge_size, right, door_top + hinge_size);
+    // 门扇中缝（对开分隔线）
+    push_line(&mut cmd_lines, door_mid_x, door_bottom, door_mid_x, door_top);
+    // 尺寸标注：水平（井口宽）在井口下方，垂直（井口高）在井口右侧。
+    let dim_y = bottom - 300.0 * scale;
+    let dim_x = right + 300.0 * scale;
     push_line(&mut cmd_lines, left, dim_y, right, dim_y);
     push_line(&mut cmd_lines, left, dim_y - 60.0 * scale, left, dim_y + 60.0 * scale);
     push_line(&mut cmd_lines, right, dim_y - 60.0 * scale, right, dim_y + 60.0 * scale);
@@ -2141,12 +2098,12 @@ pub fn cad_draw_elevator_shaft_protection(
     push_line(&mut cmd_lines, dim_x - 60.0 * scale, top, dim_x + 60.0 * scale, top);
     if include_material_table {
         let table_width = col_w0 + col_w1;
-        // 行线：5 行（表头 + 4 数据行），共 6 条横线
+        // 行线：4 行（表头 + 3 数据行），共 5 条横线
         for row in 0..=table_rows {
             let y0 = table_y - row_h * row as f64;
             push_line(&mut cmd_lines, table_x, y0, table_x + table_width, y0);
         }
-        // 列线：2 列，共 3 条竖线，贯穿全部 5 行（表头行同样分列）
+        // 列线：2 列，共 3 条竖线，贯穿全部 4 行（表头行同样分列）
         let x_mid = table_x + col_w0;
         push_line(&mut cmd_lines, x_mid, table_y, x_mid, table_y - row_h * table_rows as f64);
     }
@@ -2157,7 +2114,7 @@ pub fn cad_draw_elevator_shaft_protection(
     // 布局策略：
     //   - 字号分层：标题 title_h / 说明 note_h / 标注 dim_h / 表头 header_h / 正文 cell_h / 警示 sign_h_text
     //   - 尺寸标注：水平标注放在井口下方居中对齐，垂直标注放在右侧居中对齐
-    //   - 标题 + 说明：纵向排列在护栏上方，互不遮挡
+    //   - 标题 + 说明：纵向排列在井口上方，互不遮挡
     //   - 表格文字：按 cell 中心定位（水平/垂直居中，估算文字宽度后左移半宽）
     //   - 警示牌文字：在警示牌框内居中
     let mut text_items: Vec<(f64, f64, f64, String)> = Vec::new();
@@ -2174,17 +2131,17 @@ pub fn cad_draw_elevator_shaft_protection(
     let dim_height_y = y - dim_h / 2.0;
     text_items.push((dim_height_x, dim_height_y, dim_h, dim_height_text));
 
-    // 主标题（居中对齐在护栏上方）
-    let title_text = "电梯井口临边防护".to_string();
+    // 主标题（居中对齐在井口上方）
+    let title_text = "电梯井口防护（上翻式防护门）".to_string();
     let title_x = x - estimate_text_width(&title_text, title_h) / 2.0;
     text_items.push((title_x, title_y, title_h, title_text));
 
     // 说明文字（居中对齐在标题上方）
     let note_text = format!(
-        "防护高度 H={}  立杆间距 ≤ {}  踢脚板 {}",
-        fmt_num(guardrail_height),
-        fmt_num(post_spacing),
-        fmt_num(toe_board_height)
+        "防护门高 {}  踢脚板 {}  门宽规格 {}m（按井口选型）",
+        fmt_num(guard_height),
+        fmt_num(toe_board_height),
+        door_spec_m
     );
     let note_x = x - estimate_text_width(&note_text, note_h) / 2.0;
     text_items.push((note_x, note_y, note_h, note_text));
@@ -2206,14 +2163,13 @@ pub fn cad_draw_elevator_shaft_protection(
         text_items.push((hx0, cell_center_y(0) - header_h / 2.0, header_h, header_material));
         text_items.push((hx1, cell_center_y(0) - header_h / 2.0, header_h, header_qty));
 
-        // 数据行（第 1~4 行），每格文字居中
-        let data_rows: [(String, String); 4] = [
-            ("立杆".to_string(), format!("{} 根", post_count)),
-            ("横杆".to_string(), "上横杆+中横杆".to_string()),
+        // 数据行（第 1~3 行），每格文字居中
+        let data_rows: [(String, String); 3] = [
+            ("防护门".to_string(), format!("{}m 上翻式", door_spec_m)),
             ("踢脚板".to_string(), format!("高 {}", fmt_num(toe_board_height))),
             (
                 "警示牌".to_string(),
-                if include_warning_sign { "1 块".to_string() } else { "未绘制".to_string() },
+                if include_warning_sign { "当心坠落 严禁抛物".to_string() } else { "未绘制".to_string() },
             ),
         ];
         for (row_idx, (label, value)) in data_rows.iter().enumerate() {
@@ -2258,14 +2214,14 @@ pub fn cad_draw_elevator_shaft_protection(
     )?;
 
     Ok(format!(
-        "已生成电梯井口临边防护布置：中心({},{})，井口 {}x{}，防护高度 {}，立杆间距 <= {}，踢脚板 {}，警示牌={}，材料表={}。",
+        "已生成电梯井口防护（上翻式防护门）：中心({},{})，井口 {}x{}，防护门高 {}，踢脚板 {}，门宽规格 {}m，警示牌={}，材料表={}。依据：建办质函〔2019〕90号指导图册 2.7.4。",
         fmt_num(x),
         fmt_num(y),
         fmt_num(opening_width),
         fmt_num(opening_height),
-        fmt_num(guardrail_height),
-        fmt_num(post_spacing),
+        fmt_num(guard_height),
         fmt_num(toe_board_height),
+        door_spec_m,
         include_warning_sign,
         include_material_table
     ))
@@ -2274,8 +2230,7 @@ pub fn cad_draw_elevator_shaft_protection(
 pub fn cad_validate_elevator_shaft_protection(
     opening_width: f64,
     opening_height: f64,
-    guardrail_height: f64,
-    post_spacing: f64,
+    guard_height: f64,
     toe_board_height: f64,
     include_warning_sign: bool,
     include_material_table: bool,
@@ -2303,51 +2258,39 @@ pub fn cad_validate_elevator_shaft_protection(
         opening_width > 0.0 && opening_height > 0.0
     );
     add_check!(
-        "guardrail_height_valid",
-        "防护栏杆高度不低于 1200mm",
-        guardrail_height >= 1200.0
-    );
-    add_check!(
-        "post_spacing_valid",
-        "立杆间距不大于 2000mm",
-        post_spacing > 0.0 && post_spacing <= 2000.0
+        "guard_door_height_valid",
+        "防护门高度为 1500mm（1.5m）",
+        (guard_height - 1500.0).abs() < 0.5
     );
     add_check!(
         "toe_board_present",
-        "踢脚板高度不低于 180mm",
-        toe_board_height >= 180.0
+        "防护门底部踢脚板高度为 200mm",
+        (toe_board_height - 200.0).abs() < 0.5
     );
-    add_check!("warning_sign_present", "警示牌已配置", include_warning_sign);
+    add_check!(
+        "warning_sign_present",
+        "警示牌「当心坠落 严禁抛物」已配置",
+        include_warning_sign
+    );
     add_check!("material_table_present", "材料表已配置", include_material_table);
     add_check!(
         "dimension_complete",
-        "井口尺寸、防护高度、立杆间距、踢脚板高度标注齐全",
+        "井口尺寸、防护门高、踢脚板高度标注齐全",
         opening_width > 0.0
             && opening_height > 0.0
-            && guardrail_height > 0.0
-            && post_spacing > 0.0
+            && guard_height > 0.0
             && toe_board_height > 0.0
     );
 
-    // 立杆数：与绘制逻辑保持一致（顶/底边各 N+1 根，左右侧边各 N-1 根）。
-    // 这里用 900mm 边距（margin=450*2）对应绘图的护栏外框尺寸。
-    let guard_width = opening_width + 900.0;
-    let guard_height = opening_height + 900.0;
-    let post_count = if post_spacing > 0.0 {
-        let top_post_count = (guard_width / post_spacing).ceil().max(1.0) as i32;
-        let side_post_count = (guard_height / post_spacing).ceil().max(1.0) as i32;
-        ((top_post_count + 1) * 2 + side_post_count.saturating_sub(1) * 2) as i32
-    } else {
-        0
-    };
+    // 防护门宽度规格选型：规范 1.5m / 2.1m，按井口宽度就近选型（与绘图逻辑一致）。
+    let door_spec_m = if opening_width <= 1800.0 { 1.5 } else { 2.1 };
 
     let payload = serde_json::json!({
         "ok": issues.is_empty(),
         "issues": issues,
         "checks": checks,
         "material_table": {
-            "posts": post_count,
-            "rails": "top_and_mid_rails",
+            "guard_door": format!("{}m 上翻式防护门", door_spec_m),
             "toe_board_height": toe_board_height,
             "warning_sign": include_warning_sign,
             "material_table_included": include_material_table
@@ -3205,23 +3148,21 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
         2000.0,
         2000.0,
         1800.0,
-        1200.0,
-        2000.0,
-        180.0,
+        1500.0,
+        200.0,
         true,
         true,
         1.0,
     )?;
-    if !draw_result.contains("电梯井口临边防护布置") {
+    if !draw_result.contains("电梯井口防护") {
         return Err(format!("绘图结果不符合预期: {draw_result}"));
     }
 
     let validation = cad_validate_elevator_shaft_protection(
         2000.0,
         1800.0,
-        1200.0,
-        2000.0,
-        180.0,
+        1500.0,
+        200.0,
         true,
         true,
     )?;
@@ -3232,7 +3173,7 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
     }
 
     Ok(format!(
-        "电梯井口临边防护 smoke test 通过：draw={} validation={}",
+        "电梯井口防护 smoke test 通过：draw={} validation={}",
         draw_result, validation
     ))
 }

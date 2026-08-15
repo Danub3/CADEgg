@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CADEgg 安全防护知识卡 Schema",
+  "description": "定义 data/atlas/ 下每张知识卡的结构。目标：把规范原文拆成受控、可溯源、可迭代的结构化片段，供 agent 出图/追问/校核时引用。新增场景时新建一张卡即可，字段遵守本 schema。",
+  "type": "object",
+  "required": [
+    "scene",
+    "name",
+    "version",
+    "applicable_conditions",
+    "required_components",
+    "dimension_rules",
+    "forbidden_items",
+    "citations"
+  ],
+  "properties": {
+    "scene": {
+      "type": "string",
+      "description": "场景唯一标识，如 elevator_shaft_protection。"
+    },
+    "name": {
+      "type": "string",
+      "description": "场景中文名。"
+    },
+    "version": {
+      "type": "string",
+      "description": "知识卡版本号，规范更新时递增。",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "applicable_conditions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "适用条件：什么情况下适用本卡。"
+    },
+    "required_components": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "必配构件：规范要求必须包含的构件/要素。"
+    },
+    "dimension_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "rule"],
+        "properties": {
+          "field": { "type": "string", "description": "参数字段名，如 guardrail_height。" },
+          "rule": { "type": "string", "description": "规则的中文描述。" },
+          "min_mm": { "type": "number", "description": "最小值（毫米），可选。" },
+          "max_mm": { "type": "number", "description": "最大值（毫米），可选。" },
+          "value_mm": { "type": "number", "description": "定值（毫米），当该参数为定值时用，可选。" },
+          "options_m": {
+            "type": "array",
+            "items": { "type": "number" },
+            "description": "可选规格（米），如 [1.5, 2.1]。"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "forbidden_items": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "禁忌项：不得违反的底线。"
+    },
+    "material_table_rules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "材料表规则（可选）。"
+    },
+    "drawing_conventions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "绘图约定（可选），如坐标默认原点。"
+    },
+    "citations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["source_id", "excerpt_id", "page"],
+        "properties": {
+          "source_id": { "type": "string", "description": "指向 data/sources/ 下的来源文件 source_id。" },
+          "excerpt_id": { "type": "string", "description": "来源文件内具体条目 id。" },
+          "page": { "type": "number", "description": "规范/图册印刷页码。" },
+          "section": { "type": "string", "description": "章节号，如 2.7.4。" }
+        },
+        "additionalProperties": false
+      },
+      "description": "溯源引用：每条关键结论可追溯到具体来源文件、条目与页码。"
+    }
+  },
+  "additionalProperties": false
+}

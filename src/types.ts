@@ -70,8 +70,7 @@ export interface ElevatorValidation {
   issues: string[];
   checks: ValidationCheck[];
   material_table: {
-    posts: number;
-    rails: string;
+    guard_door: string;
     toe_board_height: number;
     warning_sign: boolean;
     material_table_included: boolean;
