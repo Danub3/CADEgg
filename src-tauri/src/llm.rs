@@ -1118,6 +1118,15 @@ pub async fn run_agent(
             });
         }
     }
+    // 制图规范知识卡：任何绘图请求都注入，保证标注/图线/字体符合 GB/T 50001。
+    // 放在安全知识卡之后，作为出图的通用约束。
+    if tools::is_safety_request(&user_text) || crate::llm::classify_task(&user_text) == TaskTier::Strong {
+        if let Some(card) = crate::knowledge::render_scene_context("cad_drafting_standard") {
+            msgs.push(MessageView::User {
+                content: format!("系统提醒（CAD 制图规范，尺寸标注/图线/字体须遵守）：\n{card}"),
+            });
+        }
+    }
     if !user_text.is_empty() {
         if let Some(reference_context) =
             format_resolved_object_reference_context(&user_text, &session_objects)

@@ -2087,15 +2087,34 @@ pub fn cad_draw_elevator_shaft_protection(
     push_line(&mut cmd_lines, right, door_top - hinge_size, right, door_top + hinge_size);
     // 门扇中缝（对开分隔线）
     push_line(&mut cmd_lines, door_mid_x, door_bottom, door_mid_x, door_top);
-    // 尺寸标注：水平（井口宽）在井口下方，垂直（井口高）在井口右侧。
-    let dim_y = bottom - 300.0 * scale;
-    let dim_x = right + 300.0 * scale;
+    // 尺寸标注（GB/T 50001 第11章）：尺寸界线 + 尺寸线 + 尺寸起止符号 + 尺寸数字 四要素齐全。
+    // 注：国标起止符号 2~3mm 是「图纸打印尺寸」；模型空间 1:1 画大构件时该长度不可见，
+    // 故按图面视觉比例放大（tick/gap/ext 均随 scale），保证清晰不重叠（GB/T 50001 4.0.10 优先文字清晰）。
+    let dim_y = bottom - 300.0 * scale; // 水平尺寸线位置（井口下方）
+    let dim_x = right + 300.0 * scale; // 垂直尺寸线位置（井口右侧）
+    let ext = 100.0 * scale; // 尺寸界线超出尺寸线的长度
+    let gap = 50.0 * scale; // 尺寸界线离轮廓的间隙（≥2mm 的图面表达）
+    let tick = 50.0 * scale; // 45°起止符号长度
+
+    // —— 水平尺寸（井口宽）——
+    // 尺寸界线（细实线，从轮廓引出，超出尺寸线）
+    push_line(&mut cmd_lines, left, bottom - gap, left, dim_y - ext);
+    push_line(&mut cmd_lines, right, bottom - gap, right, dim_y - ext);
+    // 尺寸线（水平，平行于被注长度）
     push_line(&mut cmd_lines, left, dim_y, right, dim_y);
-    push_line(&mut cmd_lines, left, dim_y - 60.0 * scale, left, dim_y + 60.0 * scale);
-    push_line(&mut cmd_lines, right, dim_y - 60.0 * scale, right, dim_y + 60.0 * scale);
+    // 尺寸起止符号（45°中粗斜短线，向尺寸线内侧倾斜）
+    push_line(&mut cmd_lines, left, dim_y, left + tick, dim_y - tick);
+    push_line(&mut cmd_lines, right, dim_y, right - tick, dim_y - tick);
+
+    // —— 垂直尺寸（井口高）——
+    // 尺寸界线（细实线，从轮廓引出，超出尺寸线）
+    push_line(&mut cmd_lines, right + gap, bottom, dim_x + ext, bottom);
+    push_line(&mut cmd_lines, right + gap, top, dim_x + ext, top);
+    // 尺寸线（垂直，平行于被注长度）
     push_line(&mut cmd_lines, dim_x, bottom, dim_x, top);
-    push_line(&mut cmd_lines, dim_x - 60.0 * scale, bottom, dim_x + 60.0 * scale, bottom);
-    push_line(&mut cmd_lines, dim_x - 60.0 * scale, top, dim_x + 60.0 * scale, top);
+    // 尺寸起止符号（45°中粗斜短线）
+    push_line(&mut cmd_lines, dim_x, bottom, dim_x + tick, bottom + tick);
+    push_line(&mut cmd_lines, dim_x, top, dim_x + tick, top - tick);
     if include_material_table {
         let table_width = col_w0 + col_w1;
         // 行线：4 行（表头 + 3 数据行），共 5 条横线
@@ -2119,14 +2138,15 @@ pub fn cad_draw_elevator_shaft_protection(
     //   - 警示牌文字：在警示牌框内居中
     let mut text_items: Vec<(f64, f64, f64, String)> = Vec::new();
 
-    // 尺寸标注（水平：井口宽，居中对齐在井口下方）
-    let dim_width_text = format!("井口宽 {}", fmt_num(opening_width));
+    // 尺寸标注（水平：井口宽，尺寸数字注写在尺寸线上方中部，GB/T 50001 11.2.4）
+    let dim_width_text = format!("{}", fmt_num(opening_width));
     let dim_width_x = x - estimate_text_width(&dim_width_text, dim_h) / 2.0;
-    text_items.push((dim_width_x, dim_y - 160.0 * scale, dim_h, dim_width_text));
+    // 尺寸数字在尺寸线上方中部：dim_y 是尺寸线位置，数字基线略高于尺寸线
+    text_items.push((dim_width_x, dim_y + 30.0 * scale, dim_h, dim_width_text));
 
-    // 尺寸标注（垂直：井口高，居中对齐在井口右侧）
-    let dim_height_text = format!("井口高 {}", fmt_num(opening_height));
-    let dim_height_x = dim_x + 120.0 * scale;
+    // 尺寸标注（垂直：井口高，尺寸数字注写在尺寸线右侧中部）
+    let dim_height_text = format!("{}", fmt_num(opening_height));
+    let dim_height_x = dim_x + 30.0 * scale;
     // 垂直居中：用字高的一半做偏移（不是文字宽度的一半），让文字落在标注线中点
     let dim_height_y = y - dim_h / 2.0;
     text_items.push((dim_height_x, dim_height_y, dim_h, dim_height_text));
@@ -3181,7 +3201,7 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_draw_text, cad_modelspace_snapshot,
+        bridge_installed_dll_path, cad_draw_text, cad_erase_handle, cad_modelspace_snapshot,
         cad_smoke_test_editing_tools, cad_smoke_test_elevator_shaft_protection,
         ensure_bridge_installed_once,
     };
@@ -3196,6 +3216,32 @@ mod tests {
             text.contains("图面快照") && text.contains("对象"),
             "快照报告格式异常: {text}"
         );
+    }
+
+    /// 一次性辅助测试：清空当前文档模型空间所有对象。
+    /// 用 modelspace_snapshot 拿 handle，挨个 erase_handle。
+    #[test]
+    #[ignore = "requires a running AutoCAD session — 一次性清理测试"]
+    fn clean_modelspace_for_visual_review() {
+        let snapshot = cad_modelspace_snapshot().expect("snapshot");
+        // 解析所有 "#NN LWPOLYLINE handle=XXXX ..." 中的 handle
+        let mut handles: Vec<String> = Vec::new();
+        for line in snapshot.lines() {
+            if let Some(pos) = line.find("handle=") {
+                let after = &line[pos + 7..];
+                let handle: String = after
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                if !handle.is_empty() {
+                    handles.push(handle);
+                }
+            }
+        }
+        for h in &handles {
+            let _ = cad_erase_handle(h);
+        }
+        assert!(cad_modelspace_snapshot().unwrap().contains("0 个对象"));
     }
 
     #[test]

@@ -1,20 +1,23 @@
 //! RAG 知识卡层 —— 把受控的安全防护标准图册知识卡转成模型可读上下文。
 //!
 //! 技术路线第 1 层（初计划）：不把整篇图册塞给模型，而是拆成结构化片段（知识卡），
-//! 在出图/追问闭环前按场景检索注入。
+//! 在出图/追问闭环前按场景检索注入。运行时 agent **只查知识卡，不检索原始 PDF**。
 //!
 //! ## 数据分层（可迭代、可溯源）
 //! - `data/atlas/*.json`      —— 知识卡（面向 agent 的"结论"，字段见 schema）
 //! - `data/sources/*.json`    —— 规范原文摘录（面向"溯源"，逐条带出处与页码）
 //! - `data/schema/*.json`     —— 知识卡 JSON Schema（约束字段，保证可迭代）
 //!
-//! ## 检索顺序
-//! 1. 运行时扫描 `data/atlas/` 目录，按卡片的 `scene` 字段匹配（新增场景只需丢一张卡）；
-//! 2. 磁盘不存在时回退到 `include_str!` 内置卡片（打包后可离线运行）。
+//! ## 检索方式（支持多卡快速命中）
+//! 1. `by_scene(scene)`：按卡片 `scene` 字段精确匹配（当前调用方仍走此路径）；
+//! 2. `search(query)`：按 `keywords` 数组做关键词打分匹配，卡片多了能快速命中相关卡。
+//!    - 运行时扫描 `data/atlas/` 目录（新增场景只需丢一张卡）；
+//!    - 磁盘不存在时回退到 `include_str!` 内置卡片（打包后可离线运行）。
 //!
 //! ## 迭代约定
 //! - 新增规范/更新规范：改 `data/sources/` 摘录 + 改 `data/atlas/` 卡片 + 递增 `version`；
-//! - 每条关键结论必须挂 `citations`（source_id + excerpt_id + page），否则无法溯源。
+//! - 每条关键结论必须挂 `citations`（source_id + excerpt_id + page），否则无法溯源；
+//! - 卡片要「指向性」：`scene` 唯一 + `keywords` 覆盖用户常见说法，便于命中。
 
 use std::fs;
 use std::path::Path;
@@ -22,6 +25,7 @@ use std::path::Path;
 /// 内置兜底卡片：把 `data/atlas/` 下已收录的卡片编译进二进制。
 /// 相对路径以本文件（`src-tauri/src/knowledge.rs`）为基准：`../` → `src-tauri/`。
 const ELEVATOR_SHAFT_CARD: &str = include_str!("../../data/atlas/elevator_shaft_protection.json");
+const DRAFTING_STANDARD_CARD: &str = include_str!("../../data/atlas/cad_drafting_standard.json");
 
 /// 运行时知识卡目录（相对工作目录，dev 模式下即仓库根 `D:\CADEgg`）。
 const ATLAS_DIR_CANDIDATES: [&str; 2] = ["data/atlas", "src-tauri/../data/atlas"];
@@ -29,7 +33,10 @@ const ATLAS_DIR_CANDIDATES: [&str; 2] = ["data/atlas", "src-tauri/../data/atlas"
 /// 内置兜底卡片表：scene -> 卡片 JSON。
 /// 新增场景时，除了在 `data/atlas/` 放文件，也在这里补一行 `("scene", include_str!(...))`。
 fn builtin_cards() -> Vec<(&'static str, &'static str)> {
-    vec![("elevator_shaft_protection", ELEVATOR_SHAFT_CARD)]
+    vec![
+        ("elevator_shaft_protection", ELEVATOR_SHAFT_CARD),
+        ("cad_drafting_standard", DRAFTING_STANDARD_CARD),
+    ]
 }
 
 /// 解析卡片里的 scene 字段（用于磁盘扫描时匹配）。
@@ -60,38 +67,70 @@ fn scan_disk_cards() -> Vec<String> {
     out
 }
 
-/// 按场景名检索知识卡原始 JSON 文本。
-///
-/// - 磁盘优先：扫描 `data/atlas/`，按卡片 `scene` 字段匹配（改动即时生效，新增场景即插即用）；
-/// - 否则回退到编译期内置卡片表。
-pub fn load_scene_card(scene: &str) -> Option<String> {
-    for text in scan_disk_cards() {
-        if scene_of(&text).as_deref() == Some(scene) {
-            return Some(text);
+/// 磁盘 + 内置去重后的全部卡片原始文本。
+fn all_cards() -> Vec<String> {
+    let mut cards = scan_disk_cards();
+    for (scene, text) in builtin_cards() {
+        if !cards.iter().any(|c| scene_of(c).as_deref() == Some(scene)) {
+            cards.push(text.to_string());
         }
     }
-    builtin_cards()
-        .into_iter()
-        .find(|(s, _)| *s == scene)
-        .map(|(_, text)| text.to_string())
+    cards
 }
 
-/// 列出当前所有可用场景名（磁盘 + 内置去重）。
-pub fn list_scenes() -> Vec<String> {
-    let mut scenes: Vec<String> = Vec::new();
-    for text in scan_disk_cards() {
-        if let Some(s) = scene_of(&text) {
-            if !scenes.contains(&s) {
-                scenes.push(s);
+/// 按场景名精确检索知识卡原始 JSON 文本。
+pub fn load_scene_card(scene: &str) -> Option<String> {
+    all_cards()
+        .into_iter()
+        .find(|c| scene_of(c).as_deref() == Some(scene))
+}
+
+/// 提取卡片的关键词数组（keywords 字段，可能缺省）。
+fn keywords_of(raw: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.get("keywords").cloned())
+        .and_then(|v| v.as_array().cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|it| it.as_str().map(|s| s.to_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 关键词检索：按 `keywords` 命中数打分，返回命中卡片的 scene 列表（按相关度降序）。
+///
+/// 用法：卡片多了之后，根据用户输入命中最相关的一张（或多张）卡，再渲染上下文。
+/// 无命中时返回空。
+pub fn search_scenes(query: &str) -> Vec<String> {
+    let q = query.to_lowercase();
+    let mut scored: Vec<(usize, String)> = all_cards()
+        .into_iter()
+        .filter_map(|c| {
+            let scene = scene_of(&c)?;
+            let score = keywords_of(&c)
+                .iter()
+                .filter(|kw| q.contains(kw.as_str()))
+                .count();
+            if score > 0 {
+                Some((score, scene))
+            } else {
+                None
             }
-        }
-    }
-    for (s, _) in builtin_cards() {
-        let s = s.to_string();
-        if !scenes.contains(&s) {
-            scenes.push(s);
-        }
-    }
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored.into_iter().map(|(_, s)| s).collect()
+}
+
+/// 列出当前所有可用场景名。
+pub fn list_scenes() -> Vec<String> {
+    let mut scenes: Vec<String> = all_cards()
+        .iter()
+        .filter_map(|c| scene_of(c))
+        .collect();
+    scenes.dedup();
     scenes
 }
 
@@ -112,7 +151,12 @@ fn str_items<'a>(v: &'a serde_json::Value, key: &str) -> Vec<&'a str> {
 /// 渲染失败时返回 `None`（不影响主流程）。
 pub fn render_scene_context(scene: &str) -> Option<String> {
     let raw = load_scene_card(scene)?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    render_card_context(&raw, scene)
+}
+
+/// 由卡片原始文本渲染上下文（内部共用）。
+fn render_card_context(raw: &str, scene: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
 
     let name = v.get("name").and_then(|s| s.as_str()).unwrap_or(scene);
     let mut lines: Vec<String> = vec![format!("【标准图册知识卡：{name}】")];
@@ -135,6 +179,18 @@ pub fn render_scene_context(scene: &str) -> Option<String> {
                 lines.push(format!("  - {rule}"));
             }
         }
+    }
+    for it in str_items(&v, "line_rules") {
+        if lines.last().map(|l| l.as_str()) != Some("图线规则：") {
+            lines.push("图线规则：".to_string());
+        }
+        lines.push(format!("  - {it}"));
+    }
+    for it in str_items(&v, "font_rules") {
+        if lines.last().map(|l| l.as_str()) != Some("字体规则：") {
+            lines.push("字体规则：".to_string());
+        }
+        lines.push(format!("  - {it}"));
     }
     for it in str_items(&v, "drawing_conventions") {
         if lines.last().map(|l| l.as_str()) != Some("绘图约定：") {
@@ -197,10 +253,31 @@ mod tests {
         // 绘图约定（坐标默认原点）也必须注入，避免模型卡在追要 x/y。
         assert!(ctx.contains("绘图约定"));
         assert!(ctx.contains("x=0, y=0"));
-        // 溯源必须指向住建部图册 2.7.4 第 126/127 页。
+        // 溯源必须指向 JGJ 80-2016 4.2.2 与住建部图册 2.7.4。
+        assert!(ctx.contains("jgj-80-2016"));
+        assert!(ctx.contains("4.2.2"));
         assert!(ctx.contains("2.7.4"));
-        assert!(ctx.contains("126"));
-        assert!(ctx.contains("127"));
+    }
+
+    #[test]
+    fn drafting_standard_card_renders() {
+        let ctx = render_scene_context("cad_drafting_standard").unwrap();
+        assert!(ctx.contains("尺寸规则"));
+        assert!(ctx.contains("图线规则"));
+        assert!(ctx.contains("字体规则"));
+        assert!(ctx.contains("gb-t-50001"));
+    }
+
+    #[test]
+    fn search_matches_elevator_keywords() {
+        let scenes = search_scenes("画一个电梯井口防护");
+        assert!(scenes.contains(&"elevator_shaft_protection".to_string()));
+    }
+
+    #[test]
+    fn search_matches_drafting_keywords() {
+        let scenes = search_scenes("尺寸标注要符合规范");
+        assert!(scenes.contains(&"cad_drafting_standard".to_string()));
     }
 
     #[test]
@@ -209,7 +286,9 @@ mod tests {
     }
 
     #[test]
-    fn list_scenes_contains_elevator_shaft() {
-        assert!(list_scenes().contains(&"elevator_shaft_protection".to_string()));
+    fn list_scenes_contains_all() {
+        let scenes = list_scenes();
+        assert!(scenes.contains(&"elevator_shaft_protection".to_string()));
+        assert!(scenes.contains(&"cad_drafting_standard".to_string()));
     }
 }

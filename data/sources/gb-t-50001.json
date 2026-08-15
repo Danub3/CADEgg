@@ -1,0 +1,144 @@
+{
+  "source_id": "gb-t-50001",
+  "source_type": "国家标准",
+  "title": "房屋建筑制图统一标准",
+  "code": "GB/T 50001",
+  "issuing_body": "中华人民共和国住房和城乡建设部",
+  "local_file": "resources/房屋建筑制图统一标准.pdf",
+  "note": "正文为扫描件，OCR 提取（RapidOCR onnxruntime，dpi 160）。页码为 PDF 实际页。用于约束 CADEgg 出图的标注/文字/图线规范，保证 CAD 制图符合国家行业规范。",
+  "excerpts": [
+    {
+      "id": "gb-t-50001-11.1.2",
+      "section": "11.1.2 尺寸界线",
+      "page": 49,
+      "raw_text": "尺寸界线应用细实线绘制，应与被注长度垂直，其一端应离开图样轮廓线不小于2mm，另一端宜超出尺寸线2mm～3mm。",
+      "extracted_facts": {
+        "line_type": "细实线",
+        "gap_from_outline_min_mm": 2,
+        "overshoot_mm": "2~3",
+        "perpendicular": true
+      }
+    },
+    {
+      "id": "gb-t-50001-11.1.3",
+      "section": "11.1.3 尺寸线",
+      "page": 49,
+      "raw_text": "尺寸线应用细实线绘制，应与被注长度平行，两端宜以尺寸界线为边界，也可超出尺寸界线2mm～3mm。图样本身的任何图线均不得用作尺寸线。",
+      "extracted_facts": {
+        "line_type": "细实线",
+        "parallel": true,
+        "note": "图样本身任何图线不得用作尺寸线"
+      }
+    },
+    {
+      "id": "gb-t-50001-11.1.4",
+      "section": "11.1.4 尺寸起止符号",
+      "page": 49,
+      "raw_text": "尺寸起止符号用中粗斜短线绘制，其倾斜方向应与尺寸界线成顺时针45°角，长度宜为2mm～3mm。半径、直径、角度与弧长的尺寸起止符号宜用箭头表示。",
+      "extracted_facts": {
+        "symbol": "中粗斜短线",
+        "angle_deg": 45,
+        "length_mm": "2~3",
+        "note": "半径/直径/角度用箭头"
+      }
+    },
+    {
+      "id": "gb-t-50001-11.2.2",
+      "section": "11.2.2 尺寸单位",
+      "page": 50,
+      "raw_text": "图样上的尺寸单位，除标高及总平面以米为单位外，其他必须以毫米为单位。",
+      "extracted_facts": {
+        "unit": "毫米（mm）",
+        "exception": "标高及总平面以米为单位"
+      }
+    },
+    {
+      "id": "gb-t-50001-11.2.4",
+      "section": "11.2.4 尺寸数字注写位置",
+      "page": 50,
+      "raw_text": "尺寸数字应依据其方向注写在靠近尺寸线的上方中部。",
+      "extracted_facts": {
+        "position": "尺寸线上方中部"
+      }
+    },
+    {
+      "id": "gb-t-50001-11.3.1",
+      "section": "11.3.1 尺寸排列",
+      "page": 51,
+      "raw_text": "尺寸宜标注在图样轮廓以外，不宜与图线、文字及符号等相交。",
+      "extracted_facts": {
+        "position": "图样轮廓以外",
+        "avoid_intersect": "图线/文字/符号"
+      }
+    },
+    {
+      "id": "gb-t-50001-11.3.2",
+      "section": "11.3.2 尺寸排列顺序",
+      "page": 51,
+      "raw_text": "尺寸数字的注写应整齐排列，较小尺寸应离轮廓线较近，较大尺寸应离轮廓线较远。",
+      "extracted_facts": {
+        "order": "小尺寸近轮廓、大尺寸远轮廓"
+      }
+    },
+    {
+      "id": "gb-t-50001-11.3.3",
+      "section": "11.3.3 尺寸间距",
+      "page": 52,
+      "raw_text": "图样轮廓线以外的尺寸界线，距图样最外轮廓之间的距离不宜小于10mm。平行排列的尺寸线的间距宜为7mm～10mm，并应保持一致。",
+      "extracted_facts": {
+        "ext_line_gap_min_mm": 10,
+        "parallel_dim_spacing_mm": "7~10"
+      }
+    },
+    {
+      "id": "gb-t-50001-4.0.1",
+      "section": "4.0.1 图线线宽",
+      "page": 19,
+      "raw_text": "图线的基本线宽b，宜从1.4mm、1.0mm、0.7mm、0.5mm线宽系列中选取。",
+      "extracted_facts": {
+        "basic_line_widths_mm": [1.4, 1.0, 0.7, 0.5]
+      }
+    },
+    {
+      "id": "gb-t-50001-4.0.2",
+      "section": "4.0.2 图线用途",
+      "page": 19,
+      "raw_text": "粗实线（b）：主要可见轮廓线；中粗实线（0.5b）：可见轮廓线、尺寸线；细实线（0.25b）：图例填充线、尺寸界线。",
+      "extracted_facts": {
+        "bold_solid": "主要可见轮廓线",
+        "mid_solid": "可见轮廓线、尺寸线",
+        "thin_solid": "尺寸界线、图例填充线"
+      }
+    },
+    {
+      "id": "gb-t-50001-4.0.10",
+      "section": "4.0.10 图线与文字关系",
+      "page": 20,
+      "raw_text": "图线不得与文字、数字或符号重叠、混淆，不可避免时，应首先保证文字的清晰。",
+      "extracted_facts": {
+        "note": "图线不得与文字/数字/符号重叠，优先保证文字清晰"
+      }
+    },
+    {
+      "id": "gb-t-50001-5.0.2",
+      "section": "5.0.2 文字字高",
+      "page": 21,
+      "raw_text": "文字的字高应从3.5、5、7、10、14、20mm中选用（汉字矢量字体）；TrueType字体及非汉字矢量字体为3、4、6、8、10、14、20mm。",
+      "extracted_facts": {
+        "chinese_vector_heights_mm": [3.5, 5, 7, 10, 14, 20],
+        "truetype_heights_mm": [3, 4, 6, 8, 10, 14, 20]
+      }
+    },
+    {
+      "id": "gb-t-50001-5.0.3",
+      "section": "5.0.3 字体与宽高比",
+      "page": 21,
+      "raw_text": "图样及说明中的汉字，宜优先采用TrueType字体中的宋体字型，采用矢量字体时应为长仿宋体字型。同一图纸字体种类不应超过两种。矢量字体的宽高比宜为0.7。",
+      "extracted_facts": {
+        "chinese_font": "宋体（TrueType）或长仿宋（矢量）",
+        "vector_width_height_ratio": 0.7,
+        "max_font_types": 2
+      }
+    }
+  ]
+}

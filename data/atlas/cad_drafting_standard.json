@@ -1,0 +1,57 @@
+{
+  "scene": "cad_drafting_standard",
+  "name": "CAD 制图规范（尺寸标注/图线/字体）",
+  "version": "1.0.0",
+  "keywords": ["制图", "标注", "尺寸标注", "图线", "字体", "字高", "线宽", "图层", "规范", "国标", "标准"],
+  "applicable_conditions": [
+    "CADEgg 生成任何 CAD 图纸时均须遵守，用于保证制图符合国家行业规范",
+    "特别适用于尺寸标注、文字注写、图线线型线宽的选择"
+  ],
+  "required_components": [
+    "尺寸标注四要素：尺寸界线、尺寸线、尺寸起止符号、尺寸数字",
+    "图线按线宽分级：粗实线(轮廓)、中粗实线(尺寸线)、细实线(尺寸界线)"
+  ],
+  "dimension_rules": [
+    { "field": "dim_ext_line", "rule": "尺寸界线用细实线，垂直于被注长度，一端离轮廓线≥2mm，另一端超出尺寸线 2~3mm" },
+    { "field": "dim_line", "rule": "尺寸线用细实线（或中粗），平行于被注长度，图样本身图线不得用作尺寸线" },
+    { "field": "dim_tick", "rule": "尺寸起止符号用中粗斜短线，与尺寸界线成 45°，长 2~3mm；半径/直径用箭头" },
+    { "field": "dim_number", "rule": "尺寸数字注写在尺寸线上方中部，不应从图上量取" },
+    { "field": "dim_unit", "rule": "尺寸单位除标高/总平面外一律毫米(mm)" },
+    { "field": "dim_position", "rule": "尺寸宜标注在图样轮廓以外，不与图线/文字/符号相交；小尺寸近轮廓、大尺寸远轮廓" },
+    { "field": "dim_spacing", "rule": "尺寸界线距最外轮廓≥10mm，平行尺寸线间距 7~10mm" }
+  ],
+  "line_rules": [
+    "基本线宽 b 从 1.4/1.0/0.7/0.5mm 中选；粗实线(b)=主要可见轮廓，中粗(0.5b)=可见轮廓/尺寸线，细(0.25b)=尺寸界线/图例填充",
+    "中心线用单点长画线，两端不应是点，交接用线段交接",
+    "图线不得与文字/数字/符号重叠，不可避免时优先保证文字清晰"
+  ],
+  "font_rules": [
+    "汉字字高从 3.5/5/7/10/14/20mm 中选（矢量）或 3/4/6/8/10/14/20mm（TrueType）",
+    "汉字宜用宋体（TrueType）或长仿宋（矢量，宽高比 0.7），同一图纸字体种类≤2 种",
+    "尺寸数字用正体阿拉伯数字，字高≥2.5mm"
+  ],
+  "forbidden_items": [
+    "不得让尺寸数字与图线重叠（GB/T 50001 4.0.10）",
+    "不得把图样本身的图线当作尺寸线（GB/T 50001 11.1.3）",
+    "尺寸数字不得从图上量取，必须以标注数值为准（GB/T 50001 11.2.1）",
+    "同一图纸字体种类不得超过两种（GB/T 50001 5.0.3）"
+  ],
+  "drawing_conventions": [
+    "文字、尺寸数字优先保证清晰，其次才是图线"
+  ],
+  "citations": [
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.1.2", "section": "11.1.2 尺寸界线", "page": 49 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.1.3", "section": "11.1.3 尺寸线", "page": 49 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.1.4", "section": "11.1.4 尺寸起止符号", "page": 49 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.2.2", "section": "11.2.2 尺寸单位", "page": 50 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.2.4", "section": "11.2.4 尺寸数字注写位置", "page": 50 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.3.1", "section": "11.3.1 尺寸排列", "page": 51 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.3.2", "section": "11.3.2 尺寸排列顺序", "page": 51 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-11.3.3", "section": "11.3.3 尺寸间距", "page": 52 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-4.0.1", "section": "4.0.1 图线线宽", "page": 19 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-4.0.2", "section": "4.0.2 图线用途", "page": 19 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-4.0.10", "section": "4.0.10 图线与文字关系", "page": 20 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-5.0.2", "section": "5.0.2 文字字高", "page": 21 },
+    { "source_id": "gb-t-50001", "excerpt_id": "gb-t-50001-5.0.3", "section": "5.0.3 字体与宽高比", "page": 21 }
+  ]
+}

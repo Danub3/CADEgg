@@ -1,14 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "CADEgg 安全防护知识卡 Schema",
-  "description": "定义 data/atlas/ 下每张知识卡的结构。目标：把规范原文拆成受控、可溯源、可迭代的结构化片段，供 agent 出图/追问/校核时引用。新增场景时新建一张卡即可，字段遵守本 schema。",
+  "title": "CADEgg 知识卡 Schema",
+  "description": "定义 data/atlas/ 下每张知识卡的结构。目标：把规范原文拆成受控、可溯源、可迭代的结构化片段，供 agent 出图/追问/校核时引用。新增场景或规范时新建一张卡即可，字段遵守本 schema。",
   "type": "object",
   "required": [
     "scene",
     "name",
     "version",
+    "keywords",
     "applicable_conditions",
-    "required_components",
     "dimension_rules",
     "forbidden_items",
     "citations"
@@ -16,7 +16,7 @@
   "properties": {
     "scene": {
       "type": "string",
-      "description": "场景唯一标识，如 elevator_shaft_protection。"
+      "description": "场景唯一标识，如 elevator_shaft_protection / cad_drafting_standard。"
     },
     "name": {
       "type": "string",
@@ -27,6 +27,12 @@
       "description": "知识卡版本号，规范更新时递增。",
       "pattern": "^\\d+\\.\\d+\\.\\d+$"
     },
+    "keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "检索关键词，覆盖用户常见说法，用于 knowledge.rs 的 search_scenes 快速命中。"
+    },
     "applicable_conditions": {
       "type": "array",
       "items": { "type": "string" },
@@ -35,7 +41,7 @@
     "required_components": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "必配构件：规范要求必须包含的构件/要素。"
+      "description": "必配构件/要素（安全规范卡用）。可选。"
     },
     "dimension_rules": {
       "type": "array",
@@ -43,19 +49,25 @@
         "type": "object",
         "required": ["field", "rule"],
         "properties": {
-          "field": { "type": "string", "description": "参数字段名，如 guardrail_height。" },
+          "field": { "type": "string", "description": "参数字段名。" },
           "rule": { "type": "string", "description": "规则的中文描述。" },
           "min_mm": { "type": "number", "description": "最小值（毫米），可选。" },
           "max_mm": { "type": "number", "description": "最大值（毫米），可选。" },
-          "value_mm": { "type": "number", "description": "定值（毫米），当该参数为定值时用，可选。" },
-          "options_m": {
-            "type": "array",
-            "items": { "type": "number" },
-            "description": "可选规格（米），如 [1.5, 2.1]。"
-          }
+          "value_mm": { "type": "number", "description": "定值（毫米），可选。" },
+          "options_m": { "type": "array", "items": { "type": "number" }, "description": "可选规格（米）。" }
         },
         "additionalProperties": false
       }
+    },
+    "line_rules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "图线规则（制图规范卡用）。可选。"
+    },
+    "font_rules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "字体规则（制图规范卡用）。可选。"
     },
     "forbidden_items": {
       "type": "array",
@@ -81,8 +93,8 @@
         "properties": {
           "source_id": { "type": "string", "description": "指向 data/sources/ 下的来源文件 source_id。" },
           "excerpt_id": { "type": "string", "description": "来源文件内具体条目 id。" },
-          "page": { "type": "number", "description": "规范/图册印刷页码。" },
-          "section": { "type": "string", "description": "章节号，如 2.7.4。" }
+          "page": { "type": "number", "description": "规范/图册页码。" },
+          "section": { "type": "string", "description": "章节号。" }
         },
         "additionalProperties": false
       },
