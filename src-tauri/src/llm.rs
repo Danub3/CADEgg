@@ -44,7 +44,10 @@ fn classify_task(user_input: &str) -> TaskTier {
             "移动", "旋转", "复制", "镜像", "删除", "偏移", "修剪", "延伸", "标注", "布置",
         ],
     );
-    let wants_review = contains_any(&text, &["校核", "复核", "检查", "审查", "验证", "核对", "验收"]);
+    let wants_review = contains_any(
+        &text,
+        &["校核", "复核", "检查", "审查", "验证", "核对", "验收"],
+    );
     // 注意：不在这里放「防护」，因为「电梯井口防护要满足什么规范」这类纯问答不该走强模型；
     // 安全防护请求由 is_safety_request 在上层强制 Strong。这里只保留需要规划的复杂几何场景。
     let wants_complex = contains_any(&text, &["楼梯", "双跑", "折返", "休息平台", "临边"]);
@@ -225,7 +228,11 @@ async fn step_with_failover(
                     let _ = app.emit(
                         "agent:event",
                         AgentEvent::AssistantDelta {
-                            delta: &format!("\n[模型切换] 当前模型不可用，正在切换到备用模型（{}→{}）…\n", i + 1, i + 2),
+                            delta: &format!(
+                                "\n[模型切换] 当前模型不可用，正在切换到备用模型（{}→{}）…\n",
+                                i + 1,
+                                i + 2
+                            ),
                         },
                     );
                 }
@@ -237,7 +244,6 @@ async fn step_with_failover(
         total, last_err
     ))
 }
-
 
 #[derive(Clone, Debug)]
 struct GeminiProvider {
@@ -1189,10 +1195,12 @@ pub async fn run_agent(
     let settings = crate::settings::load(&app)?;
     let user_text = user_input.trim().to_string();
     let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
+    let use_safety_context = settings.work_mode == crate::settings::WorkMode::SafetyDemoMode
+        || tools::is_safety_request(&user_text);
 
     // 确定性任务分级：出图/规划/复核走强模型，纯问答走便宜模型。
     // 安全防护请求（需严格按知识卡出图/校核）强制走强模型，保证质量。
-    let tier = if tools::is_safety_request(&user_text) {
+    let tier = if use_safety_context {
         TaskTier::Strong
     } else {
         classify_task(&user_text)
@@ -1215,7 +1223,7 @@ pub async fn run_agent(
             content: format!("系统工具分层策略：\n{}", tooling.guidance),
         });
     }
-    if tools::is_safety_request(&user_text) {
+    if use_safety_context {
         // 闭环第 3 步：按用户输入关键词检索知识卡（search_scenes 多卡命中），
         // 让模型基于受控规则出图/追问，而非自由发挥。
         // 兜底：若关键词检索未命中，回退到电梯井口这张默认卡。
@@ -1237,7 +1245,7 @@ pub async fn run_agent(
     }
     // 制图规范知识卡：任何绘图请求都注入，保证标注/图线/字体符合 GB/T 50001。
     // 放在安全知识卡之后，作为出图的通用约束。
-    if tools::is_safety_request(&user_text) || crate::llm::classify_task(&user_text) == TaskTier::Strong {
+    if use_safety_context || classify_task(&user_text) == TaskTier::Strong {
         if let Some(card) = crate::knowledge::render_scene_context("cad_drafting_standard") {
             msgs.push(MessageView::User {
                 content: format!("系统提醒（CAD 制图规范，尺寸标注/图线/字体须遵守）：\n{card}"),
@@ -1411,14 +1419,17 @@ mod tests {
     #[test]
     fn classify_strong_for_drawing_and_review() {
         assert_eq!(classify_task("画一条线"), TaskTier::Strong);
-        assert_eq!(classify_task("生成电梯井口临边防护图"), TaskTier::Strong);
+        assert_eq!(classify_task("生成电梯井口防护门图"), TaskTier::Strong);
         assert_eq!(classify_task("校核一下这个防护"), TaskTier::Strong);
         assert_eq!(classify_task("画一个双跑楼梯"), TaskTier::Strong);
     }
 
     #[test]
     fn classify_cheap_for_qa() {
-        assert_eq!(classify_task("电梯井口防护要满足什么规范？"), TaskTier::Cheap);
+        assert_eq!(
+            classify_task("电梯井口防护要满足什么规范？"),
+            TaskTier::Cheap
+        );
         assert_eq!(classify_task("你好"), TaskTier::Cheap);
         assert_eq!(classify_task("立杆间距最大多少"), TaskTier::Cheap);
     }

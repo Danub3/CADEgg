@@ -107,6 +107,7 @@ pub struct SettingsView {
     pub model: String,
     pub base_url: String,
     pub gemini_model: String,
+    pub gemini_strong_model: String,
     pub gemini_base_url: String,
     pub glm_model: String,
     pub glm_strong_model: String,
@@ -141,6 +142,7 @@ impl From<&Settings> for SettingsView {
             model: s.model.clone(),
             base_url: s.base_url.clone(),
             gemini_model: s.gemini_model.clone(),
+            gemini_strong_model: s.gemini_strong_model.clone(),
             gemini_base_url: s.gemini_base_url.clone(),
             glm_model: s.glm_model.clone(),
             glm_strong_model: s.glm_strong_model.clone(),
@@ -165,6 +167,8 @@ pub struct SettingsUpdate {
     pub model: String,
     pub base_url: String,
     pub gemini_model: String,
+    #[serde(default = "default_gemini_strong_model")]
+    pub gemini_strong_model: String,
     pub gemini_base_url: String,
     pub glm_model: String,
     pub glm_strong_model: String,
@@ -209,6 +213,7 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
     current.model = update.model;
     current.base_url = update.base_url;
     current.gemini_model = update.gemini_model;
+    current.gemini_strong_model = update.gemini_strong_model;
     current.gemini_base_url = update.gemini_base_url;
     current.glm_model = update.glm_model;
     current.glm_strong_model = update.glm_strong_model;

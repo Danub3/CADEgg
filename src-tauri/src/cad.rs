@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use crate::tools::SessionObject;
+use crate::{safety, tools::SessionObject};
 use windows::core::{IUnknown, Interface, BSTR, GUID, PCWSTR, VARIANT};
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoInitializeEx, CoUninitialize, IDispatch, COINIT_APARTMENTTHREADED,
@@ -38,7 +38,7 @@ const COM_RETRY_DELAY_MS: u64 = 120;
 const AUTO_ATTACH_WAIT_ROUNDS: usize = 18;
 const AUTO_ATTACH_WAIT_MS: u64 = 750;
 const BRIDGE_PORT: u16 = 50471;
-const BRIDGE_VERSION: &str = "0.3.5.0";
+const BRIDGE_VERSION: &str = "0.3.6.0";
 const BRIDGE_BUNDLE_NAME: &str = "CADEggBridge.bundle";
 const BRIDGE_DLL_BASENAME: &str = "CADEggBridge";
 const BRIDGE_BUILD_STAMP: &str = "bridge-version.txt";
@@ -98,11 +98,9 @@ unsafe fn variant_from_point3d(x: f64, y: f64, z: f64) -> Result<VARIANT, String
 
     for (index, value) in values.iter().enumerate() {
         let idx = index as i32;
-        if let Err(error) = SafeArrayPutElement(
-            psa,
-            &idx,
-            value as *const f64 as *const core::ffi::c_void,
-        ) {
+        if let Err(error) =
+            SafeArrayPutElement(psa, &idx, value as *const f64 as *const core::ffi::c_void)
+        {
             let _ = SafeArrayDestroy(psa);
             return Err(format!("写入 SAFEARRAY[{index}] 失败: {error}"));
         }
@@ -155,7 +153,9 @@ where
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if handle.is_finished() {
-            return handle.join().map_err(|_| "COM thread panicked".to_string())?;
+            return handle
+                .join()
+                .map_err(|_| "COM thread panicked".to_string())?;
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
@@ -615,7 +615,9 @@ fn build_bridge_dll() -> Result<PathBuf, String> {
         .arg(csproj_path.as_os_str())
         .arg("-c")
         .arg("Release")
-        .arg(format!("-p:AssemblyName={BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}"))
+        .arg(format!(
+            "-p:AssemblyName={BRIDGE_DLL_BASENAME}-{BRIDGE_VERSION}"
+        ))
         .output()
         .map_err(|e| format!("启动 dotnet build 失败: {e}"))?;
 
@@ -643,8 +645,7 @@ fn build_bridge_dll() -> Result<PathBuf, String> {
         ));
     }
     // 复制到 build_root 下的统一命名位置，供 install_bridge_bundle 使用。
-    fs::copy(&built_dll, &output_dll)
-        .map_err(|e| format!("复制 bridge DLL 失败: {e}"))?;
+    fs::copy(&built_dll, &output_dll).map_err(|e| format!("复制 bridge DLL 失败: {e}"))?;
     if built_deps.exists() {
         fs::copy(&built_deps, &output_deps)
             .map_err(|e| format!("复制 bridge deps.json 失败: {e}"))?;
@@ -961,11 +962,7 @@ unsafe fn invoke_method(
     Ok(result)
 }
 
-unsafe fn put_property(
-    d: &IDispatch,
-    name: &str,
-    value: &mut VARIANT,
-) -> Result<(), String> {
+unsafe fn put_property(d: &IDispatch, name: &str, value: &mut VARIANT) -> Result<(), String> {
     let id = get_dispid(d, name)?;
     let mut dispid_named = DISPID_PROPERTYPUT;
     retry_com(&format!("Invoke PROPERTYPUT {name}"), || {
@@ -991,9 +988,7 @@ unsafe fn put_property(
 
 unsafe fn get_active_document(app: &IDispatch) -> Result<IDispatch, String> {
     let doc_v = get_property(app, "ActiveDocument").map_err(|e| {
-        format!(
-            "{e}（AutoCAD 可能停在开始页，尚未打开任何 DWG 文档；请先新建或打开一个图纸文档）"
-        )
+        format!("{e}（AutoCAD 可能停在开始页，尚未打开任何 DWG 文档；请先新建或打开一个图纸文档）")
     })?;
     variant_as_dispatch(&doc_v)
 }
@@ -1137,11 +1132,7 @@ unsafe fn add_text_via_com(
     let insertion_value = insertion_point;
     let height_value = VARIANT::from(height);
     let mut args = [text_value, insertion_value, height_value];
-    let text_object = invoke_method(
-        &model_space,
-        "AddText",
-        &mut args,
-    )?;
+    let text_object = invoke_method(&model_space, "AddText", &mut args)?;
     let text_dispatch = variant_as_dispatch(&text_object)?;
     if rotation_deg.abs() > f64::EPSILON {
         let mut rotation_value = VARIANT::from(rotation_deg.to_radians());
@@ -1700,7 +1691,11 @@ fn draw_polyline_via_bridge(points: &[f64], closed: bool) -> Result<String, Stri
         .get("handle")
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
-    Ok(format!("已画闭合多段线 {} 点，handle={}", points.len() / 2, handle))
+    Ok(format!(
+        "已画闭合多段线 {} 点，handle={}",
+        points.len() / 2,
+        handle
+    ))
 }
 
 pub fn cad_draw_regular_polygon(
@@ -1853,7 +1848,9 @@ pub fn cad_draw_double_flight_stair(
         return Err(format!("step_depth 必须为正数，收到 {step_depth}"));
     }
     if steps_per_flight < 2 {
-        return Err(format!("steps_per_flight 至少为 2，收到 {steps_per_flight}"));
+        return Err(format!(
+            "steps_per_flight 至少为 2，收到 {steps_per_flight}"
+        ));
     }
     if landing_depth <= 0.0 {
         return Err(format!("landing_depth 必须为正数，收到 {landing_depth}"));
@@ -2087,7 +2084,7 @@ pub fn cad_draw_elevator_shaft_protection(
     let cell_center_y = |row: usize| -> f64 { table_y - row_h * (row as f64 + 0.5) };
 
     // 防护门宽度规格选型：规范给出 1.5m / 2.1m 两种，按井口宽度就近选型（仅用于材料表说明）。
-    let door_spec_m = if opening_width <= 1800.0 { 1.5 } else { 2.1 };
+    let door_spec_m = safety::guard_door_width_spec_m(opening_width);
 
     // 分批发送几何命令，文字单独通过 cad_draw_text 创建。
     // 原因：一次性 send_command 几十条命令时，长串后半段会被 AutoCAD 截断或破坏；
@@ -2100,21 +2097,67 @@ pub fn cad_draw_elevator_shaft_protection(
     push_rect(&mut cmd_rects, &mut rect_list, left, bottom, right, top);
     // 防护门扇（上翻式，两扇对开）：门框覆盖洞口，门高 door_h，从井口底边向上。
     // 左扇 + 右扇，中缝在井口中心 x 处。
-    push_rect(&mut cmd_rects, &mut rect_list, left, door_bottom, door_mid_x, door_top);
-    push_rect(&mut cmd_rects, &mut rect_list, door_mid_x, door_bottom, right, door_top);
+    push_rect(
+        &mut cmd_rects,
+        &mut rect_list,
+        left,
+        door_bottom,
+        door_mid_x,
+        door_top,
+    );
+    push_rect(
+        &mut cmd_rects,
+        &mut rect_list,
+        door_mid_x,
+        door_bottom,
+        right,
+        door_top,
+    );
     // 踢脚板：门底部横跨矮矩形带（高度 toe_h，宽度 = 井口宽）。
-    push_rect(&mut cmd_rects, &mut rect_list, left, door_bottom, right, door_bottom + toe_h);
+    push_rect(
+        &mut cmd_rects,
+        &mut rect_list,
+        left,
+        door_bottom,
+        right,
+        door_bottom + toe_h,
+    );
     if include_warning_sign {
-        push_rect(&mut cmd_rects, &mut rect_list, sign_x1, sign_y1, sign_x1 + sign_w, sign_y1 + sign_h);
+        push_rect(
+            &mut cmd_rects,
+            &mut rect_list,
+            sign_x1,
+            sign_y1,
+            sign_x1 + sign_w,
+            sign_y1 + sign_h,
+        );
     }
 
     // ── 批 2：所有直线（LINE）──
     let mut cmd_lines = String::new();
     // 防护门上口两端翻转轴（Φ16 钢筋）：在门顶边左右两端做短竖标记。
-    push_line(&mut cmd_lines, left, door_top - hinge_size, left, door_top + hinge_size);
-    push_line(&mut cmd_lines, right, door_top - hinge_size, right, door_top + hinge_size);
+    push_line(
+        &mut cmd_lines,
+        left,
+        door_top - hinge_size,
+        left,
+        door_top + hinge_size,
+    );
+    push_line(
+        &mut cmd_lines,
+        right,
+        door_top - hinge_size,
+        right,
+        door_top + hinge_size,
+    );
     // 门扇中缝（对开分隔线）
-    push_line(&mut cmd_lines, door_mid_x, door_bottom, door_mid_x, door_top);
+    push_line(
+        &mut cmd_lines,
+        door_mid_x,
+        door_bottom,
+        door_mid_x,
+        door_top,
+    );
     // 尺寸标注（GB/T 50001 第11章）：尺寸界线 + 尺寸线 + 尺寸起止符号 + 尺寸数字 四要素齐全。
     // 注：国标起止符号 2~3mm 是「图纸打印尺寸」；模型空间 1:1 画大构件时该长度不可见，
     // 故按图面视觉比例放大（tick/gap/ext 均随 scale），保证清晰不重叠（GB/T 50001 4.0.10 优先文字清晰）。
@@ -2152,7 +2195,13 @@ pub fn cad_draw_elevator_shaft_protection(
         }
         // 列线：2 列，共 3 条竖线，贯穿全部 4 行（表头行同样分列）
         let x_mid = table_x + col_w0;
-        push_line(&mut cmd_lines, x_mid, table_y, x_mid, table_y - row_h * table_rows as f64);
+        push_line(
+            &mut cmd_lines,
+            x_mid,
+            table_y,
+            x_mid,
+            table_y - row_h * table_rows as f64,
+        );
     }
 
     // ── 批 3：所有文字（bridge / COM AddText）──
@@ -2208,16 +2257,28 @@ pub fn cad_draw_elevator_shaft_protection(
         let header_qty = "数量/规格".to_string();
         let hx0 = cell_center_x(0) - estimate_text_width(&header_material, header_h) / 2.0;
         let hx1 = cell_center_x(1) - estimate_text_width(&header_qty, header_h) / 2.0;
-        text_items.push((hx0, cell_center_y(0) - header_h / 2.0, header_h, header_material));
+        text_items.push((
+            hx0,
+            cell_center_y(0) - header_h / 2.0,
+            header_h,
+            header_material,
+        ));
         text_items.push((hx1, cell_center_y(0) - header_h / 2.0, header_h, header_qty));
 
         // 数据行（第 1~3 行），每格文字居中
         let data_rows: [(String, String); 3] = [
             ("防护门".to_string(), format!("{}m 上翻式", door_spec_m)),
-            ("踢脚板".to_string(), format!("高 {}", fmt_num(toe_board_height))),
+            (
+                "踢脚板".to_string(),
+                format!("高 {}", fmt_num(toe_board_height)),
+            ),
             (
                 "警示牌".to_string(),
-                if include_warning_sign { "当心坠落 严禁抛物".to_string() } else { "未绘制".to_string() },
+                if include_warning_sign {
+                    "当心坠落 严禁抛物".to_string()
+                } else {
+                    "未绘制".to_string()
+                },
             ),
         ];
         for (row_idx, (label, value)) in data_rows.iter().enumerate() {
@@ -2236,7 +2297,9 @@ pub fn cad_draw_elevator_shaft_protection(
     let rects_bridge_ok = {
         let mut ok = true;
         for rect in &rect_list {
-            let points = [rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3]];
+            let points = [
+                rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3],
+            ];
             if draw_polyline_via_bridge(&points, true).is_err() {
                 ok = false;
                 break;
@@ -2312,68 +2375,15 @@ pub fn cad_validate_elevator_shaft_protection(
     include_warning_sign: bool,
     include_material_table: bool,
 ) -> Result<String, String> {
-    let mut checks = Vec::new();
-    let mut issues = Vec::new();
-
-    macro_rules! add_check {
-        ($id:expr, $label:expr, $passed:expr) => {{
-            let passed = $passed;
-            checks.push(serde_json::json!({
-                "id": $id,
-                "label": $label,
-                "passed": passed
-            }));
-            if !passed {
-                issues.push($label.to_string());
-            }
-        }};
-    }
-
-    add_check!(
-        "opening_size_valid",
-        "井口宽度和高度已提供且为正数",
-        opening_width > 0.0 && opening_height > 0.0
+    let validation = safety::validate_elevator_shaft_protection(
+        opening_width,
+        opening_height,
+        guard_height,
+        toe_board_height,
+        include_warning_sign,
+        include_material_table,
     );
-    add_check!(
-        "guard_door_height_valid",
-        "防护门高度为 1500mm（1.5m）",
-        (guard_height - 1500.0).abs() < 0.5
-    );
-    add_check!(
-        "toe_board_present",
-        "防护门底部踢脚板高度为 200mm",
-        (toe_board_height - 200.0).abs() < 0.5
-    );
-    add_check!(
-        "warning_sign_present",
-        "警示牌「当心坠落 严禁抛物」已配置",
-        include_warning_sign
-    );
-    add_check!("material_table_present", "材料表已配置", include_material_table);
-    add_check!(
-        "dimension_complete",
-        "井口尺寸、防护门高、踢脚板高度标注齐全",
-        opening_width > 0.0
-            && opening_height > 0.0
-            && guard_height > 0.0
-            && toe_board_height > 0.0
-    );
-
-    // 防护门宽度规格选型：规范 1.5m / 2.1m，按井口宽度就近选型（与绘图逻辑一致）。
-    let door_spec_m = if opening_width <= 1800.0 { 1.5 } else { 2.1 };
-
-    let payload = serde_json::json!({
-        "ok": issues.is_empty(),
-        "issues": issues,
-        "checks": checks,
-        "material_table": {
-            "guard_door": format!("{}m 上翻式防护门", door_spec_m),
-            "toe_board_height": toe_board_height,
-            "warning_sign": include_warning_sign,
-            "material_table_included": include_material_table
-        }
-    });
-    serde_json::to_string_pretty(&payload).map_err(|e| format!("序列化校核结果失败: {e}"))
+    safety::validation_to_pretty_json(&validation)
 }
 
 pub fn cad_draw_text(
@@ -2968,7 +2978,8 @@ pub fn cad_modelspace_snapshot() -> Result<String, String> {
                 return Ok("图面快照：模型空间为空（0 个对象）。".to_string());
             }
 
-            let mut tally: std::collections::BTreeMap<String, i32> = std::collections::BTreeMap::new();
+            let mut tally: std::collections::BTreeMap<String, i32> =
+                std::collections::BTreeMap::new();
             let mut details: Vec<String> = Vec::with_capacity(count as usize);
             let mut min_x = f64::INFINITY;
             let mut min_y = f64::INFINITY;
@@ -2992,18 +3003,20 @@ pub fn cad_modelspace_snapshot() -> Result<String, String> {
 
                 // 收集几何包围盒（能取到坐标的类型）
                 if kind == "LINE" {
-                    if let (Ok((x1, y1, _)), Ok((x2, y2, _))) =
-                        (get_point_property(&item, "StartPoint"), get_point_property(&item, "EndPoint"))
-                    {
+                    if let (Ok((x1, y1, _)), Ok((x2, y2, _))) = (
+                        get_point_property(&item, "StartPoint"),
+                        get_point_property(&item, "EndPoint"),
+                    ) {
                         min_x = min_x.min(x1).min(x2);
                         max_x = max_x.max(x1).max(x2);
                         min_y = min_y.min(y1).min(y2);
                         max_y = max_y.max(y1).max(y2);
                     }
                 } else if kind == "CIRCLE" {
-                    if let (Ok((cx, cy, _)), Ok(r)) =
-                        (get_point_property(&item, "Center"), get_f64_property(&item, "Radius"))
-                    {
+                    if let (Ok((cx, cy, _)), Ok(r)) = (
+                        get_point_property(&item, "Center"),
+                        get_f64_property(&item, "Radius"),
+                    ) {
                         min_x = min_x.min(cx - r);
                         max_x = max_x.max(cx + r);
                         min_y = min_y.min(cy - r);
@@ -3035,10 +3048,7 @@ pub fn cad_modelspace_snapshot() -> Result<String, String> {
                 details.push(line);
             }
 
-            let mut parts: Vec<String> = tally
-                .iter()
-                .map(|(k, v)| format!("{v}×{k}"))
-                .collect();
+            let mut parts: Vec<String> = tally.iter().map(|(k, v)| format!("{v}×{k}")).collect();
             parts.sort();
             let mut report = format!(
                 "图面快照：模型空间共 {} 个对象（{}）。\n",
@@ -3171,12 +3181,7 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
         }
 
         let extend_target = extract_first_handle(&cad_draw_line(0.0, -50.0, 80.0, -50.0)?)?;
-        let extend_result = cad_extend_by_handle(
-            &boundary,
-            &extend_target,
-            80.0,
-            -50.0,
-        )?;
+        let extend_result = cad_extend_by_handle(&boundary, &extend_target, 80.0, -50.0)?;
         let extended_handle = extract_created_handle_or_fallback(&extend_result, &extend_target)?;
         cleanup_handles.push(extended_handle.clone());
         thread::sleep(Duration::from_millis(250));
@@ -3221,28 +3226,14 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
     let draw_result = cad_draw_elevator_shaft_protection(
-        1000.0,
-        2000.0,
-        2000.0,
-        1800.0,
-        1500.0,
-        200.0,
-        true,
-        true,
-        1.0,
+        1000.0, 2000.0, 2000.0, 1800.0, 1500.0, 200.0, true, true, 1.0,
     )?;
     if !draw_result.contains("电梯井口防护") {
         return Err(format!("绘图结果不符合预期: {draw_result}"));
     }
 
-    let validation = cad_validate_elevator_shaft_protection(
-        2000.0,
-        1800.0,
-        1500.0,
-        200.0,
-        true,
-        true,
-    )?;
+    let validation =
+        cad_validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, true, true)?;
     let validation_json: serde_json::Value =
         serde_json::from_str(&validation).map_err(|e| format!("校核 JSON 解析失败: {e}"))?;
     if validation_json["ok"] != serde_json::Value::Bool(true) {
@@ -3343,8 +3334,14 @@ mod tests {
         let h = 100.0;
         let all_cjk = super::estimate_text_width("井口宽", h);
         let all_ascii = super::estimate_text_width("ABC", h);
-        assert!((all_cjk - 300.0).abs() < 1e-6, "3 个全角字符应约 300，得到 {all_cjk}");
-        assert!((all_ascii - 165.0).abs() < 1e-6, "3 个半角字符应约 165，得到 {all_ascii}");
+        assert!(
+            (all_cjk - 300.0).abs() < 1e-6,
+            "3 个全角字符应约 300，得到 {all_cjk}"
+        );
+        assert!(
+            (all_ascii - 165.0).abs() < 1e-6,
+            "3 个半角字符应约 165，得到 {all_ascii}"
+        );
         // 全角 > 半角
         assert!(all_cjk > all_ascii);
         // 空字符串宽度为 0

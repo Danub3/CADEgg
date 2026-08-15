@@ -4,6 +4,7 @@ use tauri::{Manager, PhysicalPosition};
 mod cad;
 mod knowledge;
 mod llm;
+mod safety;
 mod settings;
 mod tools;
 

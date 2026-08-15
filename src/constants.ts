@@ -25,6 +25,7 @@ export const DEFAULT_VIEW: SettingsView = {
   model: "claude-opus-4-7",
   base_url: "https://api.anthropic.com",
   gemini_model: "gemini-2.0-flash",
+  gemini_strong_model: "gemini-2.5-pro",
   gemini_base_url: "https://generativelanguage.googleapis.com",
   glm_model: "glm-4-flash",
   glm_strong_model: "glm-4.5-flash",

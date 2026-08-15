@@ -92,6 +92,7 @@ export interface SettingsView {
   model: string;
   base_url: string;
   gemini_model: string;
+  gemini_strong_model: string;
   gemini_base_url: string;
   glm_model: string;
   glm_strong_model: string;

@@ -44,5 +44,5 @@
     "warning_sign": "「当心坠落 严禁抛物」1 块",
     "material_table_included": "按 include_material_table"
   },
-  "note": "本文件与 src-tauri/src/cad.rs 中 cad_validate_elevator_shaft_protection 的确定性校核规则保持一致。场景依据：指导图册 2.7.4 室内电梯井口防护（上翻式/三件套式防护门），与 2.7.2 临边防护栏杆（上杆1.2m、立杆≤2m、挡脚板≥180mm）是不同场景，不可混用。"
+  "note": "本文件与 src-tauri/src/safety.rs 中 validate_elevator_shaft_protection 的确定性校核规则保持一致。场景依据：指导图册 2.7.4 室内电梯井口防护（上翻式/三件套式防护门），与 2.7.2 临边防护栏杆（上杆1.2m、立杆≤2m、挡脚板≥180mm）是不同场景，不可混用。"
 }

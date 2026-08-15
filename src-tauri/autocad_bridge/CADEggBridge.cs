@@ -20,7 +20,7 @@ namespace CADEggBridge
     public sealed class BridgeEntry : IExtensionApplication
     {
         private const int BridgePort = 50471;
-        private const string BridgeVersion = "0.3.5.0";
+        private const string BridgeVersion = "0.3.6.0";
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             IncludeFields = true,
@@ -298,20 +298,35 @@ namespace CADEggBridge
             {
                 throw new InvalidOperationException("points must be an array");
             }
-            var closed = !args.ContainsKey("closed") || ToDouble(args, "closed") != 0.0;
+            var closed = ToOptionalBoolean(args, "closed", true);
 
             // 平铺数组 [x1,y1, x2,y2, ...]。
             var flat = new List<double>();
+            var index = 0;
             foreach (var item in pointsJson.EnumerateArray())
             {
                 if (item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var v))
                 {
                     flat.Add(v);
                 }
+                else if (item.ValueKind == JsonValueKind.String
+                    && double.TryParse(item.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    flat.Add(parsed);
+                }
+                else
+                {
+                    throw new InvalidOperationException("points[" + index + "] must be numeric");
+                }
+                index++;
             }
             if (flat.Count < 4 || flat.Count % 2 != 0)
             {
                 throw new InvalidOperationException("points must contain at least 2 (x,y) pairs");
+            }
+            if (closed && flat.Count < 6)
+            {
+                throw new InvalidOperationException("closed polyline must contain at least 3 vertices");
             }
 
             using (doc.LockDocument())
@@ -753,6 +768,42 @@ namespace CADEggBridge
             }
 
             throw new InvalidOperationException("invalid bridge numeric arg: " + key);
+        }
+
+        private static bool ToOptionalBoolean(Dictionary<string, JsonElement> args, string key, bool defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key))
+            {
+                return defaultValue;
+            }
+
+            var value = args[key];
+            if (value.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+            if (value.ValueKind == JsonValueKind.False)
+            {
+                return false;
+            }
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+            {
+                return Math.Abs(number) > 1e-12;
+            }
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var text = (value.GetString() ?? string.Empty).Trim();
+                if (bool.TryParse(text, out var parsedBool))
+                {
+                    return parsedBool;
+                }
+                if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedNumber))
+                {
+                    return Math.Abs(parsedNumber) > 1e-12;
+                }
+            }
+
+            throw new InvalidOperationException("invalid bridge boolean arg: " + key);
         }
 
         private static string ToRequiredString(Dictionary<string, JsonElement> args, string key)

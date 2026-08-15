@@ -314,6 +314,7 @@ export default function App() {
           model: settings.model,
           base_url: settings.base_url,
           gemini_model: settings.gemini_model,
+          gemini_strong_model: settings.gemini_strong_model,
           gemini_base_url: settings.gemini_base_url,
           glm_model: settings.glm_model,
           glm_strong_model: settings.glm_strong_model,
@@ -787,7 +788,13 @@ export default function App() {
               <textarea
                 rows={1}
                 className="flex-1 resize-none bg-white text-slate-800 text-sm placeholder-slate-400 rounded-2xl px-3.5 py-2 outline-none border border-slate-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200 transition-all max-h-28"
-                placeholder={sending ? "等待回复..." : "画一条 7000mm 的直线..."}
+                placeholder={
+                  sending
+                    ? "等待回复..."
+                    : settings.work_mode === "safety_demo_mode"
+                    ? "画一个电梯井口防护门，井口宽 2000，高 1800..."
+                    : "画一条 7000mm 的直线..."
+                }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -850,7 +857,7 @@ export default function App() {
               </div>
               {settings.provider === "glm" && (
                 <p className="text-[10px] text-emerald-700 leading-snug">
-                  💡 智谱 GLM-4-Flash / 4.5-Flash 有免费额度，国内直连不用代理。
+                  智谱 GLM-4-Flash / 4.5-Flash 有免费额度，国内直连不用代理。
                 </p>
               )}
             </div>
@@ -883,7 +890,7 @@ export default function App() {
                 })}
               </div>
               <p className="text-[10px] text-slate-400 leading-snug">
-                比赛模式隐藏 Claude 和 run_lisp；安全防护 demo 只开放电梯井口临边防护闭环工具。
+                比赛模式隐藏 Claude 和 run_lisp；安全防护 demo 只开放电梯井口防护门闭环工具。
               </p>
             </div>
 
@@ -971,6 +978,29 @@ export default function App() {
                     ))}
                   </datalist>
                 </Field>
+
+                <Field
+                  label="强模型（规划/出图）"
+                  hint="复杂出图、规划、校核自动走此模型；若未开通 Pro，可选 2.5-flash"
+                >
+                  <input
+                    type="text"
+                    list="gemini-strong-models"
+                    className={inputCls}
+                    placeholder="gemini-2.5-flash"
+                    value={settings.gemini_strong_model}
+                    onChange={(e) =>
+                      setSettings({ ...settings, gemini_strong_model: e.target.value })
+                    }
+                  />
+                  <datalist id="gemini-strong-models">
+                    {GEMINI_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </Field>
               </>
             ) : (
               <>
@@ -1044,7 +1074,7 @@ export default function App() {
             )}
 
             <p className="text-[10px] text-slate-400 leading-snug">
-              🔒 API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key，发送请求时由 Rust 后端直接加到 HTTP 头，永不暴露给前端 JS。
+              API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key，发送请求时由 Rust 后端直接加到 HTTP 头，永不暴露给前端 JS。
             </p>
           </div>
 
@@ -1122,7 +1152,7 @@ function renderMessage(
             key={tc.id}
             className="px-3 py-2 rounded-xl bg-violet-50 border border-violet-200 text-[11px] font-mono text-violet-900 break-all"
           >
-            <div className="font-semibold mb-0.5">🔧 {tc.name}</div>
+            <div className="font-semibold mb-0.5">{tc.name}</div>
             <div className="opacity-75">{JSON.stringify(tc.args)}</div>
           </div>
         ))}

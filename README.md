@@ -16,10 +16,10 @@ CADEgg is a Windows desktop AutoCAD assistant that turns a single natural-langua
 
 | Feature | Description |
 |---|---|
-| **Safety Demo Mode** | A dedicated `safety_demo_mode` that only exposes the elevator-shaft edge-protection toolset, hiding unrelated tools |
-| **Elevator Shaft Protection** | Draws shaft opening, guardrail, top/mid rails, posts, toe board, warning sign, and material table from parameters |
-| **Rule-based Validation** | Deterministic checks (rail height, post spacing, toe board, dimensions) returned as structured JSON |
-| **Missing-parameter Clarification** | Asks for shaft width/height, rail height, post spacing, etc. instead of inventing dimensions |
+| **Safety Demo Mode** | A dedicated `safety_demo_mode` that only exposes the elevator-shaft protection-door toolset, hiding unrelated tools |
+| **Elevator Shaft Protection Door** | Draws shaft opening, upper-flip protection door, hinge markers, toe board, warning sign, dimensions, and material table from parameters |
+| **Rule-based Validation** | Deterministic checks (door height, toe board, warning sign, material table, dimensions) returned as structured JSON |
+| **Missing-parameter Clarification** | Asks for shaft opening width/height instead of inventing site dimensions; protection-door height and toe board use standard defaults |
 | **Standard Atlas & Rules** | Versioned knowledge cards and rules under `data/atlas/` and `rules/` |
 | **Session Object Tracking** | Tracks created handles in the frontend object table for later reference |
 | **Model Routing** | Practical providers are GLM and Gemini; Claude is hidden in the UI for future support |
@@ -65,10 +65,10 @@ CADEgg 是一款 Windows 桌面 AutoCAD 助手，能把一句自然语言指令�
 
 | 功能 | 说明 |
 |---|---|
-| **安全演示模式** | 独立的 `safety_demo_mode`，只暴露电梯井口临边防护工具集，隐藏无关工具 |
-| **电梯井口防护** | 按参数绘制井口轮廓、防护栏、上/中横杆、立杆、踢脚板、警示牌和材料表 |
-| **规则校核** | 确定性检查（栏杆高度、立杆间距、踢脚板、尺寸）以结构化 JSON 返回 |
-| **缺参追问** | 追问井口宽高、栏杆高度、立杆间距等，而非编造尺寸 |
+| **安全演示模式** | 独立的 `safety_demo_mode`，只暴露电梯井口防护门工具集，隐藏无关工具 |
+| **电梯井口防护门** | 按参数绘制井口轮廓、上翻式防护门、翻转轴、踢脚板、警示牌、尺寸标注和材料表 |
+| **规则校核** | 确定性检查（防护门高度、踢脚板、警示牌、材料表、尺寸）以结构化 JSON 返回 |
+| **缺参追问** | 追问井口宽高等现场尺寸；防护门高和踢脚板按规范默认值处理 |
 | **标准图册与规则** | 在 `data/atlas/` 和 `rules/` 下版本化维护知识卡与规则 |
 | **会话对象追踪** | 在前端对象表记录创建的 handle，供后续引用 |
 | **模型路由** | 实际可用提供方为 GLM 和 Gemini；Claude 入口隐藏，留待后续支持 |

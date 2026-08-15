@@ -19,6 +19,7 @@
 //! - 每条关键结论必须挂 `citations`（source_id + excerpt_id + page），否则无法溯源；
 //! - 卡片要「指向性」：`scene` 唯一 + `keywords` 覆盖用户常见说法，便于命中。
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -43,7 +44,10 @@ fn builtin_cards() -> Vec<(&'static str, &'static str)> {
 fn scene_of(raw: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(raw)
         .ok()
-        .and_then(|v| v.get("scene").and_then(|s| s.as_str().map(|x| x.to_string())))
+        .and_then(|v| {
+            v.get("scene")
+                .and_then(|s| s.as_str().map(|x| x.to_string()))
+        })
 }
 
 /// 扫描磁盘 `data/atlas/` 目录，返回所有知识卡 JSON 文本。
@@ -69,9 +73,18 @@ fn scan_disk_cards() -> Vec<String> {
 
 /// 磁盘 + 内置去重后的全部卡片原始文本。
 fn all_cards() -> Vec<String> {
-    let mut cards = scan_disk_cards();
+    let mut cards = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for text in scan_disk_cards() {
+        if let Some(scene) = scene_of(&text) {
+            if seen.insert(scene) {
+                cards.push(text);
+            }
+        }
+    }
     for (scene, text) in builtin_cards() {
-        if !cards.iter().any(|c| scene_of(c).as_deref() == Some(scene)) {
+        if seen.insert(scene.to_string()) {
             cards.push(text.to_string());
         }
     }
@@ -127,10 +140,7 @@ pub fn search_scenes(query: &str) -> Vec<String> {
 /// 列出当前所有可用场景名。
 #[allow(dead_code)]
 pub fn list_scenes() -> Vec<String> {
-    let mut scenes: Vec<String> = all_cards()
-        .iter()
-        .filter_map(|c| scene_of(c))
-        .collect();
+    let mut scenes: Vec<String> = all_cards().iter().filter_map(|c| scene_of(c)).collect();
     scenes.dedup();
     scenes
 }
@@ -169,7 +179,9 @@ fn render_card_context(raw: &str, scene: &str) -> Option<String> {
         lines.push(format!("  - {it}"));
     }
     for it in str_items(&v, "required_components") {
-        lines.push("必配构件：".to_string());
+        if lines.last().map(|l| l.as_str()) != Some("必配构件：") {
+            lines.push("必配构件：".to_string());
+        }
         lines.push(format!("  - {it}"));
     }
     if let Some(items) = v.get("dimension_rules").and_then(|a| a.as_array()) {
@@ -236,7 +248,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(ELEVATOR_SHAFT_CARD).unwrap();
         assert_eq!(v["scene"].as_str(), Some("elevator_shaft_protection"));
         // 必须带溯源引用（这是"经得起推敲"的底线）。
-        assert!(v["citations"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(v["citations"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
     }
 
     #[test]
@@ -273,6 +288,13 @@ mod tests {
     fn search_matches_elevator_keywords() {
         let scenes = search_scenes("画一个电梯井口防护");
         assert!(scenes.contains(&"elevator_shaft_protection".to_string()));
+        assert_eq!(
+            scenes
+                .iter()
+                .filter(|scene| *scene == "elevator_shaft_protection")
+                .count(),
+            1
+        );
     }
 
     #[test]
