@@ -31,10 +31,10 @@ import type {
 import {
   DEFAULT_VIEW,
   MODEL_PROVIDERS,
-  MODEL_TIER_LABEL,
+  modelRating,
   providerMeta,
   type ModelOption,
-  type ModelTier,
+  type ModelRating,
 } from "./constants";
 import {
   applyObjectUpdates,
@@ -381,11 +381,12 @@ function modelDisplay(model: ModelOption, lang: "zh-CN" | "en-US") {
   return MODEL_UI[model.id]?.[lang] ?? model.label;
 }
 
-function modelTierDisplay(tier: ModelTier, lang: "zh-CN" | "en-US") {
-  if (lang === "en-US") {
-    return tier === "production" ? "Production" : tier === "limited" ? "Limited" : "Not Recommended";
-  }
-  return MODEL_TIER_LABEL[tier];
+function starsForRating(rating: ModelRating) {
+  return `${"★".repeat(rating)}${"☆".repeat(5 - rating)}`;
+}
+
+function modelStarDisplay(model: ModelOption) {
+  return starsForRating(modelRating(model));
 }
 
 interface ChatSession {
@@ -723,6 +724,7 @@ export default function App() {
   const pendingPostRunSyncRef = useRef(false);
   const pendingToolCallsRef = useRef<Record<string, ToolCall>>({});
   const completedToolIdsRef = useRef<Set<string>>(new Set());
+  const preserveSelectedSessionTimestampRef = useRef<string | null>(initialSession.id);
   const [completedToolIds, setCompletedToolIds] = useState<Set<string>>(new Set());
   const lastUserInputRef = useRef("");
   const pendingLogRef = useRef<{
@@ -733,22 +735,7 @@ export default function App() {
   } | null>(null);
 
   function tryParseValidation(content: string): ElevatorValidation | null {
-    const trimmed = content.trim();
-    if (!trimmed.startsWith("{")) return null;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (
-        parsed &&
-        typeof parsed.ok === "boolean" &&
-        Array.isArray(parsed.checks) &&
-        typeof parsed.material_table === "object"
-      ) {
-        return parsed as ElevatorValidation;
-      }
-    } catch {
-      // Tool output is often human-readable text. Ignore non-JSON validation payloads.
-    }
-    return null;
+    return parseValidationPayload(content);
   }
 
   function updateSessionObjects(
@@ -822,6 +809,10 @@ export default function App() {
   useEffect(() => {
     const now = Date.now();
     const title = sessionTitleFromMessages(messages);
+    const preserveTimestampFor = preserveSelectedSessionTimestampRef.current;
+    if (preserveTimestampFor === activeSessionId) {
+      preserveSelectedSessionTimestampRef.current = null;
+    }
     setSessions((prev) =>
       prev
         .map((session) =>
@@ -829,7 +820,7 @@ export default function App() {
             ? {
                 ...session,
                 title,
-                updatedAt: now,
+                updatedAt: preserveTimestampFor === activeSessionId ? session.updatedAt : now,
                 messages,
                 sessionObjects,
                 demoLog,
@@ -933,6 +924,10 @@ export default function App() {
         const pending = pendingLogRef.current;
         pendingLogRef.current = null;
         if (pending && pending.toolCalls.length > 0) {
+          if (!e.text.trim()) {
+            const summary = completionSummary(pending, appPreferencesRef.current.language);
+            setMessages((prev) => [...prev, { role: "assistant", text: summary, tool_calls: [] }]);
+          }
           const entry: DemoLogEntry = {
             time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
             user_input: lastUserInputRef.current,
@@ -1237,7 +1232,8 @@ export default function App() {
     }
   }
 
-  function applySession(session: ChatSession) {
+  function applySession(session: ChatSession, preserveTimestamp = false) {
+    preserveSelectedSessionTimestampRef.current = preserveTimestamp ? session.id : null;
     assistantDraftRef.current = "";
     pendingToolCallsRef.current = {};
     completedToolIdsRef.current = new Set();
@@ -1268,7 +1264,7 @@ export default function App() {
   function handleSelectSession(id: string) {
     if (sending || id === activeSessionId) return;
     const session = sessions.find((item) => item.id === id);
-    if (session) applySession(session);
+    if (session) applySession(session, true);
   }
 
   function handleDeleteSession(id: string) {
@@ -1276,7 +1272,7 @@ export default function App() {
     const remaining = sessions.filter((session) => session.id !== id);
     if (remaining.length > 0) {
       setSessions(remaining);
-      if (id === activeSessionId) applySession(remaining[0]);
+      if (id === activeSessionId) applySession(remaining[0], true);
       return;
     }
     const next = createChatSession(settings);
@@ -1668,8 +1664,7 @@ function ModelPicker({
         {!hasPreset && <option value="__custom">{model}</option>}
         {meta.models.map((item) => (
           <option key={item.id} value={item.id}>
-            {modelDisplay(item, language)}
-            {item.tier !== "production" ? ` (${modelTierDisplay(item.tier, language)})` : ""}
+            {modelDisplay(item, language)} · {modelStarDisplay(item)}
           </option>
         ))}
       </select>
@@ -2313,8 +2308,7 @@ function SettingsModal({
                       >
                         {provider.models.map((model) => (
                           <option key={model.id} value={model.id}>
-                            {modelDisplay(model, language)}
-                            {model.tier !== "production" ? ` (${modelTierDisplay(model.tier, language)})` : ""}
+                            {modelDisplay(model, language)} · {modelStarDisplay(model)}
                           </option>
                         ))}
                       </select>
@@ -2332,8 +2326,7 @@ function SettingsModal({
                       >
                         {provider.models.map((model) => (
                           <option key={model.id} value={model.id}>
-                            {modelDisplay(model, language)}
-                            {model.tier !== "production" ? ` (${modelTierDisplay(model.tier, language)})` : ""}
+                            {modelDisplay(model, language)} · {modelStarDisplay(model)}
                           </option>
                         ))}
                       </select>
@@ -2388,6 +2381,93 @@ function SettingsModal({
   );
 }
 
+function parseValidationPayload(content: string): ElevatorValidation | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (
+      parsed &&
+      typeof parsed.ok === "boolean" &&
+      Array.isArray(parsed.checks) &&
+      typeof parsed.material_table === "object"
+    ) {
+      return parsed as ElevatorValidation;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
+  if (language === "en-US") {
+    if (validation.ok) {
+      return "Validation passed: dimensions, guard height, toe board, warning sign, and material table are checked.";
+    }
+    const issues = validation.issues.slice(0, 3).join(", ");
+    return `Validation failed: ${issues || "see safety panel"}.`;
+  }
+
+  if (validation.ok) {
+    return "校核通过：井口尺寸、防护门高度、踢脚板、警示牌和材料表已检查。";
+  }
+  const issues = validation.issues.slice(0, 3).join("、");
+  return `校核未通过：${issues || "请查看右侧安全校核面板"}。`;
+}
+
+function toolCallArgsPreview(call: ToolCall, language: "zh-CN" | "en-US") {
+  if (call.name === "validate_elevator_shaft_protection") {
+    return language === "en-US" ? "Validation parameters collapsed" : "校核参数已折叠";
+  }
+  return compactToolArgs(call.args);
+}
+
+function toolResultDisplayText(message: Extract<Message, { role: "tool" }>, language: "zh-CN" | "en-US") {
+  if (message.name === "validate_elevator_shaft_protection") {
+    const validation = parseValidationPayload(message.content);
+    if (validation) return validationSummary(validation, language);
+    return message.ok
+      ? language === "en-US"
+        ? "Validation completed."
+        : "校核已完成。"
+      : message.content;
+  }
+  return message.content;
+}
+
+function completionSummary(
+  pending: {
+    toolCalls: string[];
+    params: Record<string, unknown>;
+    validation: ElevatorValidation | null;
+    summary: string;
+  },
+  language: "zh-CN" | "en-US"
+) {
+  const drewElevator = pending.toolCalls.includes("draw_elevator_shaft_protection");
+  const validation = pending.validation;
+  if (language === "en-US") {
+    if (drewElevator && validation) {
+      return validation.ok
+        ? "Task complete: the elevator shaft protection drawing was generated and passed safety validation."
+        : `Task complete, with validation issues: ${validation.issues.slice(0, 3).join(", ") || "see safety panel"}.`;
+    }
+    if (drewElevator) return "Task complete: the elevator shaft protection drawing was generated.";
+    if (validation) return validationSummary(validation, language);
+    return pending.summary ? `Task complete: ${pending.summary}` : "Task complete.";
+  }
+
+  if (drewElevator && validation) {
+    return validation.ok
+      ? "任务完成：已生成电梯井口防护门，并通过安全校核。"
+      : `任务完成，但校核发现问题：${validation.issues.slice(0, 3).join("、") || "请查看右侧安全校核面板"}。`;
+  }
+  if (drewElevator) return "任务完成：已生成电梯井口防护门。";
+  if (validation) return validationSummary(validation, language);
+  return pending.summary ? `任务完成：${pending.summary}` : "任务完成。";
+}
+
 function renderMessage(
   m: Message,
   i: number,
@@ -2417,7 +2497,7 @@ function renderMessage(
               <article key={tc.id} className={done ? "tool-done" : "tool-pending"}>
                 <span className="tool-status">{done ? <IconCheck /> : <span className="spinner" />}</span>
                 <strong>{tc.name}</strong>
-                <code>{compactToolArgs(tc.args)}</code>
+                <code>{toolCallArgsPreview(tc, language)}</code>
               </article>
             );
           })}
@@ -2450,7 +2530,7 @@ function renderMessage(
       <strong>
         {m.confirmation_required ? "!" : m.ok ? <IconCheck /> : <IconCross />} {m.name}
       </strong>
-      <span>{m.content}</span>
+      <span>{toolResultDisplayText(m, language)}</span>
       {m.confirmation_required && m.pending_call && !m.confirmed && (
         <button type="button" onClick={() => onConfirmToolCall(i, m.pending_call!)}>
           {t("confirmExecute", language)}
@@ -2871,24 +2951,26 @@ interface HelpPanelProps {
 }
 
 const MODEL_EVAL_TABLE = [
-  { model: "DeepSeek Chat", score: "8.9", tier: "production" as const, noteZh: "10/10 工具选择，多工具编排最强，极便宜", noteEn: "10/10 tool selection, best multi-tool orchestration, extremely cheap" },
-  { model: "GLM-4.5", score: "8.8", tier: "production" as const, noteZh: "BFCL 全球第 1，函数调用最准", noteEn: "BFCL global #1, most accurate function calling" },
-  { model: "Qwen-Max", score: "8.3", tier: "production" as const, noteZh: "BFCL 75.7%，结构化输出最好", noteEn: "BFCL 75.7%, best structured output" },
-  { model: "GLM-4-Plus", score: "7.9", tier: "limited" as const, noteZh: "够用但不稳，建议升级到 GLM-4.5", noteEn: "Usable but inconsistent, upgrade to GLM-4.5 recommended" },
-  { model: "Qwen-Plus", score: "7.6", tier: "limited" as const, noteZh: "需人工监督，复杂任务可能出错", noteEn: "Needs human oversight, may fail on complex tasks" },
-  { model: "Qwen-Turbo", score: "6.4", tier: "limited" as const, noteZh: "速度快但工具调用不可靠", noteEn: "Fast but unreliable tool calling" },
-  { model: "Kimi 8K/32K", score: "5.7", tier: "unavailable" as const, noteZh: "Moonshot v1 系列，函数调用弱", noteEn: "Moonshot v1 series, weak function calling" },
-  { model: "GLM-4.5-Flash", score: "5.5", tier: "unavailable" as const, noteZh: "免费但只画方框，不可用于 agent", noteEn: "Free but only draws rectangles, unusable for agent" },
-  { model: "DeepSeek R1", score: "5.0", tier: "unavailable" as const, noteZh: "推理模型，只想不干，已移除", noteEn: "Reasoning model, thinks but doesn't act, removed" },
-  { model: "GLM-4-Flash", score: "4.9", tier: "unavailable" as const, noteZh: "太弱，不可靠", noteEn: "Too weak, unreliable" },
+  { model: "GLM-5.3 / GLM-5.2", score: "9.3", rating: 5 as ModelRating, noteZh: "强规划与工具调用，适合复杂出图和复核", noteEn: "Strong planning and tool calling for complex drawing and review" },
+  { model: "GLM-4.5", score: "8.8", rating: 5 as ModelRating, noteZh: "当前已打通，函数调用稳定，适合作为默认强模型", noteEn: "Currently verified, stable function calling, good default strong model" },
+  { model: "DeepSeek V4 Pro / Chat", score: "8.7", rating: 5 as ModelRating, noteZh: "工具选择和多步编排表现好，成本友好", noteEn: "Good tool selection and multi-step orchestration, cost friendly" },
+  { model: "Qwen 3.8 Max / 3 Max", score: "8.5", rating: 5 as ModelRating, noteZh: "结构化输出强，适合规划和参数化任务", noteEn: "Strong structured output for planning and parametric tasks" },
+  { model: "Kimi K3 / K2.7 Code", score: "8.2", rating: 4 as ModelRating, noteZh: "代码与长上下文能力好，工具链仍需实测监督", noteEn: "Good coding and long-context ability; tool chain still needs supervision" },
+  { model: "GLM-4.7 / GLM-4.6", score: "8.0", rating: 4 as ModelRating, noteZh: "可作为 GLM-4.5 的升级候选或备用强模型", noteEn: "Good candidates as GLM-4.5 upgrades or strong fallbacks" },
+  { model: "GLM Air / FlashX / Qwen Flash", score: "7.0", rating: 3 as ModelRating, noteZh: "适合轻量问答和低风险辅助，不建议独立承担复杂出图", noteEn: "Useful for light Q&A and low-risk assistance, not ideal for complex drawing alone" },
+  { model: "Moonshot v1 / 旧版 Flash", score: "5.5", rating: 2 as ModelRating, noteZh: "保留兼容入口，不建议用于 agent 自动出图", noteEn: "Kept for compatibility; not recommended for autonomous drawing" },
 ];
 
-const TIER_LABEL_ZH: Record<string, string> = { production: "生产可用", limited: "勉强可用", unavailable: "不可用" };
-const TIER_LABEL_EN: Record<string, string> = { production: "Production", limited: "Limited", unavailable: "Unusable" };
+function StarRating({ rating }: { rating: ModelRating }) {
+  return (
+    <span className={`star-rating rating-${rating}`} aria-label={`${rating}/5`}>
+      {starsForRating(rating)}
+    </span>
+  );
+}
 
 function HelpPanel({ language, onClose }: HelpPanelProps) {
   const isZh = language === "zh-CN";
-  const tierLabel = (t: string) => isZh ? TIER_LABEL_ZH[t] : TIER_LABEL_EN[t];
 
   return (
     <div className="modal-backdrop">
@@ -2905,8 +2987,8 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
             <GroupHeader
               title={isZh ? "模型能力评估" : "Model Capability Evaluation"}
               desc={isZh
-                ? "基于 BFCL V3/V4（伯克利函数调用排行榜）和第三方工具调用测试。评分 ≥8.0 的模型可用于生产环境。"
-                : "Based on BFCL V3/V4 (Berkeley Function Calling Leaderboard) and third-party tool calling tests. Models scoring ≥8.0 are production-ready."}
+                ? "基于公开函数调用能力、当前接入状态和 CADEgg 工具链风险分层。五星优先用于强模型，三星以内只适合轻量或兼容场景。"
+                : "Based on public function-calling ability, current integration status, and CADEgg tool-chain risk. Five stars are preferred for strong models; three or fewer are for light or compatibility use."}
             />
 
             <div className="help-table-wrap">
@@ -2915,16 +2997,16 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
                   <tr>
                     <th>{isZh ? "模型" : "Model"}</th>
                     <th>{isZh ? "评分" : "Score"}</th>
-                    <th>{isZh ? "等级" : "Tier"}</th>
+                    <th>{isZh ? "星级" : "Stars"}</th>
                     <th>{isZh ? "说明" : "Notes"}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {MODEL_EVAL_TABLE.map((row) => (
-                    <tr key={row.model} className={`eval-tier-${row.tier}`}>
+                    <tr key={row.model} className={`eval-rating-${row.rating}`}>
                       <td><strong>{row.model}</strong></td>
                       <td>{row.score}</td>
-                      <td><span className={`tier-badge tier-${row.tier}`}>{tierLabel(row.tier)}</span></td>
+                      <td><StarRating rating={row.rating} /></td>
                       <td>{isZh ? row.noteZh : row.noteEn}</td>
                     </tr>
                   ))}
@@ -2965,16 +3047,16 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
 
               <h4>{isZh ? "模型选择建议" : "Model Selection Tips"}</h4>
               <ul>
-                <li>{isZh ? "强模型（用于出图/校核）：GLM-4.5 或 DeepSeek Chat" : "Strong model (for drawing/validation): GLM-4.5 or DeepSeek Chat"}</li>
-                <li>{isZh ? "轻量模型（用于普通问答）：GLM-4-Plus 或 Qwen-Plus" : "Cheap model (for general Q&A): GLM-4-Plus or Qwen-Plus"}</li>
-                <li>{isZh ? "免费模型（GLM-4-Flash / GLM-4.5-Flash）不可用于 agent 出图" : "Free models (GLM-4-Flash / GLM-4.5-Flash) cannot be used for agent drawing"}</li>
-                <li>{isZh ? "DeepSeek Reasoner 已移除，推理模型不适合工具调用" : "DeepSeek Reasoner has been removed, reasoning models are unsuitable for tool calling"}</li>
+                <li>{isZh ? "★★★★★：优先用于出图、校核和多工具规划。" : "★★★★★: preferred for drawing, validation, and multi-tool planning."}</li>
+                <li>{isZh ? "★★★★：可作为强模型备用，复杂任务建议保留人工复核。" : "★★★★: usable as strong fallbacks; keep human review for complex work."}</li>
+                <li>{isZh ? "★★★ 及以下：用于普通问答、低风险辅助或旧配置兼容。" : "★★★ and below: use for general Q&A, low-risk assistance, or legacy compatibility."}</li>
+                <li>{isZh ? "推理模型不默认进入工具调用链，避免只思考不执行。" : "Reasoning-only models are not default tool-chain candidates to avoid thinking without action."}</li>
               </ul>
 
               <h4>{isZh ? "自动轮转" : "Auto Failover"}</h4>
               <p>{isZh
-                ? "请求失败时，CADEgg 自动按优先级切换备用模型：主供应商强模型 → 同供应商轻量模型 → 其他已配置供应商。无需手动干预。"
-                : "When a request fails, CADEgg automatically switches to backup models: primary provider strong model → same provider cheap model → other configured providers. No manual intervention needed."}</p>
+                ? "聊天输入栏和设置页都可以开关自动轮转。开启时按当前模型 → 同供应商备用模型 → 其他已配置供应商切换；关闭时只使用当前会话选择的模型。"
+                : "Auto failover can be toggled from the composer or Settings. When on, CADEgg tries the current model, same-provider fallback, then other configured providers; when off, only the selected session model is used."}</p>
             </div>
           </section>
         </div>

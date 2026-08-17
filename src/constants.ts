@@ -1,11 +1,13 @@
 import type { Provider, SettingsView } from "./types";
 
 export type ModelTier = "production" | "limited" | "unavailable";
+export type ModelRating = 1 | 2 | 3 | 4 | 5;
 
 export interface ModelOption {
   id: string;
   label: string;
   tier: ModelTier;
+  rating?: ModelRating;
 }
 
 export const GLM_MODELS: ModelOption[] = [
@@ -14,15 +16,15 @@ export const GLM_MODELS: ModelOption[] = [
   { id: "glm-5.1", label: "GLM-5.1", tier: "production" },
   { id: "glm-5-plus", label: "GLM-5-Plus", tier: "production" },
   { id: "glm-5-turbo", label: "GLM-5-Turbo", tier: "limited" },
-  { id: "glm-4.7", label: "GLM-4.7", tier: "production" },
+  { id: "glm-4.7", label: "GLM-4.7", tier: "production", rating: 4 },
   { id: "glm-4.7-flashx", label: "GLM-4.7-FlashX", tier: "limited" },
   { id: "glm-4.7-flash", label: "GLM-4.7-Flash", tier: "limited" },
-  { id: "glm-4.6", label: "GLM-4.6", tier: "production" },
+  { id: "glm-4.6", label: "GLM-4.6", tier: "production", rating: 4 },
   { id: "glm-4.5", label: "GLM-4.5（付费）", tier: "production" },
   { id: "glm-4.5-air", label: "GLM-4.5-Air", tier: "limited" },
   { id: "glm-4.5-airx", label: "GLM-4.5-AirX", tier: "limited" },
   { id: "glm-4.5-flash", label: "GLM-4.5-Flash（免费）", tier: "limited" },
-  { id: "glm-4-plus", label: "GLM-4-Plus（付费）", tier: "limited" },
+  { id: "glm-4-plus", label: "GLM-4-Plus（付费）", tier: "limited", rating: 3 },
   { id: "glm-4-air-250414", label: "GLM-4-Air-250414", tier: "limited" },
   { id: "glm-4-long", label: "GLM-4-Long", tier: "limited" },
   { id: "glm-4-flash-250414", label: "GLM-4-Flash-250414", tier: "limited" },
@@ -38,7 +40,7 @@ export const DEEPSEEK_MODELS: ModelOption[] = [
 
 export const QWEN_MODELS: ModelOption[] = [
   { id: "qwen3.8-max", label: "通义千问 3.8 Max", tier: "production" },
-  { id: "qwen3.8-max-preview", label: "通义千问 3.8 Max Preview", tier: "limited" },
+  { id: "qwen3.8-max-preview", label: "通义千问 3.8 Max Preview", tier: "limited", rating: 4 },
   { id: "qwen3.7-max", label: "通义千问 3.7 Max", tier: "production" },
   { id: "qwen3.7-plus", label: "通义千问 3.7 Plus", tier: "production" },
   { id: "qwen3.7-flash", label: "通义千问 3.7 Flash", tier: "limited" },
@@ -56,21 +58,22 @@ export const QWEN_MODELS: ModelOption[] = [
 ];
 
 export const KIMI_MODELS: ModelOption[] = [
-  { id: "kimi-k3", label: "Kimi K3", tier: "production" },
-  { id: "kimi-k2.7-code", label: "Kimi K2.7 Code", tier: "production" },
+  { id: "kimi-k3", label: "Kimi K3", tier: "production", rating: 4 },
+  { id: "kimi-k2.7-code", label: "Kimi K2.7 Code", tier: "production", rating: 4 },
   { id: "kimi-k2.7-code-highspeed", label: "Kimi K2.7 Code Highspeed", tier: "limited" },
-  { id: "kimi-k2.6", label: "Kimi K2.6", tier: "production" },
+  { id: "kimi-k2.6", label: "Kimi K2.6", tier: "production", rating: 4 },
   { id: "kimi-k2.5", label: "Kimi K2.5", tier: "limited" },
-  { id: "moonshot-v1-8k", label: "Kimi 8K（旧版）", tier: "unavailable" },
-  { id: "moonshot-v1-32k", label: "Kimi 32K（旧版）", tier: "unavailable" },
-  { id: "moonshot-v1-128k", label: "Kimi 128K（旧版）", tier: "unavailable" },
+  { id: "moonshot-v1-8k", label: "Kimi 8K（旧版）", tier: "unavailable", rating: 2 },
+  { id: "moonshot-v1-32k", label: "Kimi 32K（旧版）", tier: "unavailable", rating: 2 },
+  { id: "moonshot-v1-128k", label: "Kimi 128K（旧版）", tier: "unavailable", rating: 2 },
 ];
 
-export const MODEL_TIER_LABEL: Record<ModelTier, string> = {
-  production: "生产可用",
-  limited: "勉强可用",
-  unavailable: "不建议",
-};
+export function modelRating(model: ModelOption): ModelRating {
+  if (model.rating) return model.rating;
+  if (model.tier === "production") return 5;
+  if (model.tier === "limited") return 3;
+  return 1;
+}
 
 export const MODEL_PROVIDERS: Array<{
   id: Provider;
