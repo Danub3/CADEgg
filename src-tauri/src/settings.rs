@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -136,9 +136,106 @@ fn default_kimi_base_url() -> String {
     "https://api.moonshot.cn/v1".to_string()
 }
 
+const GLM_MODELS: &[&str] = &["glm-4-flash", "glm-4.5-flash", "glm-4.5", "glm-4-plus"];
+const DEEPSEEK_MODELS: &[&str] = &["deepseek-chat"];
+const QWEN_MODELS: &[&str] = &["qwen-plus", "qwen-turbo", "qwen-max"];
+const KIMI_MODELS: &[&str] = &["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"];
+
+pub fn normalize_provider_id(value: &str) -> String {
+    match value.trim() {
+        "deepseek" | "qwen" | "kimi" | "glm" => value.trim().to_string(),
+        _ => default_provider(),
+    }
+}
+
+fn supported_models(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "deepseek" => DEEPSEEK_MODELS,
+        "qwen" => QWEN_MODELS,
+        "kimi" => KIMI_MODELS,
+        _ => GLM_MODELS,
+    }
+}
+
+pub fn default_strong_model_for_provider(provider: &str) -> String {
+    match provider {
+        "deepseek" => default_deepseek_strong_model(),
+        "qwen" => default_qwen_strong_model(),
+        "kimi" => default_kimi_strong_model(),
+        _ => default_glm_strong_model(),
+    }
+}
+
+fn default_cheap_model_for_provider(provider: &str) -> String {
+    match provider {
+        "deepseek" => default_deepseek_model(),
+        "qwen" => default_qwen_model(),
+        "kimi" => default_kimi_model(),
+        _ => default_glm_model(),
+    }
+}
+
+pub fn normalize_model_for_provider(provider: &str, value: &str, fallback: &str) -> String {
+    let models = supported_models(provider);
+    let candidate = value.trim();
+    if models.contains(&candidate) {
+        return candidate.to_string();
+    }
+    let fallback_candidate = fallback.trim();
+    if models.contains(&fallback_candidate) {
+        return fallback_candidate.to_string();
+    }
+    models.first().copied().unwrap_or("").to_string()
+}
+
+fn sanitize_settings(mut settings: Settings) -> Settings {
+    settings.provider = normalize_provider_id(&settings.provider);
+    settings.glm_model = normalize_model_for_provider(
+        "glm",
+        &settings.glm_model,
+        &default_cheap_model_for_provider("glm"),
+    );
+    settings.glm_strong_model = normalize_model_for_provider(
+        "glm",
+        &settings.glm_strong_model,
+        &default_strong_model_for_provider("glm"),
+    );
+    settings.deepseek_model = normalize_model_for_provider(
+        "deepseek",
+        &settings.deepseek_model,
+        &default_cheap_model_for_provider("deepseek"),
+    );
+    settings.deepseek_strong_model = normalize_model_for_provider(
+        "deepseek",
+        &settings.deepseek_strong_model,
+        &default_strong_model_for_provider("deepseek"),
+    );
+    settings.qwen_model = normalize_model_for_provider(
+        "qwen",
+        &settings.qwen_model,
+        &default_cheap_model_for_provider("qwen"),
+    );
+    settings.qwen_strong_model = normalize_model_for_provider(
+        "qwen",
+        &settings.qwen_strong_model,
+        &default_strong_model_for_provider("qwen"),
+    );
+    settings.kimi_model = normalize_model_for_provider(
+        "kimi",
+        &settings.kimi_model,
+        &default_cheap_model_for_provider("kimi"),
+    );
+    settings.kimi_strong_model = normalize_model_for_provider(
+        "kimi",
+        &settings.kimi_strong_model,
+        &default_strong_model_for_provider("kimi"),
+    );
+    settings
+}
+
 impl Default for Settings {
     fn default() -> Self {
-        Self {
+        sanitize_settings(Self {
             provider: default_provider(),
             work_mode: default_work_mode(),
             anthropic_api_key: String::new(),
@@ -164,7 +261,7 @@ impl Default for Settings {
             kimi_model: default_kimi_model(),
             kimi_strong_model: default_kimi_strong_model(),
             kimi_base_url: default_kimi_base_url(),
-        }
+        })
     }
 }
 
@@ -326,7 +423,8 @@ pub fn load(app: &tauri::AppHandle) -> Result<Settings, String> {
         return Ok(Settings::default());
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("读配置失败: {e}"))?;
-    serde_json::from_str(&content).map_err(|e| format!("解析配置失败: {e}"))
+    let settings = serde_json::from_str(&content).map_err(|e| format!("解析配置失败: {e}"))?;
+    Ok(sanitize_settings(settings))
 }
 
 #[tauri::command]
@@ -376,8 +474,42 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
         current.kimi_api_key = k;
     }
 
+    current = sanitize_settings(current);
     let path = settings_path(&app)?;
     let content =
         serde_json::to_string_pretty(&current).map_err(|e| format!("序列化配置失败: {e}"))?;
     fs::write(&path, content).map_err(|e| format!("写配置失败: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_removed_deepseek_reasoner() {
+        let settings = Settings {
+            provider: "deepseek".to_string(),
+            deepseek_strong_model: "deepseek-reasoner".to_string(),
+            ..Default::default()
+        };
+
+        let sanitized = sanitize_settings(settings);
+
+        assert_eq!(sanitized.provider, "deepseek");
+        assert_eq!(sanitized.deepseek_strong_model, "deepseek-chat");
+    }
+
+    #[test]
+    fn normalize_unknown_provider_and_model() {
+        let settings = Settings {
+            provider: "claude".to_string(),
+            glm_strong_model: "missing-model".to_string(),
+            ..Default::default()
+        };
+
+        let sanitized = sanitize_settings(settings);
+
+        assert_eq!(sanitized.provider, "glm");
+        assert_eq!(sanitized.glm_strong_model, "glm-4.5");
+    }
 }

@@ -997,7 +997,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.cad-card {
+.action-card {
   background: rgb(46 196 182 / var(--glass-alpha-soft));
 }
 
@@ -1081,6 +1081,33 @@ button:disabled {
 .status-readout.bad {
   color: #8d1730;
   background: rgb(255 77 109 / 0.16);
+}
+
+.developer-tools {
+  grid-column: 1 / -1;
+}
+
+.developer-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.25fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.debug-panel {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 12px;
+  border: 2px solid rgb(30 22 51 / 0.32);
+  background: rgb(255 253 245 / calc(var(--glass-alpha-muted) * 0.35 + 0.10));
+}
+
+.debug-panel p {
+  margin: 0;
+  color: rgb(30 22 51 / 0.66);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .metric-grid {
@@ -1611,6 +1638,10 @@ select.settings-input {
   }
 
   .scene-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .developer-grid {
     grid-template-columns: 1fr;
   }
 }

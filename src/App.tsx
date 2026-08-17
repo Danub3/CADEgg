@@ -27,7 +27,14 @@ import type {
   ToolCall,
   View,
 } from "./types";
-import { DEFAULT_VIEW, MODEL_PROVIDERS, MODEL_TIER_LABEL, providerMeta } from "./constants";
+import {
+  DEFAULT_VIEW,
+  MODEL_PROVIDERS,
+  MODEL_TIER_LABEL,
+  providerMeta,
+  type ModelOption,
+  type ModelTier,
+} from "./constants";
 import {
   applyObjectUpdates,
   cloneSessionObjects,
@@ -110,8 +117,8 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   byokFillKey: { "zh-CN": "填写 Key", "en-US": "Set Key" },
   autoFailover: { "zh-CN": "自动轮转", "en-US": "Auto Failover" },
   languageHint: {
-    "zh-CN": "界面语言切换，帮助文档和主要按钮支持中英双语。",
-    "en-US": "UI language toggle. Help docs and key labels support Chinese and English.",
+    "zh-CN": "界面语言切换，覆盖主界面、设置页、帮助文档和主要操作入口。",
+    "en-US": "Switches the main UI, settings, help docs, and primary controls.",
   },
   quickPrompt1: {
     "zh-CN": "画电梯井口防护，井口宽 2000，高 1800",
@@ -134,6 +141,145 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   bridgeIdle: { "zh-CN": "BRIDGE 待测", "en-US": "BRIDGE Idle" },
   sessionTitle: { "zh-CN": "新会话", "en-US": "New Session" },
   saveAppModel: { "zh-CN": "保存应用与模型", "en-US": "Save App & Model" },
+  actionCardTitle: { "zh-CN": "生成操作", "en-US": "Generation" },
+  actionCardDesc: {
+    "zh-CN": "上一轮出图或导入对象会进入撤回栈。",
+    "en-US": "The latest generated or imported objects can be undone.",
+  },
+  undoLast: { "zh-CN": "撤回上一次生成", "en-US": "Undo Last Generation" },
+  undoing: { "zh-CN": "撤回中...", "en-US": "Undoing..." },
+  drawResultTitle: { "zh-CN": "本次出图", "en-US": "Drawing Result" },
+  drawResultPending: { "zh-CN": "等待 AutoCAD 生成结果", "en-US": "Waiting for AutoCAD output" },
+  openingWidth: { "zh-CN": "井口宽度", "en-US": "Opening Width" },
+  openingHeight: { "zh-CN": "井口高度", "en-US": "Opening Height" },
+  guardHeight: { "zh-CN": "防护门高", "en-US": "Guard Height" },
+  toeBoard: { "zh-CN": "踢脚板", "en-US": "Toe Board" },
+  warningSign: { "zh-CN": "警示牌", "en-US": "Warning Sign" },
+  materialTable: { "zh-CN": "材料表", "en-US": "Material Table" },
+  included: { "zh-CN": "已配", "en-US": "Included" },
+  notIncluded: { "zh-CN": "未配", "en-US": "Not Included" },
+  validationTitle: { "zh-CN": "安全校核", "en-US": "Safety Check" },
+  validationPending: {
+    "zh-CN": "校核结果会在工具执行后出现",
+    "en-US": "Validation results appear after tool execution",
+  },
+  validationPassed: { "zh-CN": "安全校核通过", "en-US": "Safety Check Passed" },
+  validationFailed: { "zh-CN": "安全校核未通过", "en-US": "Safety Check Failed" },
+  riskItems: { "zh-CN": "风险项：{items}", "en-US": "Risks: {items}" },
+  materialSummary: {
+    "zh-CN": "材料表：防护门 {guardDoor} · 踢脚板 {toeBoard}mm · 警示牌 {warningSign}",
+    "en-US": "Materials: guard door {guardDoor} · toe board {toeBoard}mm · warning sign {warningSign}",
+  },
+  appSectionTitle: { "zh-CN": "应用", "en-US": "Application" },
+  appSectionDesc: {
+    "zh-CN": "这些选项只影响 CADEgg 前端体验，不会改动 AutoCAD 图形。",
+    "en-US": "These options only affect the CADEgg UI, not AutoCAD drawings.",
+  },
+  languageLabel: { "zh-CN": "界面语言", "en-US": "UI Language" },
+  fontSizeLabel: { "zh-CN": "字体大小", "en-US": "Font Size" },
+  fontSizeHint: {
+    "zh-CN": "拖动时仅预览数值，点击保存后应用到会话文字和输入区。",
+    "en-US": "Drag to preview; saving applies it to messages and the composer.",
+  },
+  storageLabel: { "zh-CN": "存储位置", "en-US": "Storage Location" },
+  storageHint: {
+    "zh-CN": "模型 Key 和模型配置由 Rust 后端保存；当前使用系统 AppData，避免把密钥写入项目目录。",
+    "en-US": "Keys and model settings are stored by the Rust backend in system AppData.",
+  },
+  storageAppData: { "zh-CN": "系统 AppData（推荐）", "en-US": "System AppData (Recommended)" },
+  storageProject: {
+    "zh-CN": "项目目录（仅记录偏好，后端暂不迁移密钥）",
+    "en-US": "Project directory (preference only; keys stay in AppData)",
+  },
+  notificationsLabel: { "zh-CN": "通知", "en-US": "Notifications" },
+  autoSyncLabel: { "zh-CN": "对象自动同步", "en-US": "Auto Sync Objects" },
+  alwaysOnTopLabel: { "zh-CN": "窗口置顶", "en-US": "Always on Top" },
+  reduceMotionLabel: { "zh-CN": "减少动画", "en-US": "Reduce Motion" },
+  densePanelsLabel: { "zh-CN": "紧凑右栏", "en-US": "Dense Right Rail" },
+  glassSectionTitle: { "zh-CN": "外观玻璃", "en-US": "Glass Appearance" },
+  glassSectionDesc: {
+    "zh-CN": "拖动会即时应用并保存；透明度控制透出量，粗糙度控制磨砂感和透后清晰度。",
+    "en-US": "Drag changes apply immediately; transparency controls see-through, roughness controls frost.",
+  },
+  transparencyLabel: { "zh-CN": "透明度", "en-US": "Transparency" },
+  roughnessLabel: { "zh-CN": "粗糙度", "en-US": "Roughness" },
+  borderStyleLabel: { "zh-CN": "边框样式", "en-US": "Border Style" },
+  pixelBorder: { "zh-CN": "像素墨线", "en-US": "Pixel Ink" },
+  glowBorder: { "zh-CN": "柔和发光", "en-US": "Soft Glow" },
+  resetGlass: { "zh-CN": "重置玻璃参数", "en-US": "Reset Glass" },
+  recoverWindow: { "zh-CN": "恢复窗口位置", "en-US": "Recover Window" },
+  windowRecovered: { "zh-CN": "窗口已重新居中", "en-US": "Window recentered" },
+  modelSectionTitle: { "zh-CN": "模型密钥与轮转", "en-US": "Model Keys & Failover" },
+  modelSectionDesc: {
+    "zh-CN": "会话里选择当前模型；这里管理各供应商 BYOK、Base URL 和自动轮转候选。",
+    "en-US": "Select the current model in chat; manage BYOK, Base URL, and failover candidates here.",
+  },
+  modelCardDesc: {
+    "zh-CN": "轻量模型用于普通问答；强模型用于规划、出图、校核。请求失败时后端会自动切换。",
+    "en-US": "Cheap models handle Q&A; strong models handle planning, drawing, and validation.",
+  },
+  baseUrlLabel: { "zh-CN": "API Base URL", "en-US": "API Base URL" },
+  baseUrlHint: {
+    "zh-CN": "兼容 OpenAI /chat/completions 的官方或中转地址。",
+    "en-US": "Official or relay endpoint compatible with OpenAI /chat/completions.",
+  },
+  cheapModelLabel: { "zh-CN": "轻量模型", "en-US": "Cheap Model" },
+  strongModelLabel: { "zh-CN": "强模型", "en-US": "Strong Model" },
+  settingsKeyNote: {
+    "zh-CN": "API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key。",
+    "en-US": "API keys are stored only in local AppData/settings.json and are never shown in full.",
+  },
+  developerToolsTitle: { "zh-CN": "开发者工具", "en-US": "Developer Tools" },
+  developerToolsDesc: {
+    "zh-CN": "这些入口用于本机 AutoCAD 自动化排查，默认不放在右侧用户工作栏。",
+    "en-US": "These controls are for local AutoCAD automation diagnostics.",
+  },
+  cadDebugTitle: { "zh-CN": "CAD 调试", "en-US": "CAD Diagnostics" },
+  cadDebugDesc: {
+    "zh-CN": "连接测试和画线测试只用于验证本机 AutoCAD 自动化链路。",
+    "en-US": "Connection and line tests verify the local AutoCAD automation path.",
+  },
+  connectionTest: { "zh-CN": "连接测试", "en-US": "Connection Test" },
+  drawLineTest: { "zh-CN": "画线测试", "en-US": "Draw Line Test" },
+  sessionObjectsTitle: { "zh-CN": "会话对象 · {count} 个可引用", "en-US": "Session Objects · {count}" },
+  importSelected: { "zh-CN": "导入选中", "en-US": "Import Selection" },
+  importing: { "zh-CN": "导入中", "en-US": "Importing" },
+  syncObjects: { "zh-CN": "同步", "en-US": "Sync" },
+  syncing: { "zh-CN": "同步中", "en-US": "Syncing" },
+  noSessionObjects: {
+    "zh-CN": "在 AutoCAD 中选中对象后可导入当前会话。",
+    "en-US": "Select objects in AutoCAD, then import them into this session.",
+  },
+  newConversation: { "zh-CN": "新建会话", "en-US": "New Chat" },
+  conversations: { "zh-CN": "会话", "en-US": "Chats" },
+  defaultModel: { "zh-CN": "默认模型", "en-US": "Default Model" },
+  deleteSession: { "zh-CN": "删除会话", "en-US": "Delete Chat" },
+  settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
+  minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
+  maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
+  closeWindow: { "zh-CN": "关闭", "en-US": "Close" },
+  send: { "zh-CN": "发送", "en-US": "Send" },
+  providerSelectAria: { "zh-CN": "模型供应商", "en-US": "Model Provider" },
+  sessionModelAria: { "zh-CN": "当前会话模型", "en-US": "Current Session Model" },
+  executionPlan: { "zh-CN": "执行计划", "en-US": "Execution Plan" },
+  stepCount: { "zh-CN": "{count} 步", "en-US": "{count} steps" },
+  confirmExecute: { "zh-CN": "确认执行", "en-US": "Confirm" },
+  confirmedHint: { "zh-CN": "已确认，结果见下方。", "en-US": "Confirmed. Result appears below." },
+  keyWillOverwrite: { "zh-CN": "正在修改，保存后覆盖原 key", "en-US": "Editing; saving will overwrite the key" },
+  keySavedHint: {
+    "zh-CN": "已保存。点右侧按钮修改，原 key 不会被读回前端。",
+    "en-US": "Saved. Use the button to replace it; the original key is never read back.",
+  },
+  keyEmptyHint: {
+    "zh-CN": "本地保存到 AppData，不上传任何服务器。",
+    "en-US": "Stored locally in AppData and never uploaded.",
+  },
+  cancel: { "zh-CN": "取消", "en-US": "Cancel" },
+  keyNotSet: { "zh-CN": "（未设置）", "en-US": "(Not Set)" },
+  modify: { "zh-CN": "修改", "en-US": "Modify" },
+  set: { "zh-CN": "设置", "en-US": "Set" },
+  saved: { "zh-CN": "已保存", "en-US": "Saved" },
+  back: { "zh-CN": "返回", "en-US": "Back" },
 };
 
 function t(key: string, lang: "zh-CN" | "en-US", vars?: Record<string, string>): string {
@@ -144,6 +290,54 @@ function t(key: string, lang: "zh-CN" | "en-US", vars?: Record<string, string>):
     }
   }
   return text;
+}
+
+const PROVIDER_UI: Record<Provider, Record<"zh-CN" | "en-US", { label: string; short: string }>> = {
+  glm: {
+    "zh-CN": { label: "智谱 GLM", short: "GLM" },
+    "en-US": { label: "Zhipu GLM", short: "GLM" },
+  },
+  deepseek: {
+    "zh-CN": { label: "DeepSeek", short: "DeepSeek" },
+    "en-US": { label: "DeepSeek", short: "DeepSeek" },
+  },
+  qwen: {
+    "zh-CN": { label: "通义千问", short: "Qwen" },
+    "en-US": { label: "Qwen", short: "Qwen" },
+  },
+  kimi: {
+    "zh-CN": { label: "Kimi", short: "Kimi" },
+    "en-US": { label: "Kimi", short: "Kimi" },
+  },
+};
+
+const MODEL_UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
+  "glm-4-flash": { "zh-CN": "GLM-4-Flash（免费）", "en-US": "GLM-4-Flash (Free)" },
+  "glm-4.5-flash": { "zh-CN": "GLM-4.5-Flash（免费）", "en-US": "GLM-4.5-Flash (Free)" },
+  "glm-4.5": { "zh-CN": "GLM-4.5（付费）", "en-US": "GLM-4.5 (Paid)" },
+  "glm-4-plus": { "zh-CN": "GLM-4-Plus（付费）", "en-US": "GLM-4-Plus (Paid)" },
+  "deepseek-chat": { "zh-CN": "DeepSeek Chat", "en-US": "DeepSeek Chat" },
+  "qwen-plus": { "zh-CN": "通义千问 Plus", "en-US": "Qwen Plus" },
+  "qwen-turbo": { "zh-CN": "通义千问 Turbo", "en-US": "Qwen Turbo" },
+  "qwen-max": { "zh-CN": "通义千问 Max", "en-US": "Qwen Max" },
+  "moonshot-v1-8k": { "zh-CN": "Kimi 8K", "en-US": "Kimi 8K" },
+  "moonshot-v1-32k": { "zh-CN": "Kimi 32K", "en-US": "Kimi 32K" },
+  "moonshot-v1-128k": { "zh-CN": "Kimi 128K", "en-US": "Kimi 128K" },
+};
+
+function providerDisplay(provider: Provider, lang: "zh-CN" | "en-US", kind: "label" | "short") {
+  return PROVIDER_UI[provider]?.[lang]?.[kind] ?? providerMeta(provider)[kind === "short" ? "shortLabel" : "label"];
+}
+
+function modelDisplay(model: ModelOption, lang: "zh-CN" | "en-US") {
+  return MODEL_UI[model.id]?.[lang] ?? model.label;
+}
+
+function modelTierDisplay(tier: ModelTier, lang: "zh-CN" | "en-US") {
+  if (lang === "en-US") {
+    return tier === "production" ? "Production" : tier === "limited" ? "Limited" : "Not Recommended";
+  }
+  return MODEL_TIER_LABEL[tier];
 }
 
 interface ChatSession {
@@ -179,19 +373,46 @@ function normalizeProvider(value: unknown): Provider {
 }
 
 function normalizeSettingsView(value: Partial<SettingsView>): SettingsView {
-  return {
+  const next = {
     ...DEFAULT_VIEW,
     ...value,
     provider: normalizeProvider(value.provider),
   };
+  for (const provider of MODEL_PROVIDERS) {
+    const cheapFallback = String(DEFAULT_VIEW[provider.cheapModelField] ?? provider.models[0]?.id ?? "");
+    const strongFallback = String(DEFAULT_VIEW[provider.strongModelField] ?? provider.models[0]?.id ?? "");
+    (next as Record<string, unknown>)[provider.cheapModelField] = normalizeModelForProvider(
+      provider.id,
+      next[provider.cheapModelField],
+      cheapFallback
+    );
+    (next as Record<string, unknown>)[provider.strongModelField] = normalizeModelForProvider(
+      provider.id,
+      next[provider.strongModelField],
+      strongFallback
+    );
+  }
+  return next;
+}
+
+function normalizeModelForProvider(provider: Provider, value: unknown, fallback?: unknown) {
+  const meta = providerMeta(provider);
+  const candidate = typeof value === "string" ? value.trim() : "";
+  if (candidate && meta.models.some((item) => item.id === candidate)) return candidate;
+  const fallbackCandidate = typeof fallback === "string" ? fallback.trim() : "";
+  if (fallbackCandidate && meta.models.some((item) => item.id === fallbackCandidate)) {
+    return fallbackCandidate;
+  }
+  return meta.models[0]?.id ?? candidate;
 }
 
 function currentModelFor(settings: SettingsView, provider: Provider = settings.provider) {
   const meta = providerMeta(provider);
-  const value = settings[meta.strongModelField];
-  return typeof value === "string" && value.trim()
-    ? value
-    : String(DEFAULT_VIEW[meta.strongModelField] ?? "");
+  return normalizeModelForProvider(
+    provider,
+    settings[meta.strongModelField],
+    DEFAULT_VIEW[meta.strongModelField]
+  );
 }
 
 function createChatSession(settings: SettingsView): ChatSession {
@@ -219,13 +440,15 @@ function sessionTitleFromMessages(messages: Message[]) {
 
 function normalizeChatSession(value: Partial<ChatSession>, fallback: ChatSession): ChatSession {
   const provider = normalizeProvider(value.provider ?? fallback.provider);
+  const fallbackModel =
+    fallback.provider === provider ? fallback.model : currentModelFor(DEFAULT_VIEW, provider);
   return {
     id: typeof value.id === "string" && value.id ? value.id : fallback.id,
     title: typeof value.title === "string" && value.title ? value.title : fallback.title,
     createdAt: Number(value.createdAt || fallback.createdAt),
     updatedAt: Number(value.updatedAt || fallback.updatedAt),
     provider,
-    model: typeof value.model === "string" && value.model ? value.model : fallback.model,
+    model: normalizeModelForProvider(provider, value.model, fallbackModel),
     messages: Array.isArray(value.messages) ? (value.messages as Message[]) : [],
     sessionObjects: Array.isArray(value.sessionObjects)
       ? (value.sessionObjects as SessionObject[])
@@ -410,8 +633,6 @@ export default function App() {
     initialSessions.sessions[0];
   const [settings, setSettings] = useState<SettingsView>({
     ...DEFAULT_VIEW,
-    provider: initialSession.provider,
-    [providerMeta(initialSession.provider).strongModelField]: initialSession.model,
   });
   const [sessions, setSessions] = useState<ChatSession[]>(initialSessions.sessions);
   const [activeSessionId, setActiveSessionId] = useState(initialSession.id);
@@ -502,17 +723,7 @@ export default function App() {
   async function refreshSettings() {
     try {
       const s = await invoke<SettingsView>("get_settings");
-      setSettings((prev) => {
-        const next = normalizeSettingsView(s);
-        const active = sessions.find((session) => session.id === activeSessionId);
-        if (!active) return next;
-        const meta = providerMeta(active.provider);
-        return {
-          ...next,
-          provider: active.provider,
-          [meta.strongModelField]: active.model || prev[meta.strongModelField],
-        };
-      });
+      setSettings(normalizeSettingsView(s));
       setGlmKeyDraft(null);
       setDeepseekKeyDraft(null);
       setQwenKeyDraft(null);
@@ -562,8 +773,6 @@ export default function App() {
   useEffect(() => {
     const now = Date.now();
     const title = sessionTitleFromMessages(messages);
-    const provider = settings.provider;
-    const model = currentModelFor(settings, provider);
     setSessions((prev) =>
       prev
         .map((session) =>
@@ -572,8 +781,6 @@ export default function App() {
                 ...session,
                 title,
                 updatedAt: now,
-                provider,
-                model,
                 messages,
                 sessionObjects,
                 demoLog,
@@ -591,11 +798,6 @@ export default function App() {
     demoLog,
     lastValidation,
     lastDrawParams,
-    settings.provider,
-    settings.glm_strong_model,
-    settings.deepseek_strong_model,
-    settings.qwen_strong_model,
-    settings.kimi_strong_model,
   ]);
 
   useEffect(() => {
@@ -788,6 +990,10 @@ export default function App() {
         userInput: text,
         history: buildHistoryPayload(messages),
         sessionObjects: syncedObjects,
+        modelSelection: {
+          provider: activeProvider,
+          model: activeModel,
+        },
       });
     } catch (e) {
       pendingUndoSnapshotRef.current = null;
@@ -997,14 +1203,6 @@ export default function App() {
     setLastDrawParams(session.lastDrawParams);
     setInput("");
     setErrorMsg(null);
-    const meta = providerMeta(session.provider);
-    const nextSettings = {
-      ...settings,
-      provider: session.provider,
-      [meta.strongModelField]: session.model || settings[meta.strongModelField],
-    };
-    setSettings(nextSettings);
-    void saveSettings(nextSettings).catch((e) => setErrorMsg(String(e)));
   }
 
   function handleNewConversation() {
@@ -1034,19 +1232,14 @@ export default function App() {
   }
 
   async function handleModelChange(provider: Provider, model: string) {
-    const meta = providerMeta(provider);
-    const nextSettings = {
-      ...settings,
-      provider,
-      [meta.strongModelField]: model,
-    };
-    setSettings(nextSettings);
+    const nextModel = normalizeModelForProvider(provider, model, currentModelFor(settings, provider));
     setSessions((prev) =>
       prev.map((s) =>
-        s.id === activeSessionId ? { ...s, provider, model, updatedAt: Date.now() } : s,
+        s.id === activeSessionId
+          ? { ...s, provider, model: nextModel, updatedAt: Date.now() }
+          : s,
       ),
     );
-    await saveSettings(nextSettings);
   }
 
   async function recoverWindow(message?: string) {
@@ -1084,8 +1277,15 @@ export default function App() {
     }
   }
 
-  const selectedProviderMeta = providerMeta(settings.provider);
-  const providerLabel = selectedProviderMeta.shortLabel;
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const activeProvider = normalizeProvider(activeSession?.provider ?? settings.provider);
+  const activeModel = normalizeModelForProvider(
+    activeProvider,
+    activeSession?.model,
+    currentModelFor(settings, activeProvider)
+  );
+  const selectedProviderMeta = providerMeta(activeProvider);
+  const providerLabel = providerDisplay(activeProvider, appPreferences.language, "short");
   const bridgeState =
     testStatus === null ? "idle" : testStatus.ok ? "online" : "error";
   const bridgeLabel =
@@ -1144,13 +1344,25 @@ export default function App() {
             {t("helpButton", appPreferences.language)}
           </button>
           <div className="window-controls" data-no-drag onMouseDown={(e) => e.stopPropagation()}>
-            <button type="button" onClick={() => void runWindowAction("minimize")} aria-label="最小化">
+            <button
+              type="button"
+              onClick={() => void runWindowAction("minimize")}
+              aria-label={t("minimizeWindow", appPreferences.language)}
+            >
               <span />
             </button>
-            <button type="button" onClick={() => void runWindowAction("toggleMaximize")} aria-label="最大化">
+            <button
+              type="button"
+              onClick={() => void runWindowAction("toggleMaximize")}
+              aria-label={t("maximizeWindow", appPreferences.language)}
+            >
               <span />
             </button>
-            <button type="button" onClick={() => void runWindowAction("close")} aria-label="关闭">
+            <button
+              type="button"
+              onClick={() => void runWindowAction("close")}
+              aria-label={t("closeWindow", appPreferences.language)}
+            >
               <span />
             </button>
           </div>
@@ -1166,11 +1378,11 @@ export default function App() {
         <aside className="sidebar glass-panel pink-glass">
           <button type="button" className="new-session-button" onClick={handleNewConversation}>
             <IconPlus />
-            <span>新建会话</span>
+            <span>{t("newConversation", appPreferences.language)}</span>
           </button>
 
           <div className="sidebar-section">
-            <div className="section-label">会话</div>
+            <div className="section-label">{t("conversations", appPreferences.language)}</div>
             {sessions.map((session) => (
               <button
                 type="button"
@@ -1180,13 +1392,14 @@ export default function App() {
               >
                 <strong>{session.title}</strong>
                 <span>
-                  {providerMeta(session.provider).shortLabel} · {session.model || "默认模型"}
+                  {providerDisplay(session.provider, appPreferences.language, "short")} ·{" "}
+                  {session.model || t("defaultModel", appPreferences.language)}
                 </span>
                 {sessions.length > 1 && (
                   <i
                     role="button"
                     tabIndex={0}
-                    aria-label="删除会话"
+                    aria-label={t("deleteSession", appPreferences.language)}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteSession(session.id);
@@ -1210,7 +1423,7 @@ export default function App() {
 
           <button type="button" className="sidebar-settings" onClick={() => setView("settings")}>
             <IconGear />
-            <span>设置</span>
+            <span>{t("settingsNav", appPreferences.language)}</span>
             <span>v0.3.4</span>
           </button>
         </aside>
@@ -1227,7 +1440,9 @@ export default function App() {
                 language={appPreferences.language}
               />
             ) : (
-              messages.map((m, i) => renderMessage(m, i, handleConfirmToolCall, completedToolIds))
+              messages.map((m, i) =>
+                renderMessage(m, i, handleConfirmToolCall, completedToolIds, appPreferences.language)
+              )
             )}
 
             {sending && (
@@ -1238,7 +1453,7 @@ export default function App() {
                     {assistantDraft}
                   </div>
                 ) : (
-                  <div className="typing-indicator" aria-label="正在分析">
+                  <div className="typing-indicator" aria-label={t("thinkingLabel", appPreferences.language)}>
                     <span />
                     <span />
                     <span />
@@ -1254,6 +1469,8 @@ export default function App() {
           <form className="composer glass-panel amber-glass" onSubmit={handleSubmit}>
             <ModelPicker
               settings={settings}
+              provider={activeProvider}
+              model={activeModel}
               currentKeySet={currentKeySet}
               onModelChange={handleModelChange}
               onOpenSettings={() => setView("settings")}
@@ -1279,7 +1496,11 @@ export default function App() {
             />
             <div className="composer-side">
               <span>{providerLabel}</span>
-              <button type="submit" disabled={!input.trim() || sending} aria-label="发送">
+              <button
+                type="submit"
+                disabled={!input.trim() || sending}
+                aria-label={t("send", appPreferences.language)}
+              >
                 <IconSend />
               </button>
             </div>
@@ -1287,26 +1508,15 @@ export default function App() {
         </section>
 
         <aside className="right-rail glass-panel lavender-glass">
-          <CadCard
-            testStatus={testStatus}
-            undoing={undoing}
-            sending={sending}
-            syncingObjects={syncingObjects}
-            runCadAction={runCadAction}
+          <GenerationActionsCard
             handleUndoLastGeneration={handleUndoLastGeneration}
-          />
-          <DrawResultCard lastDrawParams={lastDrawParams} />
-          <ValidationCard lastValidation={lastValidation} />
-          <SessionObjectsCard
-            sessionObjects={sessionObjects}
-            objectReferenceHints={objectReferenceHints}
             sending={sending}
             undoing={undoing}
             syncingObjects={syncingObjects}
-            importingSelection={importingSelection}
-            handleImportSelectedObjects={handleImportSelectedObjects}
-            syncSessionObjects={syncSessionObjects}
+            language={appPreferences.language}
           />
+          <DrawResultCard lastDrawParams={lastDrawParams} language={appPreferences.language} />
+          <ValidationCard lastValidation={lastValidation} language={appPreferences.language} />
         </aside>
       </div>
 
@@ -1329,6 +1539,16 @@ export default function App() {
           kimiKeyDraft={kimiKeyDraft}
           setKimiKeyDraft={setKimiKeyDraft}
           onRecoverWindow={recoverWindow}
+          testStatus={testStatus}
+          sessionObjects={sessionObjects}
+          objectReferenceHints={objectReferenceHints}
+          sending={sending}
+          undoing={undoing}
+          syncingObjects={syncingObjects}
+          importingSelection={importingSelection}
+          runCadAction={runCadAction}
+          handleImportSelectedObjects={handleImportSelectedObjects}
+          syncSessionObjects={syncSessionObjects}
           onClose={() => setView("chat")}
         />
       )}
@@ -1345,53 +1565,57 @@ export default function App() {
 
 function ModelPicker({
   settings,
+  provider,
+  model,
   currentKeySet,
   onModelChange,
   onOpenSettings,
   language,
 }: {
   settings: SettingsView;
+  provider: Provider;
+  model: string;
   currentKeySet: boolean;
   onModelChange: (provider: Provider, model: string) => Promise<void>;
   onOpenSettings: () => void;
   language: "zh-CN" | "en-US";
 }) {
-  const meta = providerMeta(settings.provider);
-  const model = currentModelFor(settings);
+  const meta = providerMeta(provider);
   const hasPreset = meta.models.some((item) => item.id === model);
 
   return (
     <div className="model-picker" data-no-drag>
       <select
-        aria-label="模型供应商"
-        value={settings.provider}
+        aria-label={t("providerSelectAria", language)}
+        value={provider}
         onChange={(e) => {
-          const provider = e.target.value as Provider;
-          const nextMeta = providerMeta(provider);
+          const nextProvider = e.target.value as Provider;
+          const nextMeta = providerMeta(nextProvider);
           const nextModel = String(settings[nextMeta.strongModelField] || nextMeta.models[0].id);
-          void onModelChange(provider, nextModel);
+          void onModelChange(nextProvider, nextModel);
         }}
       >
         {MODEL_PROVIDERS.map((provider) => (
           <option key={provider.id} value={provider.id}>
-            {provider.label}
+            {providerDisplay(provider.id, language, "label")}
           </option>
         ))}
       </select>
 
       <select
-        aria-label="当前会话模型"
+        aria-label={t("sessionModelAria", language)}
         value={hasPreset ? model : "__custom"}
         onChange={(e) => {
           if (e.target.value !== "__custom") {
-            void onModelChange(settings.provider, e.target.value);
+            void onModelChange(provider, e.target.value);
           }
         }}
       >
         {!hasPreset && <option value="__custom">{model}</option>}
         {meta.models.map((item) => (
           <option key={item.id} value={item.id}>
-            {item.label}{item.tier !== "production" ? ` (${MODEL_TIER_LABEL[item.tier]})` : ""}
+            {modelDisplay(item, language)}
+            {item.tier !== "production" ? ` (${modelTierDisplay(item.tier, language)})` : ""}
           </option>
         ))}
       </select>
@@ -1449,41 +1673,56 @@ function WelcomeStage({
   );
 }
 
-function CadCard({
-  testStatus,
+function GenerationActionsCard({
   undoing,
   sending,
   syncingObjects,
-  runCadAction,
   handleUndoLastGeneration,
+  language,
 }: {
-  testStatus: { ok: boolean; msg: string } | null;
   undoing: boolean;
   sending: boolean;
   syncingObjects: boolean;
-  runCadAction: (cmd: "test_cad_connection" | "draw_test_line") => Promise<void>;
   handleUndoLastGeneration: () => Promise<void>;
+  language: "zh-CN" | "en-US";
 }) {
   return (
-    <section className="rail-card cad-card">
-      <PanelHeader title="CAD 连接" status={testStatus?.ok ? "online" : "idle"} />
-      <p>桥接优先 · COM 回退</p>
-      <div className="button-row">
-        <button type="button" onClick={() => runCadAction("test_cad_connection")}>
-          连接
-        </button>
-        <button type="button" onClick={() => runCadAction("draw_test_line")}>
-          画线
-        </button>
-      </div>
+    <section className="rail-card action-card">
+      <PanelHeader title={t("actionCardTitle", language)} />
+      <p>{t("actionCardDesc", language)}</p>
       <button
         type="button"
         className="dark-action"
         onClick={handleUndoLastGeneration}
         disabled={sending || undoing || syncingObjects}
       >
-        {undoing ? "撤回中..." : "撤回上一次生成"}
+        {undoing ? t("undoing", language) : t("undoLast", language)}
       </button>
+    </section>
+  );
+}
+
+function CadDebugCard({
+  testStatus,
+  runCadAction,
+  language,
+}: {
+  testStatus: { ok: boolean; msg: string } | null;
+  runCadAction: (cmd: "test_cad_connection" | "draw_test_line") => Promise<void>;
+  language: "zh-CN" | "en-US";
+}) {
+  return (
+    <section className="debug-panel">
+      <PanelHeader title={t("cadDebugTitle", language)} status={testStatus?.ok ? "online" : "idle"} />
+      <p>{t("cadDebugDesc", language)}</p>
+      <div className="button-row">
+        <button type="button" onClick={() => runCadAction("test_cad_connection")}>
+          {t("connectionTest", language)}
+        </button>
+        <button type="button" onClick={() => runCadAction("draw_test_line")}>
+          {t("drawLineTest", language)}
+        </button>
+      </div>
       {testStatus && (
         <div className={`status-readout ${testStatus.ok ? "ok" : "bad"}`}>{testStatus.msg}</div>
       )}
@@ -1493,30 +1732,38 @@ function CadCard({
 
 function DrawResultCard({
   lastDrawParams,
+  language,
 }: {
   lastDrawParams: Record<string, unknown> | null;
+  language: "zh-CN" | "en-US";
 }) {
   if (!lastDrawParams) {
     return (
       <section className="rail-card muted-card">
-        <PanelHeader title="本次出图" />
-        <p>等待 AutoCAD 生成结果</p>
+        <PanelHeader title={t("drawResultTitle", language)} />
+        <p>{t("drawResultPending", language)}</p>
       </section>
     );
   }
 
   return (
     <section className="rail-card">
-      <PanelHeader title="本次出图" />
+      <PanelHeader title={t("drawResultTitle", language)} />
       <div className="metric-grid">
-        <Metric label="井口宽度" value={`${String(lastDrawParams.opening_width ?? "-")} mm`} />
-        <Metric label="井口高度" value={`${String(lastDrawParams.opening_height ?? "-")} mm`} />
-        <Metric label="防护门高" value={`${String(lastDrawParams.guard_height ?? "1500")} mm`} />
-        <Metric label="踢脚板" value={`${String(lastDrawParams.toe_board_height ?? "200")} mm`} />
+        <Metric label={t("openingWidth", language)} value={`${String(lastDrawParams.opening_width ?? "-")} mm`} />
+        <Metric label={t("openingHeight", language)} value={`${String(lastDrawParams.opening_height ?? "-")} mm`} />
+        <Metric label={t("guardHeight", language)} value={`${String(lastDrawParams.guard_height ?? "1500")} mm`} />
+        <Metric label={t("toeBoard", language)} value={`${String(lastDrawParams.toe_board_height ?? "200")} mm`} />
       </div>
       <div className="tag-row">
-        <span>警示牌 {lastDrawParams.include_warning_sign === false ? "未配" : "已配"}</span>
-        <span>材料表 {lastDrawParams.include_material_table === false ? "未配" : "已配"}</span>
+        <span>
+          {t("warningSign", language)}{" "}
+          {lastDrawParams.include_warning_sign === false ? t("notIncluded", language) : t("included", language)}
+        </span>
+        <span>
+          {t("materialTable", language)}{" "}
+          {lastDrawParams.include_material_table === false ? t("notIncluded", language) : t("included", language)}
+        </span>
       </div>
     </section>
   );
@@ -1524,22 +1771,24 @@ function DrawResultCard({
 
 function ValidationCard({
   lastValidation,
+  language,
 }: {
   lastValidation: ElevatorValidation | null;
+  language: "zh-CN" | "en-US";
 }) {
   if (!lastValidation) {
     return (
       <section className="rail-card muted-card">
-        <PanelHeader title="安全校核" />
-        <p>校核结果会在工具执行后出现</p>
+        <PanelHeader title={t("validationTitle", language)} />
+        <p>{t("validationPending", language)}</p>
       </section>
     );
   }
 
   return (
     <section className={`rail-card validation-card ${lastValidation.ok ? "valid" : "invalid"}`}>
-      <PanelHeader title="安全校核" status={lastValidation.ok ? "online" : "error"} />
-      <strong>{lastValidation.ok ? "安全校核通过" : "安全校核未通过"}</strong>
+      <PanelHeader title={t("validationTitle", language)} status={lastValidation.ok ? "online" : "error"} />
+      <strong>{lastValidation.ok ? t("validationPassed", language) : t("validationFailed", language)}</strong>
       <div className="check-list">
         {lastValidation.checks.map((check) => (
           <div key={check.id}>
@@ -1551,12 +1800,18 @@ function ValidationCard({
         ))}
       </div>
       {lastValidation.issues.length > 0 && (
-        <div className="risk-box">风险项：{lastValidation.issues.join("；")}</div>
+        <div className="risk-box">
+          {t("riskItems", language, { items: lastValidation.issues.join(language === "zh-CN" ? "；" : "; ") })}
+        </div>
       )}
       <p>
-        材料表：防护门 {lastValidation.material_table.guard_door} · 踢脚板{" "}
-        {lastValidation.material_table.toe_board_height}mm · 警示牌{" "}
-        {lastValidation.material_table.warning_sign ? "已配" : "未配"}
+        {t("materialSummary", language, {
+          guardDoor: lastValidation.material_table.guard_door,
+          toeBoard: String(lastValidation.material_table.toe_board_height),
+          warningSign: lastValidation.material_table.warning_sign
+            ? t("included", language)
+            : t("notIncluded", language),
+        })}
       </p>
     </section>
   );
@@ -1571,6 +1826,7 @@ function SessionObjectsCard({
   importingSelection,
   handleImportSelectedObjects,
   syncSessionObjects,
+  language,
 }: {
   sessionObjects: SessionObject[];
   objectReferenceHints: Map<string, string[]>;
@@ -1580,24 +1836,27 @@ function SessionObjectsCard({
   importingSelection: boolean;
   handleImportSelectedObjects: () => Promise<void>;
   syncSessionObjects: (showStatus: boolean) => Promise<SessionObject[] | null>;
+  language: "zh-CN" | "en-US";
 }) {
   return (
     <section className="rail-card object-card">
-      <PanelHeader title={`会话对象 · ${sessionObjects.length} 个可引用`} />
+      <PanelHeader
+        title={t("sessionObjectsTitle", language, { count: String(sessionObjects.length) })}
+      />
       <div className="button-row">
         <button
           type="button"
           onClick={handleImportSelectedObjects}
           disabled={sending || undoing || syncingObjects || importingSelection}
         >
-          {importingSelection ? "导入中" : "导入选中"}
+          {importingSelection ? t("importing", language) : t("importSelected", language)}
         </button>
         <button
           type="button"
           onClick={() => void syncSessionObjects(true)}
           disabled={sending || undoing || syncingObjects || importingSelection || sessionObjects.length === 0}
         >
-          {syncingObjects ? "同步中" : "同步"}
+          {syncingObjects ? t("syncing", language) : t("syncObjects", language)}
         </button>
       </div>
 
@@ -1620,7 +1879,7 @@ function SessionObjectsCard({
           ))}
         </div>
       ) : (
-        <p>在 AutoCAD 中选中对象后可导入当前会话。</p>
+        <p>{t("noSessionObjects", language)}</p>
       )}
     </section>
   );
@@ -1644,6 +1903,16 @@ function SettingsModal({
   kimiKeyDraft,
   setKimiKeyDraft,
   onRecoverWindow,
+  testStatus,
+  sessionObjects,
+  objectReferenceHints,
+  sending,
+  undoing,
+  syncingObjects,
+  importingSelection,
+  runCadAction,
+  handleImportSelectedObjects,
+  syncSessionObjects,
   onClose,
 }: {
   settings: SettingsView;
@@ -1663,6 +1932,16 @@ function SettingsModal({
   kimiKeyDraft: string | null;
   setKimiKeyDraft: (v: string | null) => void;
   onRecoverWindow: (message?: string) => Promise<void>;
+  testStatus: { ok: boolean; msg: string } | null;
+  sessionObjects: SessionObject[];
+  objectReferenceHints: Map<string, string[]>;
+  sending: boolean;
+  undoing: boolean;
+  syncingObjects: boolean;
+  importingSelection: boolean;
+  runCadAction: (cmd: "test_cad_connection" | "draw_test_line") => Promise<void>;
+  handleImportSelectedObjects: () => Promise<void>;
+  syncSessionObjects: (showStatus: boolean) => Promise<SessionObject[] | null>;
   onClose: () => void;
 }) {
   const [draftAppPreferences, setDraftAppPreferences] = useState<AppPreferences>(() =>
@@ -1742,15 +2021,21 @@ function SettingsModal({
     };
   }
 
+  const language = draftAppPreferences.language;
+
   return (
     <div className={`modal-backdrop ${isPreviewingGlass ? "previewing-glass" : ""}`}>
       <section className="settings-modal glass-modal" role="dialog" aria-modal="true">
-        <ModalHeader title="总设置" onClose={onClose} />
+        <ModalHeader
+          title={t("settingsTitle", language)}
+          onClose={onClose}
+          closeLabel={t("closeWindow", language)}
+        />
 
         <div className="settings-content">
           <section className="settings-group">
-            <GroupHeader title="应用" desc="这些选项只影响 CADEgg 前端体验，不会改动 AutoCAD 图形。" />
-            <Field label="界面语言" hint={t("languageHint", draftAppPreferences.language)}>
+            <GroupHeader title={t("appSectionTitle", language)} desc={t("appSectionDesc", language)} />
+            <Field label={t("languageLabel", language)} hint={t("languageHint", language)}>
               <select
                 className={inputCls}
                 value={draftAppPreferences.language}
@@ -1766,9 +2051,9 @@ function SettingsModal({
               </select>
             </Field>
 
-            <Field label="字体大小" hint="拖动时仅预览数值，点击保存后应用到会话文字和输入区。">
+            <Field label={t("fontSizeLabel", language)} hint={t("fontSizeHint", language)}>
               <StableRange
-                ariaLabel="字体大小"
+                ariaLabel={t("fontSizeLabel", language)}
                 className="inline-slider"
                 min={12}
                 max={18}
@@ -1783,7 +2068,7 @@ function SettingsModal({
               />
             </Field>
 
-            <Field label="存储位置" hint="模型 Key 和模型配置由 Rust 后端保存；当前使用系统 AppData，避免把密钥写入项目目录。">
+            <Field label={t("storageLabel", language)} hint={t("storageHint", language)}>
               <select
                 className={inputCls}
                 value={draftAppPreferences.storageLocation}
@@ -1794,42 +2079,42 @@ function SettingsModal({
                   }))
                 }
               >
-                <option value="appdata">系统 AppData（推荐）</option>
-                <option value="project">项目目录（仅记录偏好，后端暂不迁移密钥）</option>
+                <option value="appdata">{t("storageAppData", language)}</option>
+                <option value="project">{t("storageProject", language)}</option>
               </select>
             </Field>
 
             <div className="switch-grid">
               <SwitchField
-                label="通知"
+                label={t("notificationsLabel", language)}
                 checked={draftAppPreferences.notifications}
                 onChange={(checked) =>
                   setDraftAppPreferences((prev) => ({ ...prev, notifications: checked }))
                 }
               />
               <SwitchField
-                label="对象自动同步"
+                label={t("autoSyncLabel", language)}
                 checked={draftAppPreferences.autoSyncObjects}
                 onChange={(checked) =>
                   setDraftAppPreferences((prev) => ({ ...prev, autoSyncObjects: checked }))
                 }
               />
               <SwitchField
-                label="窗口置顶"
+                label={t("alwaysOnTopLabel", language)}
                 checked={draftAppPreferences.alwaysOnTop}
                 onChange={(checked) =>
                   setDraftAppPreferences((prev) => ({ ...prev, alwaysOnTop: checked }))
                 }
               />
               <SwitchField
-                label="减少动画"
+                label={t("reduceMotionLabel", language)}
                 checked={draftAppPreferences.reduceMotion}
                 onChange={(checked) =>
                   setDraftAppPreferences((prev) => ({ ...prev, reduceMotion: checked }))
                 }
               />
               <SwitchField
-                label="紧凑右栏"
+                label={t("densePanelsLabel", language)}
                 checked={draftAppPreferences.densePanels}
                 onChange={(checked) =>
                   setDraftAppPreferences((prev) => ({ ...prev, densePanels: checked }))
@@ -1840,11 +2125,11 @@ function SettingsModal({
 
           <section className="settings-group">
             <GroupHeader
-              title="外观玻璃"
-              desc="拖动会即时应用并保存；透明度控制透出量，粗糙度控制磨砂感和透后清晰度。"
+              title={t("glassSectionTitle", language)}
+              desc={t("glassSectionDesc", language)}
             />
             <StableRange
-              label="透明度"
+              label={t("transparencyLabel", language)}
               min={0}
               max={90}
               value={draftGlassSettings.transparency}
@@ -1855,7 +2140,7 @@ function SettingsModal({
             />
 
             <StableRange
-              label="粗糙度"
+              label={t("roughnessLabel", language)}
               min={0}
               max={100}
               value={draftGlassSettings.blur}
@@ -1866,21 +2151,21 @@ function SettingsModal({
             />
 
             <div className="border-style-field">
-              <span>边框样式</span>
+              <span>{t("borderStyleLabel", language)}</span>
               <div className="segmented">
                 <button
                   type="button"
                   className={draftGlassSettings.border === "pixel" ? "active" : ""}
                   onClick={() => commitGlassSettings({ border: "pixel" })}
                 >
-                  像素墨线
+                  {t("pixelBorder", language)}
                 </button>
                 <button
                   type="button"
                   className={draftGlassSettings.border === "glow" ? "active" : ""}
                   onClick={() => commitGlassSettings({ border: "glow" })}
                 >
-                  柔和发光
+                  {t("glowBorder", language)}
                 </button>
               </div>
             </div>
@@ -1890,21 +2175,21 @@ function SettingsModal({
               className="outline-action reset-glass"
               onClick={() => commitGlassSettings(DEFAULT_GLASS_SETTINGS)}
             >
-              重置玻璃参数
+              {t("resetGlass", language)}
             </button>
             <button
               type="button"
               className="outline-action reset-glass"
-              onClick={() => void onRecoverWindow("窗口已重新居中")}
+              onClick={() => void onRecoverWindow(t("windowRecovered", language))}
             >
-              恢复窗口位置
+              {t("recoverWindow", language)}
             </button>
           </section>
 
           <section className="settings-group">
             <GroupHeader
-              title="模型密钥与轮转"
-              desc="会话里选择当前模型；这里管理各供应商 BYOK、Base URL 和自动轮转候选。"
+              title={t("modelSectionTitle", language)}
+              desc={t("modelSectionDesc", language)}
             />
             <div className="provider-settings-list">
               {MODEL_PROVIDERS.map((provider) => {
@@ -1918,8 +2203,8 @@ function SettingsModal({
                 return (
                   <section className="provider-settings-card" key={provider.id}>
                     <GroupHeader
-                      title={provider.label}
-                      desc="轻量模型用于普通问答；强模型用于规划、出图、校核。请求失败时后端会自动切换。"
+                      title={providerDisplay(provider.id, language, "label")}
+                      desc={t("modelCardDesc", language)}
                     />
                     <KeyField
                       label={provider.apiLabel}
@@ -1928,8 +2213,9 @@ function SettingsModal({
                       draft={keyDraft.draft}
                       onDraftChange={keyDraft.setDraft}
                       placeholder={keyDraft.placeholder}
+                      language={language}
                     />
-                    <Field label="API Base URL" hint="兼容 OpenAI /chat/completions 的官方或中转地址。">
+                    <Field label={t("baseUrlLabel", language)} hint={t("baseUrlHint", language)}>
                       <input
                         type="text"
                         className={inputCls}
@@ -1939,7 +2225,7 @@ function SettingsModal({
                         }
                       />
                     </Field>
-                    <Field label="轻量模型">
+                    <Field label={t("cheapModelLabel", language)}>
                       <select
                         className={inputCls}
                         value={cheapModel}
@@ -1949,12 +2235,13 @@ function SettingsModal({
                       >
                         {provider.models.map((model) => (
                           <option key={model.id} value={model.id}>
-                            {model.label}{model.tier !== "production" ? ` (${MODEL_TIER_LABEL[model.tier]})` : ""}
+                            {modelDisplay(model, language)}
+                            {model.tier !== "production" ? ` (${modelTierDisplay(model.tier, language)})` : ""}
                           </option>
                         ))}
                       </select>
                     </Field>
-                    <Field label="强模型">
+                    <Field label={t("strongModelLabel", language)}>
                       <select
                         className={inputCls}
                         value={strongModel}
@@ -1964,7 +2251,8 @@ function SettingsModal({
                       >
                         {provider.models.map((model) => (
                           <option key={model.id} value={model.id}>
-                            {model.label}{model.tier !== "production" ? ` (${MODEL_TIER_LABEL[model.tier]})` : ""}
+                            {modelDisplay(model, language)}
+                            {model.tier !== "production" ? ` (${modelTierDisplay(model.tier, language)})` : ""}
                           </option>
                         ))}
                       </select>
@@ -1975,18 +2263,43 @@ function SettingsModal({
             </div>
 
             <p className="settings-note">
-              API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key。
+              {t("settingsKeyNote", language)}
             </p>
+          </section>
+
+          <section className="settings-group developer-tools">
+            <GroupHeader
+              title={t("developerToolsTitle", language)}
+              desc={t("developerToolsDesc", language)}
+            />
+            <div className="developer-grid">
+              <CadDebugCard
+                testStatus={testStatus}
+                runCadAction={runCadAction}
+                language={draftAppPreferences.language}
+              />
+              <SessionObjectsCard
+                sessionObjects={sessionObjects}
+                objectReferenceHints={objectReferenceHints}
+                sending={sending}
+                undoing={undoing}
+                syncingObjects={syncingObjects}
+                importingSelection={importingSelection}
+                handleImportSelectedObjects={handleImportSelectedObjects}
+                syncSessionObjects={syncSessionObjects}
+                language={draftAppPreferences.language}
+              />
+            </div>
           </section>
         </div>
 
         <div className="modal-footer">
-          <span>{savedHint ? "已保存" : ""}</span>
+          <span>{savedHint ? t("saved", language) : ""}</span>
           <button type="button" className="outline-action" onClick={onClose}>
-            返回
+            {t("back", language)}
           </button>
           <button type="button" className="primary-action" onClick={() => void handleSaveAll()}>
-            {t("saveAppModel", appPreferences.language)}
+            {t("saveAppModel", language)}
           </button>
         </div>
       </section>
@@ -1998,7 +2311,8 @@ function renderMessage(
   m: Message,
   i: number,
   onConfirmToolCall: (messageIndex: number, call: ToolCall) => void,
-  completedToolIds: Set<string>
+  completedToolIds: Set<string>,
+  language: "zh-CN" | "en-US"
 ) {
   if (m.role === "user") {
     return (
@@ -2012,7 +2326,7 @@ function renderMessage(
     return (
       <details key={i} className="message-bubble plan-message" open>
         <summary>
-          执行计划 · {m.tool_calls.length} 步 · {planSummary(m.tool_calls)}
+          {t("executionPlan", language)} · {t("stepCount", language, { count: String(m.tool_calls.length) })} · {planSummary(m.tool_calls)}
         </summary>
         {m.text && <div className="message-text">{m.text}</div>}
         <div className="tool-call-list">
@@ -2058,10 +2372,10 @@ function renderMessage(
       <span>{m.content}</span>
       {m.confirmation_required && m.pending_call && !m.confirmed && (
         <button type="button" onClick={() => onConfirmToolCall(i, m.pending_call!)}>
-          确认执行
+          {t("confirmExecute", language)}
         </button>
       )}
-      {m.confirmation_required && m.confirmed && <em>已确认，结果见下方。</em>}
+      {m.confirmation_required && m.confirmed && <em>{t("confirmedHint", language)}</em>}
     </div>
   );
 }
@@ -2099,11 +2413,19 @@ function StatusPill({ state, label }: { state: "online" | "error" | "idle"; labe
   );
 }
 
-function ModalHeader({ title, onClose }: { title: string; onClose: () => void }) {
+function ModalHeader({
+  title,
+  onClose,
+  closeLabel = "关闭",
+}: {
+  title: string;
+  onClose: () => void;
+  closeLabel?: string;
+}) {
   return (
     <header className="modal-header">
       <h2>{title}</h2>
-      <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+      <button type="button" className="icon-button" onClick={onClose} aria-label={closeLabel}>
         <IconCross />
       </button>
     </header>
@@ -2119,6 +2441,7 @@ function KeyField({
   draft,
   onDraftChange,
   placeholder,
+  language,
 }: {
   label: string;
   isSet: boolean;
@@ -2126,13 +2449,14 @@ function KeyField({
   draft: string | null;
   onDraftChange: (v: string | null) => void;
   placeholder: string;
+  language: "zh-CN" | "en-US";
 }) {
   const editing = draft !== null;
   const hint = isSet
     ? editing
-      ? "正在修改，保存后覆盖原 key"
-      : "已保存。点右侧按钮修改，原 key 不会被读回前端。"
-    : "本地保存到 AppData，不上传任何服务器。";
+      ? t("keyWillOverwrite", language)
+      : t("keySavedHint", language)
+    : t("keyEmptyHint", language);
 
   return (
     <Field label={label} hint={hint}>
@@ -2149,14 +2473,14 @@ function KeyField({
             autoFocus
           />
           <button type="button" className="outline-action" onClick={() => onDraftChange(null)}>
-            取消
+            {t("cancel", language)}
           </button>
         </div>
       ) : (
         <div className="key-edit-row">
-          <div className={`${inputCls} key-preview`}>{isSet ? preview : "（未设置）"}</div>
+          <div className={`${inputCls} key-preview`}>{isSet ? preview : t("keyNotSet", language)}</div>
           <button type="button" className="outline-action" onClick={() => onDraftChange("")}>
-            {isSet ? "修改" : "设置"}
+            {isSet ? t("modify", language) : t("set", language)}
           </button>
         </div>
       )}
@@ -2456,7 +2780,11 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
   return (
     <div className="modal-backdrop">
       <section className="settings-modal glass-modal help-panel" role="dialog" aria-modal="true">
-        <ModalHeader title={isZh ? "帮助与说明" : "Help & Guide"} onClose={onClose} />
+        <ModalHeader
+          title={isZh ? "帮助与说明" : "Help & Guide"}
+          onClose={onClose}
+          closeLabel={t("closeWindow", language)}
+        />
 
         <div className="settings-content">
           {/* Model Evaluation */}

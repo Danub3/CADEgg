@@ -83,6 +83,12 @@ pub enum MessageView {
     },
 }
 
+#[derive(Deserialize, Clone, Debug)]
+pub struct ModelSelection {
+    provider: String,
+    model: String,
+}
+
 // ---------------- Provider trait via enum (no async_trait dep) ----------------
 
 #[derive(Clone, Debug)]
@@ -118,6 +124,12 @@ impl Provider {
     fn is_configured(&self) -> bool {
         match self {
             Provider::Glm(g) => !g.api_key.trim().is_empty(),
+        }
+    }
+
+    fn display_name(&self) -> String {
+        match self {
+            Provider::Glm(g) => format!("{} / {}", g.label, g.model),
         }
     }
 }
@@ -220,6 +232,57 @@ fn append_openai_compatible_provider(
     }));
 }
 
+fn apply_model_selection(
+    settings: &mut crate::settings::Settings,
+    selection: Option<ModelSelection>,
+) {
+    let Some(selection) = selection else {
+        return;
+    };
+    let provider = crate::settings::normalize_provider_id(&selection.provider);
+    let fallback = crate::settings::default_strong_model_for_provider(&provider);
+    let model =
+        crate::settings::normalize_model_for_provider(&provider, &selection.model, &fallback);
+
+    settings.provider = provider.clone();
+    match provider.as_str() {
+        "deepseek" => {
+            settings.deepseek_model = model.clone();
+            settings.deepseek_strong_model = model;
+        }
+        "qwen" => {
+            settings.qwen_model = model.clone();
+            settings.qwen_strong_model = model;
+        }
+        "kimi" => {
+            settings.kimi_model = model.clone();
+            settings.kimi_strong_model = model;
+        }
+        _ => {
+            settings.glm_model = model.clone();
+            settings.glm_strong_model = model;
+        }
+    }
+}
+
+fn provider_key_configured(settings: &crate::settings::Settings, provider: &str) -> bool {
+    match provider {
+        "deepseek" => !settings.deepseek_api_key.trim().is_empty(),
+        "qwen" => !settings.qwen_api_key.trim().is_empty(),
+        "kimi" => !settings.kimi_api_key.trim().is_empty(),
+        _ => !settings.glm_api_key.trim().is_empty(),
+    }
+}
+
+fn provider_label(provider: &str) -> &'static str {
+    match provider {
+        "deepseek" => "DeepSeek",
+        "qwen" => "通义千问",
+        "kimi" => "Kimi",
+        _ => "GLM",
+    }
+}
+
 /// 依次尝试 provider 链，第一个成功的返回；全部失败返回最后一个错误（带 failover 提示）。
 async fn step_with_failover(
     providers: &[Provider],
@@ -235,14 +298,11 @@ async fn step_with_failover(
                 last_err = e;
                 if i + 1 < total {
                     // 通知前端：主模型失败，正在切换备用模型（比赛"自动切换"亮点）。
+                    let next = providers[i + 1].display_name();
                     let _ = app.emit(
                         "agent:event",
                         AgentEvent::AssistantDelta {
-                            delta: &format!(
-                                "\n[模型切换] 当前模型不可用，正在切换到备用模型（{}→{}）…\n",
-                                i + 1,
-                                i + 2
-                            ),
+                            delta: &format!("\n[模型切换] 当前模型不可用，正在切换到 {}…\n", next),
                         },
                     );
                 }
@@ -1212,8 +1272,10 @@ pub async fn run_agent(
     user_input: String,
     history: Vec<MessageView>,
     session_objects: Vec<SessionObject>,
+    model_selection: Option<ModelSelection>,
 ) -> Result<(), String> {
-    let settings = crate::settings::load(&app)?;
+    let mut settings = crate::settings::load(&app)?;
+    apply_model_selection(&mut settings, model_selection);
     let user_text = user_input.trim().to_string();
     let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
     let use_safety_context = settings.work_mode == crate::settings::WorkMode::SafetyDemoMode
@@ -1234,6 +1296,20 @@ pub async fn run_agent(
     //   3) 另一个 provider（若已配 key）。
     // 每步失败后自动切下一个，避免单点断连导致整个请求失败。
     let providers = build_provider_chain(&settings, &tooling.tool_names, tier);
+    if !provider_key_configured(&settings, &settings.provider) {
+        if let Some(first) = providers.first() {
+            let _ = app.emit(
+                "agent:event",
+                AgentEvent::AssistantDelta {
+                    delta: &format!(
+                        "\n[模型切换] {} 未配置 API Key，正在使用 {}…\n",
+                        provider_label(&settings.provider),
+                        first.display_name()
+                    ),
+                },
+            );
+        }
+    }
 
     let mut msgs = history;
     if let Some(context) = session_object_context(&session_objects) {
@@ -1488,6 +1564,30 @@ mod tests {
         assert_eq!(primary.model, "glm-4.5");
         let Provider::Glm(fallback) = &chain[1];
         assert_eq!(fallback.model, "glm-4-flash");
+    }
+
+    #[test]
+    fn explicit_session_model_overrides_tier_slots() {
+        let mut settings = crate::settings::Settings {
+            provider: "glm".to_string(),
+            glm_api_key: "glm-key-12345678".to_string(),
+            glm_model: "glm-4-plus".to_string(),
+            glm_strong_model: "glm-4.5".to_string(),
+            ..Default::default()
+        };
+
+        apply_model_selection(
+            &mut settings,
+            Some(ModelSelection {
+                provider: "glm".to_string(),
+                model: "glm-4.5-flash".to_string(),
+            }),
+        );
+        let chain = build_provider_chain(&settings, &[], TaskTier::Cheap);
+
+        assert_eq!(chain.len(), 1);
+        let Provider::Glm(primary) = &chain[0];
+        assert_eq!(primary.model, "glm-4.5-flash");
     }
 
     #[test]
