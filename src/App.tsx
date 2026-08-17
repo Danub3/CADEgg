@@ -77,6 +77,75 @@ const DEFAULT_APP_PREFERENCES: AppPreferences = {
   densePanels: false,
 };
 
+// Lightweight i18n — native Chinese/English, not translations.
+const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
+  helpButton: { "zh-CN": "帮助", "en-US": "Help" },
+  settingsTitle: { "zh-CN": "总设置", "en-US": "Settings" },
+  welcomeTitle: { "zh-CN": "CADEgg", "en-US": "CADEgg" },
+  welcomeSubtitle: {
+    "zh-CN": "选择模型后，直接描述你要在 AutoCAD 里完成的操作。",
+    "en-US": "Select a model, then describe what you want to do in AutoCAD.",
+  },
+  keyWarning: {
+    "zh-CN": "需要配置 {provider} API Key",
+    "en-US": "API Key required for {provider}",
+  },
+  keyWarningHint: {
+    "zh-CN": "点这里打开设置",
+    "en-US": "Click to open settings",
+  },
+  composerPlaceholder: {
+    "zh-CN": "描述你要绘制、修改或查询的 CAD 操作...",
+    "en-US": "Describe the CAD operation you want to draw, modify, or query...",
+  },
+  composerPlaceholderWaiting: {
+    "zh-CN": "等待回复...",
+    "en-US": "Waiting for reply...",
+  },
+  composerHint: {
+    "zh-CN": "Enter 发送 · Shift+Enter 换行",
+    "en-US": "Enter to send · Shift+Enter for new line",
+  },
+  byokConfigured: { "zh-CN": "BYOK 已配置", "en-US": "BYOK Ready" },
+  byokFillKey: { "zh-CN": "填写 Key", "en-US": "Set Key" },
+  autoFailover: { "zh-CN": "自动轮转", "en-US": "Auto Failover" },
+  languageHint: {
+    "zh-CN": "界面语言切换，帮助文档和主要按钮支持中英双语。",
+    "en-US": "UI language toggle. Help docs and key labels support Chinese and English.",
+  },
+  quickPrompt1: {
+    "zh-CN": "画电梯井口防护，井口宽 2000，高 1800",
+    "en-US": "Draw elevator shaft protection, opening width 2000, height 1800",
+  },
+  quickPrompt2: {
+    "zh-CN": "画一个双跑楼梯，宽 1200，每跑 10 步",
+    "en-US": "Draw a double-flight stair, width 1200, 10 steps per flight",
+  },
+  quickPrompt3: {
+    "zh-CN": "画一个矩形，中心在原点，宽 3000，高 2000",
+    "en-US": "Draw a rectangle centered at origin, width 3000, height 2000",
+  },
+  thinkingLabel: {
+    "zh-CN": "正在分析...",
+    "en-US": "Analyzing...",
+  },
+  bridgeOnline: { "zh-CN": "BRIDGE 在线", "en-US": "BRIDGE Online" },
+  bridgeError: { "zh-CN": "BRIDGE 异常", "en-US": "BRIDGE Error" },
+  bridgeIdle: { "zh-CN": "BRIDGE 待测", "en-US": "BRIDGE Idle" },
+  sessionTitle: { "zh-CN": "新会话", "en-US": "New Session" },
+  saveAppModel: { "zh-CN": "保存应用与模型", "en-US": "Save App & Model" },
+};
+
+function t(key: string, lang: "zh-CN" | "en-US", vars?: Record<string, string>): string {
+  let text = UI[key]?.[lang] ?? UI[key]?.["zh-CN"] ?? key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      text = text.replace(`{${k}}`, v);
+    }
+  }
+  return text;
+}
+
 interface ChatSession {
   id: string;
   title: string;
@@ -668,7 +737,7 @@ export default function App() {
         saveGlassSettingsNow(DEFAULT_GLASS_SETTINGS);
         setAppPreferences(DEFAULT_APP_PREFERENCES);
         setErrorMsg("外观与字体设置已重置");
-      } else if (e.key === "Escape" && view === "settings") {
+      } else if (e.key === "Escape" && (view === "settings" || view === "help")) {
         setView("chat");
       }
     }
@@ -1017,19 +1086,25 @@ export default function App() {
 
   const selectedProviderMeta = providerMeta(settings.provider);
   const providerLabel = selectedProviderMeta.shortLabel;
-  const currentModel = currentModelFor(settings);
   const bridgeState =
     testStatus === null ? "idle" : testStatus.ok ? "online" : "error";
   const bridgeLabel =
-    bridgeState === "online" ? "BRIDGE 在线" : bridgeState === "error" ? "BRIDGE 异常" : "BRIDGE 待测";
+    bridgeState === "online" ? t("bridgeOnline", appPreferences.language) : bridgeState === "error" ? t("bridgeError", appPreferences.language) : t("bridgeIdle", appPreferences.language);
   const objectReferenceHints = getObjectReferenceHints(sessionObjects);
   const currentKeySet = Boolean(settings[selectedProviderMeta.keySetField]);
-  const quickPrompts = [
+  const quickPromptsZh = [
     "画一条 7000mm 的直线",
     "画一个半径 3000 的圆",
     "画一个双跑楼梯，层高 3000",
     "画一个电梯井口防护门，井口宽 2000，高 1800",
   ];
+  const quickPromptsEn = [
+    "Draw a 7000mm line",
+    "Draw a circle with radius 3000",
+    "Draw a double-flight stair, floor height 3000",
+    "Draw elevator shaft protection, opening width 2000, height 1800",
+  ];
+  const quickPrompts = appPreferences.language === "en-US" ? quickPromptsEn : quickPromptsZh;
   const sessionTitle =
     sessions.find((session) => session.id === activeSessionId)?.title ??
     sessionTitleFromMessages(messages);
@@ -1059,9 +1134,15 @@ export default function App() {
 
         <div className="topbar-actions" data-no-drag>
           <StatusPill state={bridgeState} label={bridgeLabel} />
-          <div className="model-chip" title={`${providerLabel} · ${currentModel}`} data-no-drag>
-            {currentModel || providerLabel}
-          </div>
+          <button
+            type="button"
+            className="help-chip"
+            title={t("helpButton", appPreferences.language)}
+            onClick={() => setView("help")}
+            data-no-drag
+          >
+            {t("helpButton", appPreferences.language)}
+          </button>
           <div className="window-controls" data-no-drag onMouseDown={(e) => e.stopPropagation()}>
             <button type="button" onClick={() => void runWindowAction("minimize")} aria-label="最小化">
               <span />
@@ -1143,6 +1224,7 @@ export default function App() {
                 currentKeySet={currentKeySet}
                 providerLabel={providerLabel}
                 onOpenSettings={() => setView("settings")}
+                language={appPreferences.language}
               />
             ) : (
               messages.map((m, i) => renderMessage(m, i, handleConfirmToolCall, completedToolIds))
@@ -1160,7 +1242,7 @@ export default function App() {
                     <span />
                     <span />
                     <span />
-                    <b>正在分析...</b>
+                    <b>{t("thinkingLabel", appPreferences.language)}</b>
                   </div>
                 )}
               </div>
@@ -1175,14 +1257,15 @@ export default function App() {
               currentKeySet={currentKeySet}
               onModelChange={handleModelChange}
               onOpenSettings={() => setView("settings")}
+              language={appPreferences.language}
             />
-            <div className="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+            <div className="composer-hint">{t("composerHint", appPreferences.language)}</div>
             <textarea
               rows={2}
               placeholder={
                 sending
-                  ? "等待回复..."
-                  : "描述你要绘制、修改或查询的 CAD 操作..."
+                  ? t("composerPlaceholderWaiting", appPreferences.language)
+                  : t("composerPlaceholder", appPreferences.language)
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1249,6 +1332,13 @@ export default function App() {
           onClose={() => setView("chat")}
         />
       )}
+
+      {view === "help" && (
+        <HelpPanel
+          language={appPreferences.language}
+          onClose={() => setView("chat")}
+        />
+      )}
     </div>
   );
 }
@@ -1258,11 +1348,13 @@ function ModelPicker({
   currentKeySet,
   onModelChange,
   onOpenSettings,
+  language,
 }: {
   settings: SettingsView;
   currentKeySet: boolean;
   onModelChange: (provider: Provider, model: string) => Promise<void>;
   onOpenSettings: () => void;
+  language: "zh-CN" | "en-US";
 }) {
   const meta = providerMeta(settings.provider);
   const model = currentModelFor(settings);
@@ -1309,9 +1401,9 @@ function ModelPicker({
         className={`key-status ${currentKeySet ? "ready" : ""}`}
         onClick={onOpenSettings}
       >
-        {currentKeySet ? "BYOK 已配置" : "填写 Key"}
+        {currentKeySet ? t("byokConfigured", language) : t("byokFillKey", language)}
       </button>
-      <span className="failover-chip">自动轮转</span>
+      <span className="failover-chip">{t("autoFailover", language)}</span>
     </div>
   );
 }
@@ -1322,25 +1414,27 @@ function WelcomeStage({
   currentKeySet,
   providerLabel,
   onOpenSettings,
+  language,
 }: {
   quickPrompts: string[];
   setInput: (value: string) => void;
   currentKeySet: boolean;
   providerLabel: string;
   onOpenSettings: () => void;
+  language: "zh-CN" | "en-US";
 }) {
   return (
     <div className="welcome">
       <div className="hero-logo">
         <EggLogo large />
       </div>
-      <h1>CADEgg</h1>
-      <p>选择模型后，直接描述你要在 AutoCAD 里完成的操作。</p>
+      <h1>{t("welcomeTitle", language)}</h1>
+      <p>{t("welcomeSubtitle", language)}</p>
 
       {!currentKeySet && (
         <button type="button" className="key-warning" onClick={onOpenSettings}>
-          <b>需要配置 {providerLabel} API Key</b>
-          <span>点这里打开设置</span>
+          <b>{t("keyWarning", language, { provider: providerLabel })}</b>
+          <span>{t("keyWarningHint", language)}</span>
         </button>
       )}
 
@@ -1656,7 +1750,7 @@ function SettingsModal({
         <div className="settings-content">
           <section className="settings-group">
             <GroupHeader title="应用" desc="这些选项只影响 CADEgg 前端体验，不会改动 AutoCAD 图形。" />
-            <Field label="界面语言" hint="当前文案以简体中文为主，英文界面作为后续完整本地化入口。">
+            <Field label="界面语言" hint={t("languageHint", draftAppPreferences.language)}>
               <select
                 className={inputCls}
                 value={draftAppPreferences.language}
@@ -1820,7 +1914,6 @@ function SettingsModal({
                 const strongModel = String(settings[provider.strongModelField] ?? "");
                 const keySet = Boolean(settings[provider.keySetField]);
                 const keyPreview = String(settings[provider.keyPreviewField] ?? "");
-                const datalistId = `${provider.id}-models`;
 
                 return (
                   <section className="provider-settings-card" key={provider.id}>
@@ -1847,33 +1940,34 @@ function SettingsModal({
                       />
                     </Field>
                     <Field label="轻量模型">
-                      <input
-                        type="text"
-                        list={datalistId}
+                      <select
                         className={inputCls}
                         value={cheapModel}
                         onChange={(e) =>
                           setSettings({ ...settings, [provider.cheapModelField]: e.target.value })
                         }
-                      />
+                      >
+                        {provider.models.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.label}{model.tier !== "production" ? ` (${MODEL_TIER_LABEL[model.tier]})` : ""}
+                          </option>
+                        ))}
+                      </select>
                     </Field>
                     <Field label="强模型">
-                      <input
-                        type="text"
-                        list={datalistId}
+                      <select
                         className={inputCls}
                         value={strongModel}
                         onChange={(e) =>
                           setSettings({ ...settings, [provider.strongModelField]: e.target.value })
                         }
-                      />
-                      <datalist id={datalistId}>
+                      >
                         {provider.models.map((model) => (
                           <option key={model.id} value={model.id}>
-                            {model.label}
+                            {model.label}{model.tier !== "production" ? ` (${MODEL_TIER_LABEL[model.tier]})` : ""}
                           </option>
                         ))}
-                      </datalist>
+                      </select>
                     </Field>
                   </section>
                 );
@@ -1892,7 +1986,7 @@ function SettingsModal({
             返回
           </button>
           <button type="button" className="primary-action" onClick={() => void handleSaveAll()}>
-            保存应用与模型
+            {t("saveAppModel", appPreferences.language)}
           </button>
         </div>
       </section>
@@ -2329,5 +2423,121 @@ function IconCross() {
       <rect x="5" y="9" width="2" height="2" />
       <rect x="3" y="11" width="2" height="2" />
     </svg>
+  );
+}
+
+// ── Help Panel ──
+
+interface HelpPanelProps {
+  language: "zh-CN" | "en-US";
+  onClose: () => void;
+}
+
+const MODEL_EVAL_TABLE = [
+  { model: "DeepSeek Chat", score: "8.9", tier: "production" as const, noteZh: "10/10 工具选择，多工具编排最强，极便宜", noteEn: "10/10 tool selection, best multi-tool orchestration, extremely cheap" },
+  { model: "GLM-4.5", score: "8.8", tier: "production" as const, noteZh: "BFCL 全球第 1，函数调用最准", noteEn: "BFCL global #1, most accurate function calling" },
+  { model: "Qwen-Max", score: "8.3", tier: "production" as const, noteZh: "BFCL 75.7%，结构化输出最好", noteEn: "BFCL 75.7%, best structured output" },
+  { model: "GLM-4-Plus", score: "7.9", tier: "limited" as const, noteZh: "够用但不稳，建议升级到 GLM-4.5", noteEn: "Usable but inconsistent, upgrade to GLM-4.5 recommended" },
+  { model: "Qwen-Plus", score: "7.6", tier: "limited" as const, noteZh: "需人工监督，复杂任务可能出错", noteEn: "Needs human oversight, may fail on complex tasks" },
+  { model: "Qwen-Turbo", score: "6.4", tier: "limited" as const, noteZh: "速度快但工具调用不可靠", noteEn: "Fast but unreliable tool calling" },
+  { model: "Kimi 8K/32K", score: "5.7", tier: "unavailable" as const, noteZh: "Moonshot v1 系列，函数调用弱", noteEn: "Moonshot v1 series, weak function calling" },
+  { model: "GLM-4.5-Flash", score: "5.5", tier: "unavailable" as const, noteZh: "免费但只画方框，不可用于 agent", noteEn: "Free but only draws rectangles, unusable for agent" },
+  { model: "DeepSeek R1", score: "5.0", tier: "unavailable" as const, noteZh: "推理模型，只想不干，已移除", noteEn: "Reasoning model, thinks but doesn't act, removed" },
+  { model: "GLM-4-Flash", score: "4.9", tier: "unavailable" as const, noteZh: "太弱，不可靠", noteEn: "Too weak, unreliable" },
+];
+
+const TIER_LABEL_ZH: Record<string, string> = { production: "生产可用", limited: "勉强可用", unavailable: "不可用" };
+const TIER_LABEL_EN: Record<string, string> = { production: "Production", limited: "Limited", unavailable: "Unusable" };
+
+function HelpPanel({ language, onClose }: HelpPanelProps) {
+  const isZh = language === "zh-CN";
+  const tierLabel = (t: string) => isZh ? TIER_LABEL_ZH[t] : TIER_LABEL_EN[t];
+
+  return (
+    <div className="modal-backdrop">
+      <section className="settings-modal glass-modal help-panel" role="dialog" aria-modal="true">
+        <ModalHeader title={isZh ? "帮助与说明" : "Help & Guide"} onClose={onClose} />
+
+        <div className="settings-content">
+          {/* Model Evaluation */}
+          <section className="settings-group">
+            <GroupHeader
+              title={isZh ? "模型能力评估" : "Model Capability Evaluation"}
+              desc={isZh
+                ? "基于 BFCL V3/V4（伯克利函数调用排行榜）和第三方工具调用测试。评分 ≥8.0 的模型可用于生产环境。"
+                : "Based on BFCL V3/V4 (Berkeley Function Calling Leaderboard) and third-party tool calling tests. Models scoring ≥8.0 are production-ready."}
+            />
+
+            <div className="help-table-wrap">
+              <table className="help-table">
+                <thead>
+                  <tr>
+                    <th>{isZh ? "模型" : "Model"}</th>
+                    <th>{isZh ? "评分" : "Score"}</th>
+                    <th>{isZh ? "等级" : "Tier"}</th>
+                    <th>{isZh ? "说明" : "Notes"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {MODEL_EVAL_TABLE.map((row) => (
+                    <tr key={row.model} className={`eval-tier-${row.tier}`}>
+                      <td><strong>{row.model}</strong></td>
+                      <td>{row.score}</td>
+                      <td><span className={`tier-badge tier-${row.tier}`}>{tierLabel(row.tier)}</span></td>
+                      <td>{isZh ? row.noteZh : row.noteEn}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Usage Guide */}
+          <section className="settings-group">
+            <GroupHeader
+              title={isZh ? "使用说明" : "Usage Guide"}
+              desc={isZh
+                ? "CADEgg 是 Windows 桌面 AutoCAD 建筑施工安全助手。当前主攻电梯井口临边防护闭环。"
+                : "CADEgg is a Windows desktop AutoCAD construction safety assistant. Currently focused on elevator shaft edge protection."}
+            />
+
+            <div className="help-guide">
+              <h4>{isZh ? "快速开始" : "Quick Start"}</h4>
+              <ol>
+                <li>{isZh ? "在设置中配置 API Key（推荐智谱 GLM 或 DeepSeek）" : "Configure API Key in Settings (GLM or DeepSeek recommended)"}</li>
+                <li>{isZh ? "在聊天输入框选择模型供应商和具体模型" : "Select model provider and specific model in the chat input area"}</li>
+                <li>{isZh ? "输入绘图指令，如「画电梯井口防护，井口宽 2000，高 1800」" : "Enter drawing commands, e.g. 'Draw elevator shaft protection, opening width 2000, height 1800'"}</li>
+                <li>{isZh ? "Agent 会自动选择工具、出图并校核" : "The agent will automatically select tools, draw, and validate"}</li>
+              </ol>
+
+              <h4>{isZh ? "支持的绘图指令" : "Supported Drawing Commands"}</h4>
+              <ul>
+                <li>{isZh ? "电梯井口防护门（含防护门扇、踢脚板、警示牌、材料表）" : "Elevator shaft protection door (with door panels, toe board, warning sign, material table)"}</li>
+                <li>{isZh ? "基础绘图：直线、圆、矩形、正多边形" : "Basic drawing: line, circle, rectangle, regular polygon"}</li>
+                <li>{isZh ? "楼梯：双跑楼梯（含踏步、休息平台、箭头标注）" : "Stairs: double-flight stair (with steps, landing, arrow annotation)"}</li>
+              </ul>
+
+              <h4>{isZh ? "知识卡机制" : "Knowledge Card System"}</h4>
+              <p>{isZh
+                ? "CADEgg 内置建筑施工安全知识卡，基于住建部官方规范（JGJ 80-2016、建办质函〔2019〕90号）。Agent 出图时自动检索知识卡，按规范定值画图，不会自由发挥。井口宽/高是现场实测值，所以 Agent 会追问确认；防护门高（1.5m）和踢脚板（200mm）是规范定值，直接用不追问。"
+                : "CADEgg has built-in construction safety knowledge cards based on official Chinese building codes. The agent retrieves knowledge cards when drawing, using standard values without improvisation. Opening width/height are site-measured values, so the agent will ask for confirmation; guard door height (1.5m) and toe board (200mm) are code-specified and used directly."}</p>
+
+              <h4>{isZh ? "模型选择建议" : "Model Selection Tips"}</h4>
+              <ul>
+                <li>{isZh ? "强模型（用于出图/校核）：GLM-4.5 或 DeepSeek Chat" : "Strong model (for drawing/validation): GLM-4.5 or DeepSeek Chat"}</li>
+                <li>{isZh ? "轻量模型（用于普通问答）：GLM-4-Plus 或 Qwen-Plus" : "Cheap model (for general Q&A): GLM-4-Plus or Qwen-Plus"}</li>
+                <li>{isZh ? "免费模型（GLM-4-Flash / GLM-4.5-Flash）不可用于 agent 出图" : "Free models (GLM-4-Flash / GLM-4.5-Flash) cannot be used for agent drawing"}</li>
+                <li>{isZh ? "DeepSeek Reasoner 已移除，推理模型不适合工具调用" : "DeepSeek Reasoner has been removed, reasoning models are unsuitable for tool calling"}</li>
+              </ul>
+
+              <h4>{isZh ? "自动轮转" : "Auto Failover"}</h4>
+              <p>{isZh
+                ? "请求失败时，CADEgg 自动按优先级切换备用模型：主供应商强模型 → 同供应商轻量模型 → 其他已配置供应商。无需手动干预。"
+                : "When a request fails, CADEgg automatically switches to backup models: primary provider strong model → same provider cheap model → other configured providers. No manual intervention needed."}</p>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
   );
 }

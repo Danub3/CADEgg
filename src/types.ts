@@ -1,5 +1,5 @@
 export type PanelState = "collapsed" | "expanded";
-export type View = "chat" | "settings";
+export type View = "chat" | "settings" | "help";
 export type Provider = "glm" | "deepseek" | "qwen" | "kimi";
 export type WorkMode = "competition_mode" | "safety_demo_mode";
 
