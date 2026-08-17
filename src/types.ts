@@ -1,6 +1,6 @@
 export type PanelState = "collapsed" | "expanded";
 export type View = "chat" | "settings";
-export type Provider = "claude" | "gemini" | "glm";
+export type Provider = "glm" | "deepseek" | "qwen" | "kimi";
 export type WorkMode = "competition_mode" | "safety_demo_mode";
 
 export interface ToolCall {
@@ -89,18 +89,24 @@ export interface DemoLogEntry {
 export interface SettingsView {
   provider: Provider;
   work_mode: WorkMode;
-  model: string;
-  base_url: string;
-  gemini_model: string;
-  gemini_strong_model: string;
-  gemini_base_url: string;
   glm_model: string;
   glm_strong_model: string;
   glm_base_url: string;
-  anthropic_api_key_set: boolean;
-  anthropic_api_key_preview: string;
-  gemini_api_key_set: boolean;
-  gemini_api_key_preview: string;
+  deepseek_model: string;
+  deepseek_strong_model: string;
+  deepseek_base_url: string;
+  qwen_model: string;
+  qwen_strong_model: string;
+  qwen_base_url: string;
+  kimi_model: string;
+  kimi_strong_model: string;
+  kimi_base_url: string;
   glm_api_key_set: boolean;
   glm_api_key_preview: string;
+  deepseek_api_key_set: boolean;
+  deepseek_api_key_preview: string;
+  qwen_api_key_set: boolean;
+  qwen_api_key_preview: string;
+  kimi_api_key_set: boolean;
+  kimi_api_key_preview: string;
 }

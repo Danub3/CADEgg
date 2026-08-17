@@ -1,21 +1,33 @@
-﻿import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import "./App.css";
 import type {
   AgentEvent,
   DemoLogEntry,
   ElevatorValidation,
   Message,
   ObjectUpdate,
-  PanelState,
   Provider,
   SessionObject,
   SettingsView,
   ToolCall,
   View,
 } from "./types";
-import { CLAUDE_MODELS, DEFAULT_VIEW, GEMINI_MODELS, GLM_MODELS } from "./constants";
+import { DEFAULT_VIEW, MODEL_PROVIDERS, providerMeta } from "./constants";
 import {
   applyObjectUpdates,
   cloneSessionObjects,
@@ -26,37 +38,346 @@ import {
 import { buildHistoryPayload, shouldAutoSyncObjectTable } from "./messages";
 import { compactToolArgs, planSummary } from "./formatting";
 
+type GlassBorderStyle = "pixel" | "glow";
+
+interface GlassSettings {
+  transparency: number;
+  blur: number;
+  border: GlassBorderStyle;
+}
+
+const GLASS_STORAGE_KEY = "cadegg.glassSettings.v1";
+const APP_PREFS_STORAGE_KEY = "cadegg.appPreferences.v1";
+const CHAT_SESSIONS_STORAGE_KEY = "cadegg.chatSessions.v1";
+const DEFAULT_GLASS_SETTINGS: GlassSettings = {
+  transparency: 45,
+  blur: 70,
+  border: "pixel",
+};
+
+interface AppPreferences {
+  language: "zh-CN" | "en-US";
+  fontSize: number;
+  storageLocation: "appdata" | "project";
+  notifications: boolean;
+  autoSyncObjects: boolean;
+  alwaysOnTop: boolean;
+  reduceMotion: boolean;
+  densePanels: boolean;
+}
+
+const DEFAULT_APP_PREFERENCES: AppPreferences = {
+  language: "zh-CN",
+  fontSize: 14,
+  storageLocation: "appdata",
+  notifications: true,
+  autoSyncObjects: true,
+  alwaysOnTop: false,
+  reduceMotion: false,
+  densePanels: false,
+};
+
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  provider: Provider;
+  model: string;
+  messages: Message[];
+  sessionObjects: SessionObject[];
+  demoLog: DemoLogEntry[];
+  lastValidation: ElevatorValidation | null;
+  lastDrawParams: Record<string, unknown> | null;
+}
+
+interface StoredChatSessions {
+  activeSessionId: string;
+  sessions: ChatSession[];
+}
+
+function clamp(value: number, min: number, max: number) {
+  if (Number.isNaN(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function makeId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeProvider(value: unknown): Provider {
+  return MODEL_PROVIDERS.some((provider) => provider.id === value) ? (value as Provider) : "glm";
+}
+
+function normalizeSettingsView(value: Partial<SettingsView>): SettingsView {
+  return {
+    ...DEFAULT_VIEW,
+    ...value,
+    provider: normalizeProvider(value.provider),
+  };
+}
+
+function currentModelFor(settings: SettingsView, provider: Provider = settings.provider) {
+  const meta = providerMeta(provider);
+  const value = settings[meta.strongModelField];
+  return typeof value === "string" && value.trim()
+    ? value
+    : String(DEFAULT_VIEW[meta.strongModelField] ?? "");
+}
+
+function createChatSession(settings: SettingsView): ChatSession {
+  const now = Date.now();
+  return {
+    id: makeId("session"),
+    title: "新会话",
+    createdAt: now,
+    updatedAt: now,
+    provider: settings.provider,
+    model: currentModelFor(settings),
+    messages: [],
+    sessionObjects: [],
+    demoLog: [],
+    lastValidation: null,
+    lastDrawParams: null,
+  };
+}
+
+function sessionTitleFromMessages(messages: Message[]) {
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
+  if (!lastUserMessage || !("content" in lastUserMessage)) return "新会话";
+  return lastUserMessage.content.replace(/\s+/g, " ").trim().slice(0, 28) || "新会话";
+}
+
+function normalizeChatSession(value: Partial<ChatSession>, fallback: ChatSession): ChatSession {
+  const provider = normalizeProvider(value.provider ?? fallback.provider);
+  return {
+    id: typeof value.id === "string" && value.id ? value.id : fallback.id,
+    title: typeof value.title === "string" && value.title ? value.title : fallback.title,
+    createdAt: Number(value.createdAt || fallback.createdAt),
+    updatedAt: Number(value.updatedAt || fallback.updatedAt),
+    provider,
+    model: typeof value.model === "string" && value.model ? value.model : fallback.model,
+    messages: Array.isArray(value.messages) ? (value.messages as Message[]) : [],
+    sessionObjects: Array.isArray(value.sessionObjects)
+      ? (value.sessionObjects as SessionObject[])
+      : [],
+    demoLog: Array.isArray(value.demoLog) ? (value.demoLog as DemoLogEntry[]) : [],
+    lastValidation: value.lastValidation ?? null,
+    lastDrawParams: value.lastDrawParams ?? null,
+  };
+}
+
+function loadChatSessions(settings: SettingsView): StoredChatSessions {
+  const fallback = createChatSession(settings);
+  if (typeof window === "undefined") {
+    return { activeSessionId: fallback.id, sessions: [fallback] };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CHAT_SESSIONS_STORAGE_KEY);
+    if (!raw) return { activeSessionId: fallback.id, sessions: [fallback] };
+    const parsed = JSON.parse(raw) as Partial<StoredChatSessions>;
+    const sessions = Array.isArray(parsed.sessions)
+      ? parsed.sessions
+          .map((session) => normalizeChatSession(session, fallback))
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .slice(0, 30)
+      : [];
+    if (sessions.length === 0) {
+      return { activeSessionId: fallback.id, sessions: [fallback] };
+    }
+    const activeSessionId =
+      typeof parsed.activeSessionId === "string" &&
+      sessions.some((session) => session.id === parsed.activeSessionId)
+        ? parsed.activeSessionId
+        : sessions[0].id;
+    return { activeSessionId, sessions };
+  } catch {
+    return { activeSessionId: fallback.id, sessions: [fallback] };
+  }
+}
+
+function normalizeGlassSettings(value: Partial<GlassSettings> & { opacity?: number }): GlassSettings {
+  return {
+    transparency: clamp(
+      Number(value.transparency ?? value.opacity ?? DEFAULT_GLASS_SETTINGS.transparency),
+      0,
+      90
+    ),
+    blur: clamp(Number(value.blur ?? DEFAULT_GLASS_SETTINGS.blur), 0, 100),
+    border: value.border === "glow" ? "glow" : "pixel",
+  };
+}
+
+function glassCssVariables(settings: GlassSettings, fontSize?: number): CSSProperties {
+  const next = normalizeGlassSettings(settings);
+  const transparency = clamp(next.transparency, 0, 90);
+  // 0 = opaque, 1 = fully transparent
+  const transparencyRatio = transparency / 90;
+  // aggressive curve: at 90% transparency most layers approach 0
+  const transparencyCurve = Math.pow(transparencyRatio, 0.85);
+  // 0 = clear glass, 1 = heavy frost
+  const roughness = clamp(next.blur / 100, 0, 1);
+  const roughnessCurve = Math.pow(roughness, 1.4);
+
+  // Alpha layers: each decays at a different rate so controls stay visible
+  // even when the background is nearly gone.
+  const glassAlpha = clamp(1 - transparencyCurve, 0, 1);
+  const glassAlphaSoft = clamp(1 - transparencyCurve * 0.9, 0, 1);
+  const glassAlphaMuted = clamp(1 - transparencyCurve * 0.85, 0, 1);
+  const controlAlpha = clamp(1 - transparencyCurve * 0.5, 0, 1);
+
+  const blurPx = Math.round(roughnessCurve * 42);
+  const grainStep = Math.round(clamp(14 - roughnessCurve * 8, 6, 14));
+
+  // Decorative layers (grid lines, gradient edges) also fade with transparency.
+  const gridAlpha = (0.1 * clamp(1 - transparencyCurve * 0.9, 0, 1)).toFixed(3);
+  const gridAlphaSubtle = (0.08 * clamp(1 - transparencyCurve * 0.9, 0, 1)).toFixed(3);
+  // Gradient edges: fully transparent at 90%.
+  const edgeAlpha = clamp(1 - transparencyCurve, 0, 1);
+  // Text shadow strengthens as the panel becomes transparent —
+  // white text on a transparent dark panel needs a dark halo to stay readable.
+  const textShadowStrength = clamp(1 - glassAlpha, 0, 0.75);
+
+  return {
+    ...(typeof fontSize === "number" ? { "--content-font-size": `${fontSize}px` } : {}),
+    "--window-bg-alpha": glassAlpha.toFixed(2),
+    "--glass-alpha": glassAlpha.toFixed(2),
+    "--glass-alpha-soft": glassAlphaSoft.toFixed(2),
+    "--glass-alpha-muted": glassAlphaMuted.toFixed(2),
+    "--control-alpha": controlAlpha.toFixed(2),
+    "--glass-blur": `${blurPx}px`,
+    "--glass-roughness": roughness.toFixed(2),
+    "--glass-frost-alpha": clamp(roughnessCurve * 0.45, 0, 0.45).toFixed(2),
+    "--glass-grain-light": clamp(roughnessCurve * 0.35, 0, 0.35).toFixed(2),
+    "--glass-grain-dark": clamp(roughnessCurve * 0.18, 0, 0.18).toFixed(2),
+    "--glass-grain-step": `${grainStep}px`,
+    "--glass-shine-opacity": clamp(1 - roughnessCurve * 0.55, 0.45, 1).toFixed(2),
+    "--ambient-opacity": clamp(1 - transparencyCurve * 0.7, 0.05, 1).toFixed(2),
+    "--glass-saturation-strong": `${Math.round(190 - roughnessCurve * 60)}%`,
+    "--glass-saturation": `${Math.round(180 - roughnessCurve * 55)}%`,
+    "--glass-saturation-soft": `${Math.round(165 - roughnessCurve * 45)}%`,
+    "--glass-saturation-muted": `${Math.round(155 - roughnessCurve * 40)}%`,
+    "--grid-alpha": gridAlpha,
+    "--grid-alpha-subtle": gridAlphaSubtle,
+    "--edge-alpha": edgeAlpha.toFixed(2),
+    "--text-shadow-strength": textShadowStrength.toFixed(2),
+  } as CSSProperties;
+}
+
+function saveGlassSettingsNow(settings: GlassSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(GLASS_STORAGE_KEY, JSON.stringify(normalizeGlassSettings(settings)));
+}
+
+function applyGlassCssVariables(settings: GlassSettings) {
+  if (typeof document === "undefined") return;
+  const app = document.querySelector<HTMLElement>(".cadegg-app");
+  if (!app) return;
+  const vars = glassCssVariables(settings);
+  Object.entries(vars).forEach(([name, value]) => {
+    app.style.setProperty(name, String(value));
+  });
+}
+
+function normalizeAppPreferences(value: Partial<AppPreferences>): AppPreferences {
+  return {
+    language: value.language === "en-US" ? "en-US" : "zh-CN",
+    fontSize: clamp(Number(value.fontSize ?? DEFAULT_APP_PREFERENCES.fontSize), 12, 18),
+    storageLocation: value.storageLocation === "project" ? "project" : "appdata",
+    notifications: value.notifications ?? DEFAULT_APP_PREFERENCES.notifications,
+    autoSyncObjects: value.autoSyncObjects ?? DEFAULT_APP_PREFERENCES.autoSyncObjects,
+    alwaysOnTop: value.alwaysOnTop ?? DEFAULT_APP_PREFERENCES.alwaysOnTop,
+    reduceMotion: value.reduceMotion ?? DEFAULT_APP_PREFERENCES.reduceMotion,
+    densePanels: value.densePanels ?? DEFAULT_APP_PREFERENCES.densePanels,
+  };
+}
+
+function loadGlassSettings(): GlassSettings {
+  if (typeof window === "undefined") return DEFAULT_GLASS_SETTINGS;
+
+  try {
+    const raw = window.localStorage.getItem(GLASS_STORAGE_KEY);
+    if (!raw) return DEFAULT_GLASS_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<GlassSettings> & { opacity?: number };
+
+    return normalizeGlassSettings(parsed);
+  } catch {
+    return DEFAULT_GLASS_SETTINGS;
+  }
+}
+
+function loadAppPreferences(): AppPreferences {
+  if (typeof window === "undefined") return DEFAULT_APP_PREFERENCES;
+
+  try {
+    const raw = window.localStorage.getItem(APP_PREFS_STORAGE_KEY);
+    if (!raw) return DEFAULT_APP_PREFERENCES;
+    const parsed = JSON.parse(raw) as Partial<AppPreferences>;
+
+    return normalizeAppPreferences(parsed);
+  } catch {
+    return DEFAULT_APP_PREFERENCES;
+  }
+}
+
 export default function App() {
-  const [panelState, setPanelState] = useState<PanelState>("collapsed");
+  const appWindowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
+  if (appWindowRef.current === null) {
+    appWindowRef.current = getCurrentWindow();
+  }
+  const appWindow = appWindowRef.current;
   const [view, setView] = useState<View>("chat");
+  const [glassSettings, setGlassSettings] = useState<GlassSettings>(() => loadGlassSettings());
+  const [appPreferences, setAppPreferences] = useState<AppPreferences>(() => loadAppPreferences());
+  const appPreferencesRef = useRef(appPreferences);
+  const initialSessionsRef = useRef<StoredChatSessions | null>(null);
+  if (initialSessionsRef.current === null) {
+    initialSessionsRef.current = loadChatSessions(DEFAULT_VIEW);
+  }
+  const initialSessions = initialSessionsRef.current;
+  const initialSession =
+    initialSessions.sessions.find((session) => session.id === initialSessions.activeSessionId) ??
+    initialSessions.sessions[0];
+  const [settings, setSettings] = useState<SettingsView>({
+    ...DEFAULT_VIEW,
+    provider: initialSession.provider,
+    [providerMeta(initialSession.provider).strongModelField]: initialSession.model,
+  });
+  const [sessions, setSessions] = useState<ChatSession[]>(initialSessions.sessions);
+  const [activeSessionId, setActiveSessionId] = useState(initialSession.id);
 
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(initialSession.messages);
   const [assistantDraft, setAssistantDraft] = useState("");
-  const [sessionObjects, setSessionObjects] = useState<SessionObject[]>([]);
+  const [sessionObjects, setSessionObjects] = useState<SessionObject[]>(
+    initialSession.sessionObjects
+  );
   const [sending, setSending] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [settings, setSettings] = useState<SettingsView>(DEFAULT_VIEW);
   const [savedHint, setSavedHint] = useState(false);
-  const [claudeKeyDraft, setClaudeKeyDraft] = useState<string | null>(null);
-  const [geminiKeyDraft, setGeminiKeyDraft] = useState<string | null>(null);
   const [glmKeyDraft, setGlmKeyDraft] = useState<string | null>(null);
+  const [deepseekKeyDraft, setDeepseekKeyDraft] = useState<string | null>(null);
+  const [qwenKeyDraft, setQwenKeyDraft] = useState<string | null>(null);
+  const [kimiKeyDraft, setKimiKeyDraft] = useState<string | null>(null);
 
   const [testStatus, setTestStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [syncingObjects, setSyncingObjects] = useState(false);
   const [importingSelection, setImportingSelection] = useState(false);
 
-  const [demoLog, setDemoLog] = useState<DemoLogEntry[]>([]);
-  const [lastValidation, setLastValidation] = useState<ElevatorValidation | null>(null);
-  const [lastDrawParams, setLastDrawParams] = useState<Record<string, unknown> | null>(null);
+  const [demoLog, setDemoLog] = useState<DemoLogEntry[]>(initialSession.demoLog);
+  const [lastValidation, setLastValidation] = useState<ElevatorValidation | null>(
+    initialSession.lastValidation
+  );
+  const [lastDrawParams, setLastDrawParams] = useState<Record<string, unknown> | null>(
+    initialSession.lastDrawParams
+  );
 
-  const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
   const assistantDraftRef = useRef("");
-  const sessionObjectsRef = useRef<SessionObject[]>([]);
+  const sessionObjectsRef = useRef<SessionObject[]>(initialSession.sessionObjects);
   const pendingUndoSnapshotRef = useRef<SessionObject[] | null>(null);
   const undoSnapshotsRef = useRef<SessionObject[][]>([]);
   const runTouchedObjectTableRef = useRef(false);
@@ -84,7 +405,7 @@ export default function App() {
         return parsed as ElevatorValidation;
       }
     } catch {
-      // ignore
+      // Tool output is often human-readable text. Ignore non-JSON validation payloads.
     }
     return null;
   }
@@ -110,10 +431,21 @@ export default function App() {
   async function refreshSettings() {
     try {
       const s = await invoke<SettingsView>("get_settings");
-      setSettings({ ...DEFAULT_VIEW, ...s });
-      setClaudeKeyDraft(null);
-      setGeminiKeyDraft(null);
+      setSettings((prev) => {
+        const next = normalizeSettingsView(s);
+        const active = sessions.find((session) => session.id === activeSessionId);
+        if (!active) return next;
+        const meta = providerMeta(active.provider);
+        return {
+          ...next,
+          provider: active.provider,
+          [meta.strongModelField]: active.model || prev[meta.strongModelField],
+        };
+      });
       setGlmKeyDraft(null);
+      setDeepseekKeyDraft(null);
+      setQwenKeyDraft(null);
+      setKimiKeyDraft(null);
     } catch (e) {
       console.error("load settings:", e);
     }
@@ -123,10 +455,86 @@ export default function App() {
     refreshSettings();
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(GLASS_STORAGE_KEY, JSON.stringify(glassSettings));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [glassSettings]);
+
+  // Native Effect.Blur on Windows makes the window opaque, overriding CSS transparency.
+  // CSS backback-filter on panels is sufficient for the glass effect.
+  // Apply CSS variables from stored settings once on mount.
+  useEffect(() => {
+    const stored = loadGlassSettings();
+    applyGlassCssVariables(stored);
+  }, []);
+
+  useEffect(() => {
+    appPreferencesRef.current = appPreferences;
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(APP_PREFS_STORAGE_KEY, JSON.stringify(appPreferences));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [appPreferences]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(
+        CHAT_SESSIONS_STORAGE_KEY,
+        JSON.stringify({ activeSessionId, sessions })
+      );
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [activeSessionId, sessions]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const title = sessionTitleFromMessages(messages);
+    const provider = settings.provider;
+    const model = currentModelFor(settings, provider);
+    setSessions((prev) =>
+      prev
+        .map((session) =>
+          session.id === activeSessionId
+            ? {
+                ...session,
+                title,
+                updatedAt: now,
+                provider,
+                model,
+                messages,
+                sessionObjects,
+                demoLog,
+                lastValidation,
+                lastDrawParams,
+              }
+            : session
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+    );
+  }, [
+    activeSessionId,
+    messages,
+    sessionObjects,
+    demoLog,
+    lastValidation,
+    lastDrawParams,
+    settings.provider,
+    settings.glm_strong_model,
+    settings.deepseek_strong_model,
+    settings.qwen_strong_model,
+    settings.kimi_strong_model,
+  ]);
+
+  useEffect(() => {
+    void appWindow.setAlwaysOnTop(appPreferences.alwaysOnTop).catch((e) => {
+      console.error("set always on top:", e);
+    });
+  }, [appWindow, appPreferences.alwaysOnTop]);
+
   // Subscribe to agent streaming events from the Rust backend.
-  // listen() resolves async — under React StrictMode dev mode the first cleanup
-  // runs before the promise resolves, so we must remember "cancelled" and
-  // unlisten as soon as the handle arrives.
+  // listen() resolves async; React StrictMode can clean up before the promise resolves.
   useEffect(() => {
     let cancelled = false;
     let unlisten: UnlistenFn | null = null;
@@ -143,7 +551,10 @@ export default function App() {
             Object.assign(pendingLogRef.current.params, call.args);
           }
         }
-        if (e.tool_calls.length > 0 || (e.text && assistantDraftRef.current && e.text === assistantDraftRef.current)) {
+        if (
+          e.tool_calls.length > 0 ||
+          (e.text && assistantDraftRef.current && e.text === assistantDraftRef.current)
+        ) {
           assistantDraftRef.current = "";
           setAssistantDraft("");
         }
@@ -187,7 +598,7 @@ export default function App() {
         ]);
         if (e.result.ok && shouldAutoSyncObjectTable(e.result.name)) {
           runTouchedObjectTableRef.current = true;
-          pendingPostRunSyncRef.current = true;
+          pendingPostRunSyncRef.current = appPreferencesRef.current.autoSyncObjects;
         }
         if (e.result.object_updates.length > 0) {
           updateSessionObjects((prev) => applyObjectUpdates(prev, e.result.object_updates));
@@ -244,22 +655,25 @@ export default function App() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, sending]);
+  }, [messages, assistantDraft, sending]);
 
-  function handleMouseEnter() {
-    if (collapseTimer.current) clearTimeout(collapseTimer.current);
-    if (panelState === "collapsed") setPanelState("expanded");
-  }
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.shiftKey && e.key === "0") {
+        setGlassSettings(DEFAULT_GLASS_SETTINGS);
+        saveGlassSettingsNow(DEFAULT_GLASS_SETTINGS);
+        setAppPreferences(DEFAULT_APP_PREFERENCES);
+        setErrorMsg("外观与字体设置已重置");
+      } else if (e.key === "Escape" && view === "settings") {
+        setView("chat");
+      }
+    }
 
-  function handleMouseLeave() {
-    if (collapseTimer.current) clearTimeout(collapseTimer.current);
-    collapseTimer.current = setTimeout(() => {
-      if (panelRef.current?.contains(document.activeElement)) return;
-      if (view === "chat" && !sending) setPanelState("collapsed");
-    }, 800);
-  }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [view]);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text || sending) return;
@@ -283,19 +697,18 @@ export default function App() {
         syncedObjects = latest;
       }
 
-    pendingUndoSnapshotRef.current = cloneSessionObjects(syncedObjects);
-    runTouchedObjectTableRef.current = false;
-    pendingPostRunSyncRef.current = false;
-    lastUserInputRef.current = text;
-    pendingLogRef.current = {
-      toolCalls: [],
-      params: {},
-      validation: null,
-      summary: "",
-    };
+      pendingUndoSnapshotRef.current = cloneSessionObjects(syncedObjects);
+      runTouchedObjectTableRef.current = false;
+      pendingPostRunSyncRef.current = false;
+      lastUserInputRef.current = text;
+      pendingLogRef.current = {
+        toolCalls: [],
+        params: {},
+        validation: null,
+        summary: "",
+      };
 
-      // run_agent emits agent:event for each step; resolve only signals the loop ended.
-      // We send the prior history (without the new user msg) — backend appends user_input itself.
+      // run_agent emits agent:event for each step; resolve only means the backend loop ended.
       await invoke("run_agent", {
         userInput: text,
         history: buildHistoryPayload(messages),
@@ -310,23 +723,28 @@ export default function App() {
     }
   }
 
-  async function saveSettings() {
+  async function saveSettings(nextSettings: SettingsView = settings) {
     try {
       await invoke("save_settings", {
         update: {
-          provider: settings.provider,
-          work_mode: settings.work_mode,
-          model: settings.model,
-          base_url: settings.base_url,
-          gemini_model: settings.gemini_model,
-          gemini_strong_model: settings.gemini_strong_model,
-          gemini_base_url: settings.gemini_base_url,
-          glm_model: settings.glm_model,
-          glm_strong_model: settings.glm_strong_model,
-          glm_base_url: settings.glm_base_url,
-          anthropic_api_key: claudeKeyDraft,
-          gemini_api_key: geminiKeyDraft,
+          provider: nextSettings.provider,
+          work_mode: nextSettings.work_mode,
+          glm_model: nextSettings.glm_model,
+          glm_strong_model: nextSettings.glm_strong_model,
+          glm_base_url: nextSettings.glm_base_url,
+          deepseek_model: nextSettings.deepseek_model,
+          deepseek_strong_model: nextSettings.deepseek_strong_model,
+          deepseek_base_url: nextSettings.deepseek_base_url,
+          qwen_model: nextSettings.qwen_model,
+          qwen_strong_model: nextSettings.qwen_strong_model,
+          qwen_base_url: nextSettings.qwen_base_url,
+          kimi_model: nextSettings.kimi_model,
+          kimi_strong_model: nextSettings.kimi_strong_model,
+          kimi_base_url: nextSettings.kimi_base_url,
           glm_api_key: glmKeyDraft,
+          deepseek_api_key: deepseekKeyDraft,
+          qwen_api_key: qwenKeyDraft,
+          kimi_api_key: kimiKeyDraft,
         },
       });
       setSavedHint(true);
@@ -460,11 +878,13 @@ export default function App() {
       }>("confirm_tool_call", { call });
 
       setMessages((prev) =>
-        prev.map((message, index) =>
-          index === messageIndex && message.role === "tool"
-            ? { ...message, confirmed: true }
-            : message
-        ).concat({ role: "tool", ...result })
+        prev
+          .map((message, index) =>
+            index === messageIndex && message.role === "tool"
+              ? { ...message, confirmed: true }
+              : message
+          )
+          .concat({ role: "tool", ...result })
       );
 
       if (result.ok && shouldAutoSyncObjectTable(result.name)) {
@@ -473,7 +893,7 @@ export default function App() {
       if (result.object_updates.length > 0) {
         updateSessionObjects((prev) => applyObjectUpdates(prev, result.object_updates));
       }
-      if (result.ok && shouldAutoSyncObjectTable(result.name)) {
+      if (result.ok && shouldAutoSyncObjectTable(result.name) && appPreferencesRef.current.autoSyncObjects) {
         await syncSessionObjects(false);
       }
     } catch (e) {
@@ -483,734 +903,984 @@ export default function App() {
     }
   }
 
-  const isExpanded = panelState !== "collapsed";
-  const accent =
-    settings.provider === "gemini"
-      ? "from-sky-500 to-violet-500"
-      : settings.provider === "glm"
-      ? "from-emerald-400 to-teal-500"
-      : "from-orange-400 to-rose-500";
-  const accentSolid =
-    settings.provider === "gemini"
-      ? "bg-violet-600 hover:bg-violet-500"
-      : settings.provider === "glm"
-      ? "bg-teal-600 hover:bg-teal-500"
-      : "bg-rose-500 hover:bg-rose-400";
-  const providerLabel =
-    settings.provider === "gemini" ? "Gemini" : settings.provider === "glm" ? "GLM" : "Claude";
+  function applySession(session: ChatSession) {
+    assistantDraftRef.current = "";
+    pendingToolCallsRef.current = {};
+    pendingLogRef.current = null;
+    pendingUndoSnapshotRef.current = null;
+    runTouchedObjectTableRef.current = false;
+    pendingPostRunSyncRef.current = false;
+    sessionObjectsRef.current = session.sessionObjects;
+    setActiveSessionId(session.id);
+    setMessages(session.messages);
+    setAssistantDraft("");
+    setSessionObjects(session.sessionObjects);
+    setDemoLog(session.demoLog);
+    setLastValidation(session.lastValidation);
+    setLastDrawParams(session.lastDrawParams);
+    setInput("");
+    setErrorMsg(null);
+    const meta = providerMeta(session.provider);
+    const nextSettings = {
+      ...settings,
+      provider: session.provider,
+      [meta.strongModelField]: session.model || settings[meta.strongModelField],
+    };
+    setSettings(nextSettings);
+    void saveSettings(nextSettings).catch((e) => setErrorMsg(String(e)));
+  }
+
+  function handleNewConversation() {
+    if (sending) return;
+    const session = createChatSession(settings);
+    setSessions((prev) => [session, ...prev]);
+    applySession(session);
+  }
+
+  function handleSelectSession(id: string) {
+    if (sending || id === activeSessionId) return;
+    const session = sessions.find((item) => item.id === id);
+    if (session) applySession(session);
+  }
+
+  function handleDeleteSession(id: string) {
+    if (sending) return;
+    const remaining = sessions.filter((session) => session.id !== id);
+    if (remaining.length > 0) {
+      setSessions(remaining);
+      if (id === activeSessionId) applySession(remaining[0]);
+      return;
+    }
+    const next = createChatSession(settings);
+    setSessions([next]);
+    applySession(next);
+  }
+
+  async function handleModelChange(provider: Provider, model: string) {
+    const meta = providerMeta(provider);
+    const nextSettings = {
+      ...settings,
+      provider,
+      [meta.strongModelField]: model,
+    };
+    setSettings(nextSettings);
+    await saveSettings(nextSettings);
+  }
+
+  async function recoverWindow(message?: string) {
+    try {
+      await appWindow.unminimize();
+      await appWindow.show();
+      await appWindow.center();
+      await appWindow.setFocus();
+      if (message) setErrorMsg(message);
+    } catch (e) {
+      setErrorMsg(`窗口恢复失败：${String(e)}`);
+    }
+  }
+
+  function handleWindowDrag(e: MouseEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a, [data-no-drag]")) return;
+    void appWindow.startDragging().catch((err) => {
+      setErrorMsg(`窗口拖拽失败：${String(err)}`);
+    });
+  }
+
+  async function runWindowAction(action: "minimize" | "toggleMaximize" | "close") {
+    try {
+      if (action === "minimize") {
+        await appWindow.minimize();
+      } else if (action === "toggleMaximize") {
+        await appWindow.toggleMaximize();
+      } else {
+        await appWindow.close();
+      }
+    } catch (e) {
+      setErrorMsg(`窗口控制失败：${String(e)}`);
+    }
+  }
+
+  const selectedProviderMeta = providerMeta(settings.provider);
+  const providerLabel = selectedProviderMeta.shortLabel;
+  const currentModel = currentModelFor(settings);
+  const bridgeState =
+    testStatus === null ? "idle" : testStatus.ok ? "online" : "error";
+  const bridgeLabel =
+    bridgeState === "online" ? "BRIDGE 在线" : bridgeState === "error" ? "BRIDGE 异常" : "BRIDGE 待测";
   const objectReferenceHints = getObjectReferenceHints(sessionObjects);
-  const currentKeySet =
-    settings.provider === "gemini"
-      ? settings.gemini_api_key_set
-      : settings.provider === "glm"
-      ? settings.glm_api_key_set
-      : settings.anthropic_api_key_set;
-  const quickPrompts =
-    settings.work_mode === "safety_demo_mode"
-      ? [
-          "画一个电梯井口防护门，井口宽 2000，高 1800",
-          "画一个电梯井口防护门，井口宽 2400，高 2000，含警示牌和材料表",
-          "帮我校核刚才画的防护门是否合规",
-        ]
-      : [
-          "画一条 7000mm 的直线",
-          "画一个半径 3000 的圆",
-          "画一个双跑楼梯，层高 3000",
-        ];
+  const currentKeySet = Boolean(settings[selectedProviderMeta.keySetField]);
+  const quickPrompts = [
+    "画一条 7000mm 的直线",
+    "画一个半径 3000 的圆",
+    "画一个双跑楼梯，层高 3000",
+    "画一个电梯井口防护门，井口宽 2000，高 1800",
+  ];
+  const sessionTitle =
+    sessions.find((session) => session.id === activeSessionId)?.title ??
+    sessionTitleFromMessages(messages);
+  const glassStyle = glassCssVariables(glassSettings, appPreferences.fontSize);
 
   return (
-    <div className="absolute right-0 top-0 h-full flex items-center justify-end pointer-events-none">
-      {/* Collapsed tab */}
-      <div
-        onMouseEnter={handleMouseEnter}
-        className={`absolute right-0 flex items-center justify-center w-9 h-20 rounded-l-2xl bg-gradient-to-b ${accent} text-white text-sm font-semibold cursor-pointer shadow-xl ring-1 ring-white/40 transition-all duration-200 pointer-events-auto ${
-          isExpanded ? "opacity-0 translate-x-2 pointer-events-none" : "opacity-100 translate-x-0"
-        }`}
-      >
-        <span className="rotate-180 [writing-mode:vertical-rl] tracking-widest text-[11px]">
-          CAD·Egg
-        </span>
-      </div>
+    <div
+      className={`cadegg-app ${glassSettings.border === "glow" ? "glass-glow" : "glass-pixel"} ${
+        appPreferences.reduceMotion ? "reduce-motion" : ""
+      } ${appPreferences.densePanels ? "dense-panels" : ""}`}
+      style={glassStyle}
+    >
+      <div className="ambient-layer" aria-hidden="true" />
 
-      {/* Expanded panel */}
-      <div
-        ref={panelRef}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        className={`relative flex flex-col w-[340px] h-[94vh] mr-3 rounded-3xl bg-white/85 backdrop-blur-2xl text-slate-800 shadow-[0_20px_60px_-15px_rgba(15,23,42,0.35)] ring-1 ring-slate-200/70 overflow-hidden transition-all duration-300 origin-right pointer-events-auto ${
-          isExpanded ? "scale-100 opacity-100 translate-x-0" : "scale-95 opacity-0 translate-x-6 pointer-events-none"
-        }`}
-      >
-        {/* Header */}
-        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-slate-200/80">
-          <div className={`w-7 h-7 rounded-xl bg-gradient-to-br ${accent} shadow-sm flex items-center justify-center text-white text-[11px] font-bold`}>
-            ✱
+      <header className="topbar glass-dark">
+        <div className="brand-lockup drag-zone" onMouseDown={handleWindowDrag}>
+          <EggLogo />
+          <div>
+            <div className="brand-name">CADEgg</div>
+            <div className="brand-caption">AutoCAD AGENT</div>
           </div>
-          <div className="flex-1 leading-tight">
-            <div className="text-sm font-semibold text-slate-800">CADEgg</div>
-            <div className="text-[10px] text-slate-500">{providerLabel} · AutoCAD Agent</div>
-          </div>
-          <button
-            className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center text-base transition-colors"
-            title={view === "chat" ? "设置" : "返回对话"}
-            onClick={() => setView(view === "chat" ? "settings" : "chat")}
-          >
-            {view === "chat" ? "⚙" : "←"}
-          </button>
         </div>
 
-        {/* Chat view */}
-        {view === "chat" && (
-          <>
-            <div ref={scrollRef} className="flex-1 px-4 py-3 flex flex-col gap-3 overflow-y-auto">
-              {/* CAD connection row */}
-              <div className="rounded-2xl bg-slate-50/80 border border-slate-200/70 p-3 flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">CAD 连接</span>
-                  <span className="text-[10px] text-slate-400">桥接优先 · COM 回退</span>
-                </div>
-                <div className="flex gap-1.5">
-                  <button
-                    className="flex-1 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs text-slate-700 font-medium shadow-sm transition-colors"
-                    onClick={() => runCadAction("test_cad_connection")}
-                  >
-                    连接
-                  </button>
-                  <button
-                    className="flex-1 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-xs text-slate-700 font-medium shadow-sm transition-colors"
-                    onClick={() => runCadAction("draw_test_line")}
-                  >
-                    画线
-                  </button>
-                </div>
-                <button
-                  className="w-full py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-xs text-white font-medium shadow-sm transition-colors"
-                  onClick={handleUndoLastGeneration}
-                  disabled={sending || undoing || syncingObjects}
-                >
-                  {undoing ? "撤回中..." : "撤回上一次生成"}
-                </button>
-                {testStatus && (
-                  <div
-                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-mono break-all ${
-                      testStatus.ok
-                        ? "bg-emerald-50 border border-emerald-200 text-emerald-700"
-                        : "bg-rose-50 border border-rose-200 text-rose-700"
-                    }`}
-                  >
-                    {testStatus.msg}
-                  </div>
-                )}
-              </div>
+        <div className="session-title drag-zone" title={sessionTitle} onMouseDown={handleWindowDrag}>
+          {sessionTitle}
+        </div>
 
-              <div className="rounded-2xl bg-amber-50/70 border border-amber-200/80 p-3 flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-amber-700 uppercase tracking-wider font-medium">
-                    会话对象
-                  </span>
-                  <span className="text-[10px] text-amber-600">
-                    {sessionObjects.length > 0
-                      ? `${sessionObjects.length} 个可引用对象`
-                      : "尚无可引用对象"}
-                  </span>
-                </div>
-                <div className="flex gap-1.5">
-                  <button
-                    className="flex-1 py-1.5 rounded-lg bg-white/85 border border-amber-200 text-[10px] text-amber-900 font-medium hover:bg-white disabled:bg-white/60 disabled:text-amber-400 transition-colors"
-                    onClick={handleImportSelectedObjects}
-                    disabled={sending || undoing || syncingObjects || importingSelection}
-                  >
-                    {importingSelection ? "导入中" : "导入选中"}
-                  </button>
-                  <button
-                    className="flex-1 py-1.5 rounded-lg bg-white/85 border border-amber-200 text-[10px] text-amber-800 font-medium hover:bg-white disabled:bg-white/60 disabled:text-amber-400 transition-colors"
-                    onClick={() => void syncSessionObjects(true)}
-                    disabled={sending || undoing || syncingObjects || importingSelection || sessionObjects.length === 0}
-                  >
-                    {syncingObjects ? "同步中" : "同步"}
-                  </button>
-                </div>
-                {sessionObjects.length > 0 ? (
-                  <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-0.5">
-                    {sessionObjects.map((object) => (
-                      <div
-                        key={object.handle}
-                        className="rounded-xl bg-white/80 border border-amber-200/70 px-2.5 py-2 text-[11px] text-slate-700"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 font-mono">
-                            {object.handle}
-                          </span>
-                          <span className="text-[10px] font-semibold text-amber-700">
-                            {object.kind}
-                          </span>
-                          <span className="text-[10px] text-slate-500">
-                            {sourceDisplayLabel(object.source)}
-                          </span>
-                        </div>
-                        <div className="mt-1 leading-relaxed break-words">{object.label}</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {(objectReferenceHints.get(object.handle) ?? []).slice(0, 3).map((hint) => (
-                            <span
-                              key={hint}
-                              className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-600"
-                            >
-                              {hint}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-xl bg-white/70 border border-dashed border-amber-200 px-3 py-2 text-[11px] text-amber-800 leading-relaxed">
-                    先在 AutoCAD 里选中对象，再点“导入选中”，这些对象就会进入当前会话对象表，后续对话可继续引用。
-                  </div>
-                )}
-              </div>
-
-              {/* Draw result card */}
-              {lastDrawParams && (
-                <div className="rounded-2xl bg-slate-50/80 border border-slate-200/70 p-3 flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">
-                      本次出图
-                    </span>
-                    <span className="text-[10px] text-slate-400">已生成电梯井口防护门</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5 text-[11px] text-slate-700">
-                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
-                      <span className="block text-[10px] text-slate-400">井口宽度</span>
-                      {String(lastDrawParams.opening_width ?? "—")} mm
-                    </div>
-                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
-                      <span className="block text-[10px] text-slate-400">井口高度</span>
-                      {String(lastDrawParams.opening_height ?? "—")} mm
-                    </div>
-                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
-                      <span className="block text-[10px] text-slate-400">防护门高</span>
-                      {String(lastDrawParams.guard_height ?? "1500")} mm
-                    </div>
-                    <div className="rounded-lg bg-white/80 border border-slate-200/70 px-2 py-1.5">
-                      <span className="block text-[10px] text-slate-400">踢脚板</span>
-                      {String(lastDrawParams.toe_board_height ?? "200")} mm
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-600">
-                      警示牌 {lastDrawParams.include_warning_sign === false ? "未配" : "已配"}
-                    </span>
-                    <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-600">
-                      材料表 {lastDrawParams.include_material_table === false ? "未配" : "已配"}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* Validation panel */}
-              {lastValidation && (
-                <div
-                  className={`rounded-2xl border p-3 flex flex-col gap-2 ${
-                    lastValidation.ok
-                      ? "bg-emerald-50/70 border-emerald-200/80"
-                      : "bg-rose-50/70 border-rose-200/80"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase tracking-wider font-medium text-slate-600">
-                      安全防护校核
-                    </span>
-                    <span
-                      className={`text-[11px] font-semibold ${
-                        lastValidation.ok ? "text-emerald-700" : "text-rose-700"
-                      }`}
-                    >
-                      {lastValidation.ok ? "✓ 通过" : "✗ 未通过"}
-                    </span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {lastValidation.checks.map((check) => (
-                      <div
-                        key={check.id}
-                        className="flex items-start gap-1.5 text-[11px] leading-snug"
-                      >
-                        <span
-                          className={`shrink-0 font-semibold ${
-                            check.passed ? "text-emerald-600" : "text-rose-600"
-                          }`}
-                        >
-                          {check.passed ? "✓" : "✗"}
-                        </span>
-                        <span className="text-slate-700">{check.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {lastValidation.issues.length > 0 && (
-                    <div className="rounded-lg bg-rose-100/70 px-2 py-1.5 text-[11px] text-rose-800">
-                      风险项：{lastValidation.issues.join("；")}
-                    </div>
-                  )}
-                  <div className="rounded-lg bg-white/70 border border-slate-200/70 px-2 py-1.5 text-[11px] text-slate-700">
-                    材料表：防护门 {lastValidation.material_table.guard_door} · 踢脚板{" "}
-                    {lastValidation.material_table.toe_board_height}mm · 警示牌{" "}
-                    {lastValidation.material_table.warning_sign ? "已配" : "未配"}
-                  </div>
-                </div>
-              )}
-
-              {/* Demo log */}
-              {demoLog.length > 0 && (
-                <details className="rounded-2xl bg-slate-50/80 border border-slate-200/70 p-3">
-                  <summary className="cursor-pointer text-[10px] uppercase tracking-wider font-medium text-slate-500 list-none">
-                    演示履历 · {demoLog.length} 条
-                  </summary>
-                  <div className="mt-2 flex flex-col gap-2">
-                    {demoLog.map((entry, idx) => (
-                      <div
-                        key={idx}
-                        className="rounded-xl bg-white/80 border border-slate-200/70 px-2.5 py-2 text-[11px] text-slate-700"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">{entry.time}</span>
-                          <span
-                            className={`font-semibold ${
-                              entry.validation
-                                ? entry.validation.ok
-                                  ? "text-emerald-600"
-                                  : "text-rose-600"
-                                : "text-slate-500"
-                            }`}
-                          >
-                            {entry.validation
-                              ? entry.validation.ok
-                                ? "校核通过"
-                                : "校核未通过"
-                              : "已执行"}
-                          </span>
-                        </div>
-                        <div className="mt-1 break-words text-slate-600">{entry.user_input}</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {entry.tool_calls.map((name) => (
-                            <span
-                              key={name}
-                              className="px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-700 font-mono text-[10px]"
-                            >
-                              {name}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-
-              {/* Messages */}
-              {messages.length === 0 && (
-                <div className="flex flex-col items-stretch text-center gap-3 py-2">
-                  <div className="flex flex-col items-center gap-2 pt-2">
-                    <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${accent} opacity-90 shadow-lg flex items-center justify-center text-white text-xl`}>
-                      ✦
-                    </div>
-                    <div>
-                      <p className="text-slate-700 text-sm font-semibold">我是 CADEgg，你的 CAD 绘图助手</p>
-                      <p className="text-slate-500 text-xs mt-1 leading-relaxed">
-                        {settings.work_mode === "safety_demo_mode"
-                          ? "用一句话，帮你在 AutoCAD 里生成符合规范的\n电梯井口防护门布置图，并自动校核。"
-                          : "用一句话，帮你在 AutoCAD 里画线、画圆、画楼梯，\n也能导入选中对象继续编辑。"}
-                      </p>
-                    </div>
-                  </div>
-
-                  {!currentKeySet && (
-                    <button
-                      onClick={() => setView("settings")}
-                      className="flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-left hover:bg-amber-100 transition-colors"
-                    >
-                      <span className="shrink-0 w-6 h-6 rounded-full bg-amber-400 text-white flex items-center justify-center text-xs font-bold">
-                        !
-                      </span>
-                      <span className="flex-1 text-[11px] leading-snug text-amber-800">
-                        还没配置 {providerLabel} API Key，现在还画不了图。
-                        <span className="block text-amber-600 font-medium">点这里去配置 →</span>
-                      </span>
-                    </button>
-                  )}
-
-                  <div className="flex flex-col gap-1.5">
-                    <p className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">
-                      试试这样说
-                    </p>
-                    {quickPrompts.map((prompt) => (
-                      <button
-                        key={prompt}
-                        onClick={() => setInput(prompt)}
-                        className="rounded-xl bg-white border border-slate-200 px-3 py-2 text-left text-xs text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 transition-colors"
-                      >
-                        {prompt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {messages.map((m, i) => renderMessage(m, i, accent, handleConfirmToolCall))}
-              {assistantDraft && (
-                <details className="self-start max-w-[88%] rounded-2xl bg-slate-50 border border-slate-200/80 shadow-sm px-3.5 py-2 text-slate-700">
-                  <summary className="cursor-pointer text-xs font-medium text-slate-500 list-none">
-                    思考中
-                  </summary>
-                  <div className="mt-2 text-sm whitespace-pre-wrap break-words leading-relaxed">
-                    {assistantDraft}
-                  </div>
-                </details>
-              )}
-              {sending && (
-                <div className="self-start flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-white border border-slate-200/80 shadow-sm">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.3s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:-0.15s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" />
-                </div>
-              )}
-              {errorMsg && (
-                <div className="px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-mono break-all">
-                  {errorMsg}
-                </div>
-              )}
-            </div>
-
-            <form
-              onSubmit={handleSubmit}
-              className="px-3 py-3 border-t border-slate-200/80 bg-white/60 flex gap-2 items-end"
-            >
-              <textarea
-                rows={1}
-                className="flex-1 resize-none bg-white text-slate-800 text-sm placeholder-slate-400 rounded-2xl px-3.5 py-2 outline-none border border-slate-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200 transition-all max-h-28"
-                placeholder={
-                  sending
-                    ? "等待回复..."
-                    : settings.work_mode === "safety_demo_mode"
-                    ? "画一个电梯井口防护门，井口宽 2000，高 1800..."
-                    : "画一条 7000mm 的直线..."
-                }
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSubmit(e as unknown as React.FormEvent);
-                  }
-                }}
-                disabled={sending}
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || sending}
-                className={`w-9 h-9 rounded-full ${accentSolid} disabled:bg-slate-200 disabled:text-slate-400 text-white text-base shadow-md flex items-center justify-center transition-all`}
-              >
-                ↑
-              </button>
-            </form>
-          </>
-        )}
-
-        {/* Settings drawer overlay */}
-        <div
-          className={`absolute inset-0 bg-white flex flex-col transition-transform duration-300 ease-out ${
-            view === "settings" ? "translate-x-0" : "translate-x-full"
-          }`}
-        >
-          <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-slate-200/80">
-            <button
-              className="w-7 h-7 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors"
-              onClick={() => setView("chat")}
-            >
-              ←
+        <div className="topbar-actions" data-no-drag>
+          <StatusPill state={bridgeState} label={bridgeLabel} />
+          <div className="model-chip" title={`${providerLabel} · ${currentModel}`} data-no-drag>
+            {currentModel || providerLabel}
+          </div>
+          <div className="window-controls" data-no-drag onMouseDown={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => void runWindowAction("minimize")} aria-label="最小化">
+              <span />
             </button>
-            <span className="text-sm font-semibold text-slate-800">设置</span>
+            <button type="button" onClick={() => void runWindowAction("toggleMaximize")} aria-label="最大化">
+              <span />
+            </button>
+            <button type="button" onClick={() => void runWindowAction("close")} aria-label="关闭">
+              <span />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="decor-stripe" aria-hidden="true">
+        <span />
+        <span />
+      </div>
+
+      <div className="app-grid">
+        <aside className="sidebar glass-panel pink-glass">
+          <button type="button" className="new-session-button" onClick={handleNewConversation}>
+            <IconPlus />
+            <span>新建会话</span>
+          </button>
+
+          <div className="sidebar-section">
+            <div className="section-label">会话</div>
+            {sessions.map((session) => (
+              <button
+                type="button"
+                className={`session-card ${session.id === activeSessionId ? "active" : ""}`}
+                onClick={() => handleSelectSession(session.id)}
+                key={session.id}
+              >
+                <strong>{session.title}</strong>
+                <span>
+                  {providerMeta(session.provider).shortLabel} · {session.model || "默认模型"}
+                </span>
+                {sessions.length > 1 && (
+                  <i
+                    role="button"
+                    tabIndex={0}
+                    aria-label="删除会话"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteSession(session.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeleteSession(session.id);
+                      }
+                    }}
+                  >
+                    ×
+                  </i>
+                )}
+              </button>
+            ))}
           </div>
 
-          <div className="flex-1 px-4 py-4 flex flex-col gap-5 overflow-y-auto">
-            {/* Provider switch */}
-            <div className="flex flex-col gap-2">
-              <label className="text-xs text-slate-500 font-medium">模型提供方</label>
-              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl">
-                {(["gemini", "glm"] as Provider[]).map((p) => {
-                  const active = settings.provider === p;
-                  const label = p === "gemini" ? "Gemini" : "GLM";
-                  return (
-                    <button
-                      key={p}
-                      onClick={() => setSettings({ ...settings, provider: p })}
-                      className={`py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        active
-                          ? "bg-white text-slate-800 shadow-sm"
-                          : "text-slate-500 hover:text-slate-700"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-              {settings.provider === "glm" && (
-                <p className="text-[10px] text-emerald-700 leading-snug">
-                  智谱 GLM-4-Flash / 4.5-Flash 有免费额度，国内直连不用代理。
-                </p>
-              )}
-            </div>
+          <div className="sidebar-spacer" />
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs text-slate-500 font-medium">工作模式</label>
-              <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl">
-                {(["competition_mode", "safety_demo_mode"] as const).map((mode) => {
-                  const active = settings.work_mode === mode;
-                  const label = mode === "competition_mode" ? "比赛模式" : "安全防护 demo";
-                  return (
-                    <button
-                      key={mode}
-                      onClick={() =>
-                        setSettings({
-                          ...settings,
-                          work_mode: mode,
-                          provider: settings.provider === "claude" ? "glm" : settings.provider,
-                        })
-                      }
-                      className={`py-1.5 rounded-lg text-xs font-medium transition-all ${
-                        active
-                          ? "bg-white text-slate-800 shadow-sm"
-                          : "text-slate-500 hover:text-slate-700"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-[10px] text-slate-400 leading-snug">
-                比赛模式隐藏 Claude 和 run_lisp；安全防护 demo 只开放电梯井口防护门闭环工具。
-              </p>
-            </div>
+          <button type="button" className="sidebar-settings" onClick={() => setView("settings")}>
+            <IconGear />
+            <span>设置</span>
+            <span>v0.3.4</span>
+          </button>
+        </aside>
 
-            {settings.provider === "claude" ? (
-              <>
-                <KeyField
-                  label="Anthropic API Key"
-                  isSet={settings.anthropic_api_key_set}
-                  preview={settings.anthropic_api_key_preview}
-                  draft={claudeKeyDraft}
-                  onDraftChange={setClaudeKeyDraft}
-                  placeholder="sk-ant-..."
-                />
-
-                <Field label="API Base URL" hint="官方留空即可；中转站填到 /v1/messages 之前的部分">
-                  <input
-                    type="text"
-                    className={inputCls}
-                    placeholder="https://api.anthropic.com"
-                    value={settings.base_url}
-                    onChange={(e) => setSettings({ ...settings, base_url: e.target.value })}
-                  />
-                </Field>
-
-                <Field label="模型" hint="中转站若不允许指定模型，请留空">
-                  <input
-                    type="text"
-                    list="claude-models"
-                    className={inputCls}
-                    placeholder="claude-opus-4-7（中转站可留空）"
-                    value={settings.model}
-                    onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-                  />
-                  <datalist id="claude-models">
-                    {CLAUDE_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </Field>
-              </>
-            ) : settings.provider === "gemini" ? (
-              <>
-                <KeyField
-                  label="Gemini API Key"
-                  isSet={settings.gemini_api_key_set}
-                  preview={settings.gemini_api_key_preview}
-                  draft={geminiKeyDraft}
-                  onDraftChange={setGeminiKeyDraft}
-                  placeholder="AIza..."
-                />
-
-                <Field
-                  label="API Base URL"
-                  hint="官方地址在中国大陆被墙。需走代理或填入 Gemini 中转站地址"
-                >
-                  <input
-                    type="text"
-                    className={inputCls}
-                    placeholder="https://generativelanguage.googleapis.com"
-                    value={settings.gemini_base_url}
-                    onChange={(e) =>
-                      setSettings({ ...settings, gemini_base_url: e.target.value })
-                    }
-                  />
-                </Field>
-
-                <Field label="模型" hint="2.5-pro 需付费；2.5-flash / 2.0-flash 免费层可用">
-                  <input
-                    type="text"
-                    list="gemini-models"
-                    className={inputCls}
-                    placeholder="gemini-2.0-flash"
-                    value={settings.gemini_model}
-                    onChange={(e) =>
-                      setSettings({ ...settings, gemini_model: e.target.value })
-                    }
-                  />
-                  <datalist id="gemini-models">
-                    {GEMINI_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </Field>
-
-                <Field
-                  label="强模型（规划/出图）"
-                  hint="复杂出图、规划、校核自动走此模型；若未开通 Pro，可选 2.5-flash"
-                >
-                  <input
-                    type="text"
-                    list="gemini-strong-models"
-                    className={inputCls}
-                    placeholder="gemini-2.5-flash"
-                    value={settings.gemini_strong_model}
-                    onChange={(e) =>
-                      setSettings({ ...settings, gemini_strong_model: e.target.value })
-                    }
-                  />
-                  <datalist id="gemini-strong-models">
-                    {GEMINI_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </Field>
-              </>
+        <section className="chat-column">
+          <div ref={scrollRef} className="message-stage">
+            {messages.length === 0 ? (
+              <WelcomeStage
+                quickPrompts={quickPrompts}
+                setInput={setInput}
+                currentKeySet={currentKeySet}
+                providerLabel={providerLabel}
+                onOpenSettings={() => setView("settings")}
+              />
             ) : (
-              <>
-                <KeyField
-                  label="GLM API Key"
-                  isSet={settings.glm_api_key_set}
-                  preview={settings.glm_api_key_preview}
-                  draft={glmKeyDraft}
-                  onDraftChange={setGlmKeyDraft}
-                  placeholder="xxxxxxxx.xxxx（在 bigmodel.cn 控制台获取）"
-                />
-
-                {!settings.glm_api_key_set && (
-                  <div className="rounded-xl bg-emerald-50/70 border border-emerald-200/80 p-3 flex flex-col gap-2">
-                    <p className="text-[11px] font-medium text-emerald-800">还没有 Key？三步搞定：</p>
-                    <ol className="flex flex-col gap-1.5 text-[11px] text-emerald-900 leading-snug">
-                      <li className="flex gap-1.5">
-                        <span className="shrink-0 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">1</span>
-                        <span>打开 open.bigmodel.cn 注册并登录</span>
-                      </li>
-                      <li className="flex gap-1.5">
-                        <span className="shrink-0 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">2</span>
-                        <span>控制台「API 密钥」里新建一个密钥并复制</span>
-                      </li>
-                      <li className="flex gap-1.5">
-                        <span className="shrink-0 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-bold">3</span>
-                        <span>粘到上面的输入框，点底部「保存」即可</span>
-                      </li>
-                    </ol>
-                    <p className="text-[10px] text-emerald-700/80">
-                      GLM-4-Flash / 4.5-Flash 有免费额度，国内直连无需代理。
-                    </p>
-                  </div>
-                )}
-
-                <Field
-                  label="API Base URL"
-                  hint="智谱官方端点；中转/反代请改这里"
-                >
-                  <input
-                    type="text"
-                    className={inputCls}
-                    placeholder="https://open.bigmodel.cn/api/paas/v4"
-                    value={settings.glm_base_url}
-                    onChange={(e) =>
-                      setSettings({ ...settings, glm_base_url: e.target.value })
-                    }
-                  />
-                </Field>
-
-                <Field label="模型" hint="glm-4-flash / 4.5-flash 免费；glm-4.5 / 4-plus 付费">
-                  <input
-                    type="text"
-                    list="glm-models"
-                    className={inputCls}
-                    placeholder="glm-4-flash"
-                    value={settings.glm_model}
-                    onChange={(e) =>
-                      setSettings({ ...settings, glm_model: e.target.value })
-                    }
-                  />
-                  <datalist id="glm-models">
-                    {GLM_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </Field>
-
-                <Field
-                  label="强模型（规划/出图）"
-                  hint="复杂出图、规划、校核自动走此模型；纯问答走上面的便宜模型"
-                >
-                  <input
-                    type="text"
-                    list="glm-strong-models"
-                    className={inputCls}
-                    placeholder="glm-4.5"
-                    value={settings.glm_strong_model}
-                    onChange={(e) =>
-                      setSettings({ ...settings, glm_strong_model: e.target.value })
-                    }
-                  />
-                  <datalist id="glm-strong-models">
-                    {GLM_MODELS.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </datalist>
-                </Field>
-              </>
+              messages.map((m, i) => renderMessage(m, i, handleConfirmToolCall))
             )}
 
-            <p className="text-[10px] text-slate-400 leading-snug">
-              API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key，发送请求时由 Rust 后端直接加到 HTTP 头，永不暴露给前端 JS。
-            </p>
+            {assistantDraft && (
+              <details className="message-bubble draft-message" open>
+                <summary>思考中</summary>
+                <div>{assistantDraft}</div>
+              </details>
+            )}
+
+            {sending && (
+              <div className="typing-indicator" aria-label="正在执行">
+                <span />
+                <span />
+                <span />
+                <b>CADEgg 思考中...</b>
+              </div>
+            )}
+
+            {errorMsg && <div className="inline-error">{errorMsg}</div>}
           </div>
 
-          <div className="px-3 py-3 border-t border-slate-200/80 flex gap-2 items-center bg-white">
-            <span className="flex-1 text-xs text-emerald-600 font-medium transition-opacity">
-              {savedHint ? "✓ 已保存" : ""}
-            </span>
-            <button
-              onClick={saveSettings}
-              className={`px-5 py-2 rounded-xl ${accentSolid} text-white text-sm font-medium shadow-md transition-colors`}
-            >
-              保存
-            </button>
-          </div>
-        </div>
+          <form className="composer glass-panel amber-glass" onSubmit={handleSubmit}>
+            <ModelPicker
+              settings={settings}
+              currentKeySet={currentKeySet}
+              onModelChange={handleModelChange}
+              onOpenSettings={() => setView("settings")}
+            />
+            <div className="composer-hint">Enter 发送 · Shift+Enter 换行</div>
+            <textarea
+              rows={2}
+              placeholder={
+                sending
+                  ? "等待回复..."
+                  : "描述你要绘制、修改或查询的 CAD 操作..."
+              }
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e as unknown as FormEvent);
+                }
+              }}
+              disabled={sending}
+            />
+            <div className="composer-side">
+              <span>{providerLabel}</span>
+              <button type="submit" disabled={!input.trim() || sending} aria-label="发送">
+                <IconSend />
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <aside className="right-rail glass-panel lavender-glass">
+          <CadCard
+            testStatus={testStatus}
+            undoing={undoing}
+            sending={sending}
+            syncingObjects={syncingObjects}
+            runCadAction={runCadAction}
+            handleUndoLastGeneration={handleUndoLastGeneration}
+          />
+          <DrawResultCard lastDrawParams={lastDrawParams} />
+          <ValidationCard lastValidation={lastValidation} />
+          <SessionObjectsCard
+            sessionObjects={sessionObjects}
+            objectReferenceHints={objectReferenceHints}
+            sending={sending}
+            undoing={undoing}
+            syncingObjects={syncingObjects}
+            importingSelection={importingSelection}
+            handleImportSelectedObjects={handleImportSelectedObjects}
+            syncSessionObjects={syncSessionObjects}
+          />
+        </aside>
       </div>
+
+      {view === "settings" && (
+        <SettingsModal
+          settings={settings}
+          setSettings={setSettings}
+          appPreferences={appPreferences}
+          setAppPreferences={setAppPreferences}
+          glassSettings={glassSettings}
+          setGlassSettings={setGlassSettings}
+          savedHint={savedHint}
+          saveSettings={saveSettings}
+          glmKeyDraft={glmKeyDraft}
+          setGlmKeyDraft={setGlmKeyDraft}
+          deepseekKeyDraft={deepseekKeyDraft}
+          setDeepseekKeyDraft={setDeepseekKeyDraft}
+          qwenKeyDraft={qwenKeyDraft}
+          setQwenKeyDraft={setQwenKeyDraft}
+          kimiKeyDraft={kimiKeyDraft}
+          setKimiKeyDraft={setKimiKeyDraft}
+          onRecoverWindow={recoverWindow}
+          onClose={() => setView("chat")}
+        />
+      )}
+    </div>
+  );
+}
+
+function ModelPicker({
+  settings,
+  currentKeySet,
+  onModelChange,
+  onOpenSettings,
+}: {
+  settings: SettingsView;
+  currentKeySet: boolean;
+  onModelChange: (provider: Provider, model: string) => Promise<void>;
+  onOpenSettings: () => void;
+}) {
+  const meta = providerMeta(settings.provider);
+  const model = currentModelFor(settings);
+  const hasPreset = meta.models.some((item) => item.id === model);
+
+  return (
+    <div className="model-picker" data-no-drag>
+      <select
+        aria-label="模型供应商"
+        value={settings.provider}
+        onChange={(e) => {
+          const provider = e.target.value as Provider;
+          const nextMeta = providerMeta(provider);
+          const nextModel = String(settings[nextMeta.strongModelField] || nextMeta.models[0].id);
+          void onModelChange(provider, nextModel);
+        }}
+      >
+        {MODEL_PROVIDERS.map((provider) => (
+          <option key={provider.id} value={provider.id}>
+            {provider.label}
+          </option>
+        ))}
+      </select>
+
+      <select
+        aria-label="当前会话模型"
+        value={hasPreset ? model : "__custom"}
+        onChange={(e) => {
+          if (e.target.value !== "__custom") {
+            void onModelChange(settings.provider, e.target.value);
+          }
+        }}
+      >
+        {!hasPreset && <option value="__custom">{model}</option>}
+        {meta.models.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+
+      <button
+        type="button"
+        className={`key-status ${currentKeySet ? "ready" : ""}`}
+        onClick={onOpenSettings}
+      >
+        {currentKeySet ? "BYOK 已配置" : "填写 Key"}
+      </button>
+      <span className="failover-chip">自动轮转</span>
+    </div>
+  );
+}
+
+function WelcomeStage({
+  quickPrompts,
+  setInput,
+  currentKeySet,
+  providerLabel,
+  onOpenSettings,
+}: {
+  quickPrompts: string[];
+  setInput: (value: string) => void;
+  currentKeySet: boolean;
+  providerLabel: string;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div className="welcome">
+      <div className="hero-logo">
+        <EggLogo large />
+      </div>
+      <h1>CADEgg</h1>
+      <p>选择模型后，直接描述你要在 AutoCAD 里完成的操作。</p>
+
+      {!currentKeySet && (
+        <button type="button" className="key-warning" onClick={onOpenSettings}>
+          <b>需要配置 {providerLabel} API Key</b>
+          <span>点这里打开设置</span>
+        </button>
+      )}
+
+      <div className="prompt-list">
+        {quickPrompts.map((prompt) => (
+          <button type="button" key={prompt} onClick={() => setInput(prompt)}>
+            {prompt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CadCard({
+  testStatus,
+  undoing,
+  sending,
+  syncingObjects,
+  runCadAction,
+  handleUndoLastGeneration,
+}: {
+  testStatus: { ok: boolean; msg: string } | null;
+  undoing: boolean;
+  sending: boolean;
+  syncingObjects: boolean;
+  runCadAction: (cmd: "test_cad_connection" | "draw_test_line") => Promise<void>;
+  handleUndoLastGeneration: () => Promise<void>;
+}) {
+  return (
+    <section className="rail-card cad-card">
+      <PanelHeader title="CAD 连接" status={testStatus?.ok ? "online" : "idle"} />
+      <p>桥接优先 · COM 回退</p>
+      <div className="button-row">
+        <button type="button" onClick={() => runCadAction("test_cad_connection")}>
+          连接
+        </button>
+        <button type="button" onClick={() => runCadAction("draw_test_line")}>
+          画线
+        </button>
+      </div>
+      <button
+        type="button"
+        className="dark-action"
+        onClick={handleUndoLastGeneration}
+        disabled={sending || undoing || syncingObjects}
+      >
+        {undoing ? "撤回中..." : "撤回上一次生成"}
+      </button>
+      {testStatus && (
+        <div className={`status-readout ${testStatus.ok ? "ok" : "bad"}`}>{testStatus.msg}</div>
+      )}
+    </section>
+  );
+}
+
+function DrawResultCard({
+  lastDrawParams,
+}: {
+  lastDrawParams: Record<string, unknown> | null;
+}) {
+  if (!lastDrawParams) {
+    return (
+      <section className="rail-card muted-card">
+        <PanelHeader title="本次出图" />
+        <p>等待 AutoCAD 生成结果</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rail-card">
+      <PanelHeader title="本次出图" />
+      <div className="metric-grid">
+        <Metric label="井口宽度" value={`${String(lastDrawParams.opening_width ?? "-")} mm`} />
+        <Metric label="井口高度" value={`${String(lastDrawParams.opening_height ?? "-")} mm`} />
+        <Metric label="防护门高" value={`${String(lastDrawParams.guard_height ?? "1500")} mm`} />
+        <Metric label="踢脚板" value={`${String(lastDrawParams.toe_board_height ?? "200")} mm`} />
+      </div>
+      <div className="tag-row">
+        <span>警示牌 {lastDrawParams.include_warning_sign === false ? "未配" : "已配"}</span>
+        <span>材料表 {lastDrawParams.include_material_table === false ? "未配" : "已配"}</span>
+      </div>
+    </section>
+  );
+}
+
+function ValidationCard({
+  lastValidation,
+}: {
+  lastValidation: ElevatorValidation | null;
+}) {
+  if (!lastValidation) {
+    return (
+      <section className="rail-card muted-card">
+        <PanelHeader title="安全校核" />
+        <p>校核结果会在工具执行后出现</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className={`rail-card validation-card ${lastValidation.ok ? "valid" : "invalid"}`}>
+      <PanelHeader title="安全校核" status={lastValidation.ok ? "online" : "error"} />
+      <strong>{lastValidation.ok ? "安全校核通过" : "安全校核未通过"}</strong>
+      <div className="check-list">
+        {lastValidation.checks.map((check) => (
+          <div key={check.id}>
+            <span className={check.passed ? "pass" : "fail"}>
+              {check.passed ? <IconCheck /> : <IconCross />}
+            </span>
+            <span>{check.label}</span>
+          </div>
+        ))}
+      </div>
+      {lastValidation.issues.length > 0 && (
+        <div className="risk-box">风险项：{lastValidation.issues.join("；")}</div>
+      )}
+      <p>
+        材料表：防护门 {lastValidation.material_table.guard_door} · 踢脚板{" "}
+        {lastValidation.material_table.toe_board_height}mm · 警示牌{" "}
+        {lastValidation.material_table.warning_sign ? "已配" : "未配"}
+      </p>
+    </section>
+  );
+}
+
+function SessionObjectsCard({
+  sessionObjects,
+  objectReferenceHints,
+  sending,
+  undoing,
+  syncingObjects,
+  importingSelection,
+  handleImportSelectedObjects,
+  syncSessionObjects,
+}: {
+  sessionObjects: SessionObject[];
+  objectReferenceHints: Map<string, string[]>;
+  sending: boolean;
+  undoing: boolean;
+  syncingObjects: boolean;
+  importingSelection: boolean;
+  handleImportSelectedObjects: () => Promise<void>;
+  syncSessionObjects: (showStatus: boolean) => Promise<SessionObject[] | null>;
+}) {
+  return (
+    <section className="rail-card object-card">
+      <PanelHeader title={`会话对象 · ${sessionObjects.length} 个可引用`} />
+      <div className="button-row">
+        <button
+          type="button"
+          onClick={handleImportSelectedObjects}
+          disabled={sending || undoing || syncingObjects || importingSelection}
+        >
+          {importingSelection ? "导入中" : "导入选中"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void syncSessionObjects(true)}
+          disabled={sending || undoing || syncingObjects || importingSelection || sessionObjects.length === 0}
+        >
+          {syncingObjects ? "同步中" : "同步"}
+        </button>
+      </div>
+
+      {sessionObjects.length > 0 ? (
+        <div className="object-list">
+          {sessionObjects.map((object) => (
+            <article key={object.handle} className="object-item">
+              <div>
+                <code>{object.handle}</code>
+                <b>{object.kind}</b>
+                <span>{sourceDisplayLabel(object.source)}</span>
+              </div>
+              <p>{object.label}</p>
+              <div className="hint-row">
+                {(objectReferenceHints.get(object.handle) ?? []).slice(0, 3).map((hint) => (
+                  <span key={hint}>{hint}</span>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p>在 AutoCAD 中选中对象后可导入当前会话。</p>
+      )}
+    </section>
+  );
+}
+
+function SettingsModal({
+  settings,
+  setSettings,
+  appPreferences,
+  setAppPreferences,
+  glassSettings,
+  setGlassSettings,
+  savedHint,
+  saveSettings,
+  glmKeyDraft,
+  setGlmKeyDraft,
+  deepseekKeyDraft,
+  setDeepseekKeyDraft,
+  qwenKeyDraft,
+  setQwenKeyDraft,
+  kimiKeyDraft,
+  setKimiKeyDraft,
+  onRecoverWindow,
+  onClose,
+}: {
+  settings: SettingsView;
+  setSettings: Dispatch<SetStateAction<SettingsView>>;
+  appPreferences: AppPreferences;
+  setAppPreferences: Dispatch<SetStateAction<AppPreferences>>;
+  glassSettings: GlassSettings;
+  setGlassSettings: Dispatch<SetStateAction<GlassSettings>>;
+  savedHint: boolean;
+  saveSettings: (nextSettings?: SettingsView) => Promise<void>;
+  glmKeyDraft: string | null;
+  setGlmKeyDraft: (v: string | null) => void;
+  deepseekKeyDraft: string | null;
+  setDeepseekKeyDraft: (v: string | null) => void;
+  qwenKeyDraft: string | null;
+  setQwenKeyDraft: (v: string | null) => void;
+  kimiKeyDraft: string | null;
+  setKimiKeyDraft: (v: string | null) => void;
+  onRecoverWindow: (message?: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [draftAppPreferences, setDraftAppPreferences] = useState<AppPreferences>(() =>
+    normalizeAppPreferences(appPreferences)
+  );
+  const [draftGlassSettings, setDraftGlassSettings] = useState<GlassSettings>(() =>
+    normalizeGlassSettings(glassSettings)
+  );
+  const [isPreviewingGlass, setIsPreviewingGlass] = useState(false);
+  const previewGlassSettingsRef = useRef(draftGlassSettings);
+
+  useEffect(() => {
+    setDraftAppPreferences(normalizeAppPreferences(appPreferences));
+  }, [appPreferences]);
+
+  useEffect(() => {
+    const next = normalizeGlassSettings(glassSettings);
+    previewGlassSettingsRef.current = next;
+    setDraftGlassSettings(next);
+  }, [glassSettings]);
+
+  async function handleSaveAll() {
+    const nextAppPreferences = normalizeAppPreferences(draftAppPreferences);
+    setAppPreferences(nextAppPreferences);
+    await saveSettings();
+  }
+
+  function previewGlassSettings(partial: Partial<GlassSettings>) {
+    const next = normalizeGlassSettings({
+      ...previewGlassSettingsRef.current,
+      ...partial,
+    });
+    previewGlassSettingsRef.current = next;
+    applyGlassCssVariables(next);
+    saveGlassSettingsNow(next);
+    // CSS-only during drag — native effect only on commit to avoid flicker
+  }
+
+  function commitGlassSettings(partial: Partial<GlassSettings>) {
+    const next = normalizeGlassSettings({
+      ...previewGlassSettingsRef.current,
+      ...partial,
+    });
+    previewGlassSettingsRef.current = next;
+    setDraftGlassSettings(next);
+    applyGlassCssVariables(next);
+    saveGlassSettingsNow(next);
+    setGlassSettings(next);
+  }
+
+  function keyDraftFor(provider: Provider) {
+    if (provider === "deepseek") {
+      return {
+        draft: deepseekKeyDraft,
+        setDraft: setDeepseekKeyDraft,
+        placeholder: "sk-...",
+      };
+    }
+    if (provider === "qwen") {
+      return {
+        draft: qwenKeyDraft,
+        setDraft: setQwenKeyDraft,
+        placeholder: "sk-...",
+      };
+    }
+    if (provider === "kimi") {
+      return {
+        draft: kimiKeyDraft,
+        setDraft: setKimiKeyDraft,
+        placeholder: "sk-...",
+      };
+    }
+    return {
+      draft: glmKeyDraft,
+      setDraft: setGlmKeyDraft,
+      placeholder: "xxxxxxxx.xxxx",
+    };
+  }
+
+  return (
+    <div className={`modal-backdrop ${isPreviewingGlass ? "previewing-glass" : ""}`}>
+      <section className="settings-modal glass-modal" role="dialog" aria-modal="true">
+        <ModalHeader title="总设置" onClose={onClose} />
+
+        <div className="settings-content">
+          <section className="settings-group">
+            <GroupHeader title="应用" desc="这些选项只影响 CADEgg 前端体验，不会改动 AutoCAD 图形。" />
+            <Field label="界面语言" hint="当前文案以简体中文为主，英文界面作为后续完整本地化入口。">
+              <select
+                className={inputCls}
+                value={draftAppPreferences.language}
+                onChange={(e) =>
+                  setDraftAppPreferences((prev) => ({
+                    ...prev,
+                    language: e.target.value === "en-US" ? "en-US" : "zh-CN",
+                  }))
+                }
+              >
+                <option value="zh-CN">简体中文</option>
+                <option value="en-US">English</option>
+              </select>
+            </Field>
+
+            <Field label="字体大小" hint="拖动时仅预览数值，点击保存后应用到会话文字和输入区。">
+              <StableRange
+                ariaLabel="字体大小"
+                className="inline-slider"
+                min={12}
+                max={18}
+                value={draftAppPreferences.fontSize}
+                suffix="px"
+                onCommit={(fontSize) =>
+                  setDraftAppPreferences((prev) => ({
+                    ...prev,
+                    fontSize,
+                  }))
+                }
+              />
+            </Field>
+
+            <Field label="存储位置" hint="模型 Key 和模型配置由 Rust 后端保存；当前使用系统 AppData，避免把密钥写入项目目录。">
+              <select
+                className={inputCls}
+                value={draftAppPreferences.storageLocation}
+                onChange={(e) =>
+                  setDraftAppPreferences((prev) => ({
+                    ...prev,
+                    storageLocation: e.target.value === "project" ? "project" : "appdata",
+                  }))
+                }
+              >
+                <option value="appdata">系统 AppData（推荐）</option>
+                <option value="project">项目目录（仅记录偏好，后端暂不迁移密钥）</option>
+              </select>
+            </Field>
+
+            <div className="switch-grid">
+              <SwitchField
+                label="通知"
+                checked={draftAppPreferences.notifications}
+                onChange={(checked) =>
+                  setDraftAppPreferences((prev) => ({ ...prev, notifications: checked }))
+                }
+              />
+              <SwitchField
+                label="对象自动同步"
+                checked={draftAppPreferences.autoSyncObjects}
+                onChange={(checked) =>
+                  setDraftAppPreferences((prev) => ({ ...prev, autoSyncObjects: checked }))
+                }
+              />
+              <SwitchField
+                label="窗口置顶"
+                checked={draftAppPreferences.alwaysOnTop}
+                onChange={(checked) =>
+                  setDraftAppPreferences((prev) => ({ ...prev, alwaysOnTop: checked }))
+                }
+              />
+              <SwitchField
+                label="减少动画"
+                checked={draftAppPreferences.reduceMotion}
+                onChange={(checked) =>
+                  setDraftAppPreferences((prev) => ({ ...prev, reduceMotion: checked }))
+                }
+              />
+              <SwitchField
+                label="紧凑右栏"
+                checked={draftAppPreferences.densePanels}
+                onChange={(checked) =>
+                  setDraftAppPreferences((prev) => ({ ...prev, densePanels: checked }))
+                }
+              />
+            </div>
+          </section>
+
+          <section className="settings-group">
+            <GroupHeader
+              title="外观玻璃"
+              desc="拖动会即时应用并保存；透明度控制透出量，粗糙度控制磨砂感和透后清晰度。"
+            />
+            <StableRange
+              label="透明度"
+              min={0}
+              max={90}
+              value={draftGlassSettings.transparency}
+              suffix="%"
+              onPreview={(transparency) => previewGlassSettings({ transparency })}
+              onCommit={(transparency) => commitGlassSettings({ transparency })}
+              onDragStateChange={setIsPreviewingGlass}
+            />
+
+            <StableRange
+              label="粗糙度"
+              min={0}
+              max={100}
+              value={draftGlassSettings.blur}
+              suffix="%"
+              onPreview={(blur) => previewGlassSettings({ blur })}
+              onCommit={(blur) => commitGlassSettings({ blur })}
+              onDragStateChange={setIsPreviewingGlass}
+            />
+
+            <div className="border-style-field">
+              <span>边框样式</span>
+              <div className="segmented">
+                <button
+                  type="button"
+                  className={draftGlassSettings.border === "pixel" ? "active" : ""}
+                  onClick={() => commitGlassSettings({ border: "pixel" })}
+                >
+                  像素墨线
+                </button>
+                <button
+                  type="button"
+                  className={draftGlassSettings.border === "glow" ? "active" : ""}
+                  onClick={() => commitGlassSettings({ border: "glow" })}
+                >
+                  柔和发光
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="outline-action reset-glass"
+              onClick={() => commitGlassSettings(DEFAULT_GLASS_SETTINGS)}
+            >
+              重置玻璃参数
+            </button>
+            <button
+              type="button"
+              className="outline-action reset-glass"
+              onClick={() => void onRecoverWindow("窗口已重新居中")}
+            >
+              恢复窗口位置
+            </button>
+          </section>
+
+          <section className="settings-group">
+            <GroupHeader
+              title="模型密钥与轮转"
+              desc="会话里选择当前模型；这里管理各供应商 BYOK、Base URL 和自动轮转候选。"
+            />
+            <div className="provider-settings-list">
+              {MODEL_PROVIDERS.map((provider) => {
+                const keyDraft = keyDraftFor(provider.id);
+                const baseUrl = String(settings[provider.baseUrlField] ?? "");
+                const cheapModel = String(settings[provider.cheapModelField] ?? "");
+                const strongModel = String(settings[provider.strongModelField] ?? "");
+                const keySet = Boolean(settings[provider.keySetField]);
+                const keyPreview = String(settings[provider.keyPreviewField] ?? "");
+                const datalistId = `${provider.id}-models`;
+
+                return (
+                  <section className="provider-settings-card" key={provider.id}>
+                    <GroupHeader
+                      title={provider.label}
+                      desc="轻量模型用于普通问答；强模型用于规划、出图、校核。请求失败时后端会自动切换。"
+                    />
+                    <KeyField
+                      label={provider.apiLabel}
+                      isSet={keySet}
+                      preview={keyPreview}
+                      draft={keyDraft.draft}
+                      onDraftChange={keyDraft.setDraft}
+                      placeholder={keyDraft.placeholder}
+                    />
+                    <Field label="API Base URL" hint="兼容 OpenAI /chat/completions 的官方或中转地址。">
+                      <input
+                        type="text"
+                        className={inputCls}
+                        value={baseUrl}
+                        onChange={(e) =>
+                          setSettings({ ...settings, [provider.baseUrlField]: e.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="轻量模型">
+                      <input
+                        type="text"
+                        list={datalistId}
+                        className={inputCls}
+                        value={cheapModel}
+                        onChange={(e) =>
+                          setSettings({ ...settings, [provider.cheapModelField]: e.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="强模型">
+                      <input
+                        type="text"
+                        list={datalistId}
+                        className={inputCls}
+                        value={strongModel}
+                        onChange={(e) =>
+                          setSettings({ ...settings, [provider.strongModelField]: e.target.value })
+                        }
+                      />
+                      <datalist id={datalistId}>
+                        {provider.models.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.label}
+                          </option>
+                        ))}
+                      </datalist>
+                    </Field>
+                  </section>
+                );
+              })}
+            </div>
+
+            <p className="settings-note">
+              API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key。
+            </p>
+          </section>
+        </div>
+
+        <div className="modal-footer">
+          <span>{savedHint ? "已保存" : ""}</span>
+          <button type="button" className="outline-action" onClick={onClose}>
+            返回
+          </button>
+          <button type="button" className="primary-action" onClick={() => void handleSaveAll()}>
+            保存应用与模型
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1218,101 +1888,115 @@ export default function App() {
 function renderMessage(
   m: Message,
   i: number,
-  accent: string,
   onConfirmToolCall: (messageIndex: number, call: ToolCall) => void
 ) {
   if (m.role === "user") {
     return (
-      <div
-        key={i}
-        className={`max-w-[88%] px-3.5 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words leading-relaxed self-end bg-gradient-to-br ${accent} text-white shadow-md`}
-      >
+      <div key={i} className="message-bubble user-message">
         {m.content}
       </div>
     );
   }
+
   if (m.role === "plan") {
     return (
-      <details
-        key={i}
-        className="self-start max-w-[88%] rounded-2xl bg-slate-50 border border-slate-200/80 shadow-sm px-3 py-2"
-      >
-        <summary className="cursor-pointer text-xs font-medium text-slate-500 list-none">
+      <details key={i} className="message-bubble plan-message" open>
+        <summary>
           执行计划 · {m.tool_calls.length} 步 · {planSummary(m.tool_calls)}
         </summary>
-        <div className="mt-2 flex flex-col gap-1.5">
-          {m.text && (
-            <div className="text-sm whitespace-pre-wrap break-words leading-relaxed text-slate-700">
-              {m.text}
-            </div>
-          )}
+        {m.text && <div className="message-text">{m.text}</div>}
+        <div className="tool-call-list">
           {m.tool_calls.map((tc) => (
-            <div
-              key={tc.id}
-              className="px-3 py-2 rounded-xl bg-violet-50 border border-violet-200 text-[11px] font-mono text-violet-900"
-            >
-              <div className="font-semibold mb-0.5">{tc.name}</div>
-              <div className="opacity-75 break-words">{compactToolArgs(tc.args)}</div>
-            </div>
+            <article key={tc.id}>
+              <strong>{tc.name}</strong>
+              <code>{compactToolArgs(tc.args)}</code>
+            </article>
           ))}
         </div>
       </details>
     );
   }
+
   if (m.role === "assistant") {
     return (
-      <div key={i} className="self-start max-w-[88%] flex flex-col gap-1.5">
-        {m.text && (
-          <div className="px-3.5 py-2 rounded-2xl text-sm whitespace-pre-wrap break-words leading-relaxed bg-white text-slate-700 border border-slate-200/80 shadow-sm">
-            {m.text}
-          </div>
-        )}
+      <div key={i} className="assistant-stack">
+        {m.text && <div className="message-bubble assistant-message">{m.text}</div>}
         {m.tool_calls.map((tc) => (
-          <div
-            key={tc.id}
-            className="px-3 py-2 rounded-xl bg-violet-50 border border-violet-200 text-[11px] font-mono text-violet-900 break-all"
-          >
-            <div className="font-semibold mb-0.5">{tc.name}</div>
-            <div className="opacity-75">{JSON.stringify(tc.args)}</div>
-          </div>
+          <article key={tc.id} className="tool-call">
+            <strong>{tc.name}</strong>
+            <code>{JSON.stringify(tc.args)}</code>
+          </article>
         ))}
       </div>
     );
   }
-  // tool result
+
   return (
     <div
       key={i}
-      className={`self-start max-w-[88%] px-3 py-2 rounded-xl text-[11px] font-mono break-all ${
-        m.confirmation_required
-          ? "bg-amber-50 border border-amber-200 text-amber-900"
-          : m.ok
-          ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
-          : "bg-rose-50 border border-rose-200 text-rose-800"
+      className={`message-bubble tool-message ${
+        m.confirmation_required ? "confirm" : m.ok ? "ok" : "bad"
       }`}
     >
-      <span className="font-semibold">
-        {m.confirmation_required ? "!" : m.ok ? "✓" : "✗"} {m.name}:{" "}
-      </span>
-      {m.content}
+      <strong>
+        {m.confirmation_required ? "!" : m.ok ? <IconCheck /> : <IconCross />} {m.name}
+      </strong>
+      <span>{m.content}</span>
       {m.confirmation_required && m.pending_call && !m.confirmed && (
-        <button
-          type="button"
-          onClick={() => onConfirmToolCall(i, m.pending_call!)}
-          className="mt-2 w-full py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-semibold transition-colors"
-        >
+        <button type="button" onClick={() => onConfirmToolCall(i, m.pending_call!)}>
           确认执行
         </button>
       )}
-      {m.confirmation_required && m.confirmed && (
-        <div className="mt-2 text-[10px] text-amber-700">已确认，结果见下方。</div>
-      )}
+      {m.confirmation_required && m.confirmed && <em>已确认，结果见下方。</em>}
     </div>
   );
 }
 
-const inputCls =
-  "w-full bg-slate-50 text-slate-800 text-sm rounded-xl px-3 py-2 outline-none border border-slate-200 focus:border-slate-400 focus:bg-white focus:ring-2 focus:ring-slate-200 font-mono transition-all";
+function PanelHeader({
+  title,
+  status,
+}: {
+  title: string;
+  status?: "online" | "error" | "idle";
+}) {
+  return (
+    <header className="panel-header">
+      <h2>{title}</h2>
+      {status && <span className={`led ${status}`} />}
+    </header>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <b>{value}</b>
+    </div>
+  );
+}
+
+function StatusPill({ state, label }: { state: "online" | "error" | "idle"; label: string }) {
+  return (
+    <div className="status-pill">
+      <span className={`led ${state}`} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ModalHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <header className="modal-header">
+      <h2>{title}</h2>
+      <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+        <IconCross />
+      </button>
+    </header>
+  );
+}
+
+const inputCls = "settings-input";
 
 function KeyField({
   label,
@@ -1332,17 +2016,17 @@ function KeyField({
   const editing = draft !== null;
   const hint = isSet
     ? editing
-      ? "正在修改 —— 保存后覆盖原 key"
+      ? "正在修改，保存后覆盖原 key"
       : "已保存。点右侧按钮修改，原 key 不会被读回前端。"
-    : "本地保存到 AppData，不上传任何服务器";
+    : "本地保存到 AppData，不上传任何服务器。";
 
   return (
     <Field label={label} hint={hint}>
       {editing ? (
-        <div className="relative">
+        <div className="key-edit-row">
           <input
             type="password"
-            className={inputCls + " pr-20"}
+            className={inputCls}
             placeholder={placeholder}
             value={draft ?? ""}
             onChange={(e) => onDraftChange(e.target.value)}
@@ -1350,33 +2034,181 @@ function KeyField({
             autoComplete="off"
             autoFocus
           />
-          <button
-            type="button"
-            onClick={() => onDraftChange(null)}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 rounded-md text-[10px] text-slate-500 hover:text-slate-800 hover:bg-slate-100 font-medium transition-colors"
-          >
+          <button type="button" className="outline-action" onClick={() => onDraftChange(null)}>
             取消
           </button>
         </div>
       ) : (
-        <div className="flex gap-1.5 items-center">
-          <div
-            className={`${inputCls} flex-1 font-mono flex items-center ${
-              isSet ? "text-slate-600" : "text-slate-400"
-            }`}
-          >
-            {isSet ? preview : "（未设置）"}
-          </div>
-          <button
-            type="button"
-            onClick={() => onDraftChange("")}
-            className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition-colors whitespace-nowrap"
-          >
+        <div className="key-edit-row">
+          <div className={`${inputCls} key-preview`}>{isSet ? preview : "（未设置）"}</div>
+          <button type="button" className="outline-action" onClick={() => onDraftChange("")}>
             {isSet ? "修改" : "设置"}
           </button>
         </div>
       )}
     </Field>
+  );
+}
+
+function GroupHeader({ title, desc }: { title: string; desc: string }) {
+  return (
+    <header className="group-header">
+      <h3>{title}</h3>
+      <p>{desc}</p>
+    </header>
+  );
+}
+
+function SwitchField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="switch-field">
+      <span>{label}</span>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <b aria-hidden="true" />
+    </label>
+  );
+}
+
+function StableRange({
+  label,
+  ariaLabel,
+  className,
+  min,
+  max,
+  value,
+  suffix,
+  onPreview,
+  onCommit,
+  onDragStateChange,
+}: {
+  label?: string;
+  ariaLabel?: string;
+  className?: string;
+  min: number;
+  max: number;
+  value: number;
+  suffix: string;
+  onPreview?: (value: number) => void;
+  onCommit: (value: number) => void;
+  onDragStateChange?: (dragging: boolean) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const outputRef = useRef<HTMLElement | null>(null);
+  const valueRef = useRef(value);
+  const draggingRef = useRef(false);
+  const rangeLabel = label ?? ariaLabel ?? "滑块";
+  const classNames = className ? `slider-field ${className}` : "slider-field";
+  const commitKeys = new Set([
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+  ]);
+
+  function format(next: number) {
+    return `${Math.round(next)}${suffix}`;
+  }
+
+  function readValue() {
+    return Math.round(clamp(inputRef.current?.valueAsNumber ?? valueRef.current, min, max));
+  }
+
+  function previewValue() {
+    const next = readValue();
+    if (outputRef.current) {
+      outputRef.current.textContent = format(next);
+    }
+    onPreview?.(next);
+  }
+
+  function commitValue() {
+    const next = readValue();
+    const previous = valueRef.current;
+    valueRef.current = next;
+    if (inputRef.current) {
+      inputRef.current.value = String(next);
+    }
+    if (outputRef.current) {
+      outputRef.current.textContent = format(next);
+    }
+    if (next !== previous) {
+      onCommit(next);
+    }
+  }
+
+  function setDragging(next: boolean) {
+    if (draggingRef.current === next) return;
+    draggingRef.current = next;
+    onDragStateChange?.(next);
+  }
+
+  function endInteraction() {
+    commitValue();
+    setDragging(false);
+  }
+
+  function handleKeyUp(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (commitKeys.has(e.key)) {
+      commitValue();
+    }
+  }
+
+  useEffect(() => {
+    const next = Math.round(clamp(value, min, max));
+    valueRef.current = next;
+    if (inputRef.current) {
+      inputRef.current.value = String(next);
+    }
+    if (outputRef.current) {
+      outputRef.current.textContent = format(next);
+    }
+  }, [value, min, max, suffix]);
+
+  return (
+    <div className={classNames}>
+      {label && (
+        <label>
+          <span>{label}</span>
+          <b ref={outputRef}>{format(value)}</b>
+        </label>
+      )}
+      <input
+        ref={inputRef}
+        type="range"
+        min={min}
+        max={max}
+        defaultValue={value}
+        aria-label={rangeLabel}
+        onInput={previewValue}
+        onPointerDown={(e) => {
+          setDragging(true);
+          try {
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+          } catch {
+            // Some WebView range controls do not allow pointer capture; drag still works without it.
+          }
+        }}
+        onPointerUp={endInteraction}
+        onPointerCancel={endInteraction}
+        onLostPointerCapture={() => setDragging(false)}
+        onTouchEnd={endInteraction}
+        onBlur={endInteraction}
+        onKeyUp={handleKeyUp}
+      />
+      {!label && <b ref={outputRef}>{format(value)}</b>}
+    </div>
   );
 }
 
@@ -1387,13 +2219,95 @@ function Field({
 }: {
   label: string;
   hint?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-xs text-slate-500 font-medium">{label}</label>
+    <div className="field">
+      <label>{label}</label>
       {children}
-      {hint && <span className="text-[10px] text-slate-400 leading-snug">{hint}</span>}
+      {hint && <span>{hint}</span>}
     </div>
+  );
+}
+
+function EggLogo({ large = false }: { large?: boolean }) {
+  return (
+    <svg
+      className={`pixel-icon egg-logo ${large ? "large" : ""}`}
+      viewBox="0 0 32 32"
+      aria-hidden="true"
+    >
+      <rect x="8" y="6" width="16" height="4" />
+      <rect x="4" y="10" width="24" height="12" />
+      <rect x="8" y="22" width="16" height="4" />
+      <rect className="cut" x="8" y="12" width="4" height="4" />
+      <rect className="cut" x="20" y="12" width="4" height="4" />
+      <rect className="cut" x="14" y="18" width="4" height="4" />
+      <rect className="accent" x="14" y="2" width="4" height="4" />
+      <rect className="accent" x="2" y="14" width="4" height="4" />
+      <rect className="accent" x="26" y="14" width="4" height="4" />
+    </svg>
+  );
+}
+
+function IconPlus() {
+  return (
+    <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="7" y="3" width="2" height="10" />
+      <rect x="3" y="7" width="10" height="2" />
+    </svg>
+  );
+}
+
+function IconSend() {
+  return (
+    <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3" y="3" width="10" height="2" />
+      <rect x="5" y="5" width="8" height="2" />
+      <rect x="7" y="7" width="6" height="2" />
+      <rect x="5" y="9" width="8" height="2" />
+      <rect x="3" y="11" width="10" height="2" />
+    </svg>
+  );
+}
+
+function IconGear() {
+  return (
+    <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="6" y="1" width="4" height="3" />
+      <rect x="6" y="12" width="4" height="3" />
+      <rect x="1" y="6" width="3" height="4" />
+      <rect x="12" y="6" width="3" height="4" />
+      <rect x="5" y="5" width="6" height="6" />
+      <rect className="cut" x="7" y="7" width="2" height="2" />
+    </svg>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3" y="8" width="2" height="2" />
+      <rect x="5" y="10" width="2" height="2" />
+      <rect x="7" y="8" width="2" height="2" />
+      <rect x="9" y="6" width="2" height="2" />
+      <rect x="11" y="4" width="2" height="2" />
+    </svg>
+  );
+}
+
+function IconCross() {
+  return (
+    <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3" y="3" width="2" height="2" />
+      <rect x="5" y="5" width="2" height="2" />
+      <rect x="7" y="7" width="2" height="2" />
+      <rect x="9" y="9" width="2" height="2" />
+      <rect x="11" y="11" width="2" height="2" />
+      <rect x="11" y="3" width="2" height="2" />
+      <rect x="9" y="5" width="2" height="2" />
+      <rect x="5" y="9" width="2" height="2" />
+      <rect x="3" y="11" width="2" height="2" />
+    </svg>
   );
 }
