@@ -46,13 +46,43 @@ pub struct Settings {
     pub glm_strong_model: String,
     #[serde(default = "default_glm_base_url")]
     pub glm_base_url: String,
+
+    // DeepSeek (OpenAI-compatible)
+    #[serde(default)]
+    pub deepseek_api_key: String,
+    #[serde(default = "default_deepseek_model")]
+    pub deepseek_model: String,
+    #[serde(default = "default_deepseek_strong_model")]
+    pub deepseek_strong_model: String,
+    #[serde(default = "default_deepseek_base_url")]
+    pub deepseek_base_url: String,
+
+    // Qwen / DashScope compatible mode (OpenAI-compatible)
+    #[serde(default)]
+    pub qwen_api_key: String,
+    #[serde(default = "default_qwen_model")]
+    pub qwen_model: String,
+    #[serde(default = "default_qwen_strong_model")]
+    pub qwen_strong_model: String,
+    #[serde(default = "default_qwen_base_url")]
+    pub qwen_base_url: String,
+
+    // Kimi / Moonshot (OpenAI-compatible)
+    #[serde(default)]
+    pub kimi_api_key: String,
+    #[serde(default = "default_kimi_model")]
+    pub kimi_model: String,
+    #[serde(default = "default_kimi_strong_model")]
+    pub kimi_strong_model: String,
+    #[serde(default = "default_kimi_base_url")]
+    pub kimi_base_url: String,
 }
 
 fn default_provider() -> String {
     "glm".to_string()
 }
 fn default_work_mode() -> WorkMode {
-    WorkMode::CompetitionMode
+    WorkMode::SafetyDemoMode
 }
 fn default_claude_model() -> String {
     "claude-opus-4-7".to_string()
@@ -78,6 +108,33 @@ fn default_glm_strong_model() -> String {
 fn default_glm_base_url() -> String {
     "https://open.bigmodel.cn/api/paas/v4".to_string()
 }
+fn default_deepseek_model() -> String {
+    "deepseek-chat".to_string()
+}
+fn default_deepseek_strong_model() -> String {
+    "deepseek-reasoner".to_string()
+}
+fn default_deepseek_base_url() -> String {
+    "https://api.deepseek.com".to_string()
+}
+fn default_qwen_model() -> String {
+    "qwen-plus".to_string()
+}
+fn default_qwen_strong_model() -> String {
+    "qwen-max".to_string()
+}
+fn default_qwen_base_url() -> String {
+    "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()
+}
+fn default_kimi_model() -> String {
+    "moonshot-v1-8k".to_string()
+}
+fn default_kimi_strong_model() -> String {
+    "moonshot-v1-32k".to_string()
+}
+fn default_kimi_base_url() -> String {
+    "https://api.moonshot.cn/v1".to_string()
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -95,6 +152,18 @@ impl Default for Settings {
             glm_model: default_glm_model(),
             glm_strong_model: default_glm_strong_model(),
             glm_base_url: default_glm_base_url(),
+            deepseek_api_key: String::new(),
+            deepseek_model: default_deepseek_model(),
+            deepseek_strong_model: default_deepseek_strong_model(),
+            deepseek_base_url: default_deepseek_base_url(),
+            qwen_api_key: String::new(),
+            qwen_model: default_qwen_model(),
+            qwen_strong_model: default_qwen_strong_model(),
+            qwen_base_url: default_qwen_base_url(),
+            kimi_api_key: String::new(),
+            kimi_model: default_kimi_model(),
+            kimi_strong_model: default_kimi_strong_model(),
+            kimi_base_url: default_kimi_base_url(),
         }
     }
 }
@@ -112,12 +181,27 @@ pub struct SettingsView {
     pub glm_model: String,
     pub glm_strong_model: String,
     pub glm_base_url: String,
+    pub deepseek_model: String,
+    pub deepseek_strong_model: String,
+    pub deepseek_base_url: String,
+    pub qwen_model: String,
+    pub qwen_strong_model: String,
+    pub qwen_base_url: String,
+    pub kimi_model: String,
+    pub kimi_strong_model: String,
+    pub kimi_base_url: String,
     pub anthropic_api_key_set: bool,
     pub anthropic_api_key_preview: String,
     pub gemini_api_key_set: bool,
     pub gemini_api_key_preview: String,
     pub glm_api_key_set: bool,
     pub glm_api_key_preview: String,
+    pub deepseek_api_key_set: bool,
+    pub deepseek_api_key_preview: String,
+    pub qwen_api_key_set: bool,
+    pub qwen_api_key_preview: String,
+    pub kimi_api_key_set: bool,
+    pub kimi_api_key_preview: String,
 }
 
 fn preview(key: &str) -> String {
@@ -147,12 +231,27 @@ impl From<&Settings> for SettingsView {
             glm_model: s.glm_model.clone(),
             glm_strong_model: s.glm_strong_model.clone(),
             glm_base_url: s.glm_base_url.clone(),
+            deepseek_model: s.deepseek_model.clone(),
+            deepseek_strong_model: s.deepseek_strong_model.clone(),
+            deepseek_base_url: s.deepseek_base_url.clone(),
+            qwen_model: s.qwen_model.clone(),
+            qwen_strong_model: s.qwen_strong_model.clone(),
+            qwen_base_url: s.qwen_base_url.clone(),
+            kimi_model: s.kimi_model.clone(),
+            kimi_strong_model: s.kimi_strong_model.clone(),
+            kimi_base_url: s.kimi_base_url.clone(),
             anthropic_api_key_set: !s.anthropic_api_key.trim().is_empty(),
             anthropic_api_key_preview: preview(&s.anthropic_api_key),
             gemini_api_key_set: !s.gemini_api_key.trim().is_empty(),
             gemini_api_key_preview: preview(&s.gemini_api_key),
             glm_api_key_set: !s.glm_api_key.trim().is_empty(),
             glm_api_key_preview: preview(&s.glm_api_key),
+            deepseek_api_key_set: !s.deepseek_api_key.trim().is_empty(),
+            deepseek_api_key_preview: preview(&s.deepseek_api_key),
+            qwen_api_key_set: !s.qwen_api_key.trim().is_empty(),
+            qwen_api_key_preview: preview(&s.qwen_api_key),
+            kimi_api_key_set: !s.kimi_api_key.trim().is_empty(),
+            kimi_api_key_preview: preview(&s.kimi_api_key),
         }
     }
 }
@@ -164,21 +263,52 @@ pub struct SettingsUpdate {
     pub provider: String,
     #[serde(default = "default_work_mode")]
     pub work_mode: WorkMode,
+    #[serde(default = "default_claude_model")]
     pub model: String,
+    #[serde(default = "default_claude_base_url")]
     pub base_url: String,
+    #[serde(default = "default_gemini_model")]
     pub gemini_model: String,
     #[serde(default = "default_gemini_strong_model")]
     pub gemini_strong_model: String,
+    #[serde(default = "default_gemini_base_url")]
     pub gemini_base_url: String,
+    #[serde(default = "default_glm_model")]
     pub glm_model: String,
+    #[serde(default = "default_glm_strong_model")]
     pub glm_strong_model: String,
+    #[serde(default = "default_glm_base_url")]
     pub glm_base_url: String,
+    #[serde(default = "default_deepseek_model")]
+    pub deepseek_model: String,
+    #[serde(default = "default_deepseek_strong_model")]
+    pub deepseek_strong_model: String,
+    #[serde(default = "default_deepseek_base_url")]
+    pub deepseek_base_url: String,
+    #[serde(default = "default_qwen_model")]
+    pub qwen_model: String,
+    #[serde(default = "default_qwen_strong_model")]
+    pub qwen_strong_model: String,
+    #[serde(default = "default_qwen_base_url")]
+    pub qwen_base_url: String,
+    #[serde(default = "default_kimi_model")]
+    pub kimi_model: String,
+    #[serde(default = "default_kimi_strong_model")]
+    pub kimi_strong_model: String,
+    #[serde(default = "default_kimi_base_url")]
+    pub kimi_base_url: String,
     #[serde(default)]
     pub anthropic_api_key: Option<String>,
     #[serde(default)]
     pub gemini_api_key: Option<String>,
     #[serde(default)]
     pub glm_api_key: Option<String>,
+    #[serde(default)]
+    pub deepseek_api_key: Option<String>,
+    #[serde(default)]
+    pub qwen_api_key: Option<String>,
+    #[serde(default)]
+    pub kimi_api_key: Option<String>,
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -218,6 +348,15 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
     current.glm_model = update.glm_model;
     current.glm_strong_model = update.glm_strong_model;
     current.glm_base_url = update.glm_base_url;
+    current.deepseek_model = update.deepseek_model;
+    current.deepseek_strong_model = update.deepseek_strong_model;
+    current.deepseek_base_url = update.deepseek_base_url;
+    current.qwen_model = update.qwen_model;
+    current.qwen_strong_model = update.qwen_strong_model;
+    current.qwen_base_url = update.qwen_base_url;
+    current.kimi_model = update.kimi_model;
+    current.kimi_strong_model = update.kimi_strong_model;
+    current.kimi_base_url = update.kimi_base_url;
     if let Some(k) = update.anthropic_api_key {
         current.anthropic_api_key = k;
     }
@@ -226,6 +365,15 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
     }
     if let Some(k) = update.glm_api_key {
         current.glm_api_key = k;
+    }
+    if let Some(k) = update.deepseek_api_key {
+        current.deepseek_api_key = k;
+    }
+    if let Some(k) = update.qwen_api_key {
+        current.qwen_api_key = k;
+    }
+    if let Some(k) = update.kimi_api_key {
+        current.kimi_api_key = k;
     }
 
     let path = settings_path(&app)?;

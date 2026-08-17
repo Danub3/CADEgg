@@ -104,28 +104,20 @@ struct ExecutedBatch {
 
 #[derive(Clone, Debug)]
 enum Provider {
-    Gemini(GeminiProvider),
     Glm(GlmProvider),
-    Claude,
 }
 
 impl Provider {
     async fn step(&self, history: &[MessageView], app: &AppHandle) -> Result<StepOutput, String> {
         match self {
-            Provider::Gemini(g) => g.step(history, app).await,
             Provider::Glm(g) => g.step(history, app).await,
-            Provider::Claude => {
-                Err("Claude tool-use 暂未实现，请在设置里切换到 Gemini 或 GLM".to_string())
-            }
         }
     }
 
     /// 是否已配置（有 key、可用）。用于 failover 链里跳过未配置的 provider。
     fn is_configured(&self) -> bool {
         match self {
-            Provider::Gemini(g) => !g.api_key.trim().is_empty(),
             Provider::Glm(g) => !g.api_key.trim().is_empty(),
-            Provider::Claude => false,
         }
     }
 }
@@ -141,59 +133,19 @@ fn build_provider_chain(
     tool_names: &[String],
     tier: TaskTier,
 ) -> Vec<Provider> {
-    let glm_primary = Provider::Glm(GlmProvider {
-        api_key: settings.glm_api_key.clone(),
-        model: match tier {
-            TaskTier::Strong => settings.glm_strong_model.clone(),
-            TaskTier::Cheap => settings.glm_model.clone(),
-        },
-        base_url: settings.glm_base_url.clone(),
-        selected_tools: tool_names.to_vec(),
-    });
-    let glm_fallback = Provider::Glm(GlmProvider {
-        api_key: settings.glm_api_key.clone(),
-        model: match tier {
-            TaskTier::Strong => settings.glm_model.clone(), // 降级到便宜模型
-            TaskTier::Cheap => settings.glm_strong_model.clone(), // 升级到强模型
-        },
-        base_url: settings.glm_base_url.clone(),
-        selected_tools: tool_names.to_vec(),
-    });
-    let gemini_primary = Provider::Gemini(GeminiProvider {
-        api_key: settings.gemini_api_key.clone(),
-        model: match tier {
-            TaskTier::Strong => settings.gemini_strong_model.clone(),
-            TaskTier::Cheap => settings.gemini_model.clone(),
-        },
-        base_url: settings.gemini_base_url.clone(),
-        selected_tools: tool_names.to_vec(),
-    });
-    let gemini_fallback = Provider::Gemini(GeminiProvider {
-        api_key: settings.gemini_api_key.clone(),
-        model: match tier {
-            TaskTier::Strong => settings.gemini_model.clone(),
-            TaskTier::Cheap => settings.gemini_strong_model.clone(),
-        },
-        base_url: settings.gemini_base_url.clone(),
-        selected_tools: tool_names.to_vec(),
-    });
-
     let mut chain = Vec::new();
-    match settings.provider.as_str() {
-        "glm" => {
-            chain.push(glm_primary);
-            chain.push(glm_fallback);
-            chain.push(gemini_primary);
-            chain.push(gemini_fallback);
+    let selected = match settings.provider.as_str() {
+        "deepseek" | "qwen" | "kimi" | "glm" => settings.provider.as_str(),
+        _ => "glm",
+    };
+
+    append_openai_compatible_provider(&mut chain, selected, settings, tool_names, tier);
+    for provider in ["glm", "deepseek", "qwen", "kimi"] {
+        if provider != selected {
+            append_openai_compatible_provider(&mut chain, provider, settings, tool_names, tier);
         }
-        "gemini" => {
-            chain.push(gemini_primary);
-            chain.push(gemini_fallback);
-            chain.push(glm_primary);
-            chain.push(glm_fallback);
-        }
-        _ => chain.push(Provider::Claude),
     }
+
     // 去重：保留顺序，过滤掉未配置（无 key）的 provider。
     let mut seen = std::collections::HashSet::new();
     chain
@@ -208,6 +160,64 @@ fn build_provider_chain(
             }
         })
         .collect()
+}
+
+fn append_openai_compatible_provider(
+    chain: &mut Vec<Provider>,
+    provider: &str,
+    settings: &crate::settings::Settings,
+    tool_names: &[String],
+    tier: TaskTier,
+) {
+    let (label, api_key, cheap_model, strong_model, base_url) = match provider {
+        "deepseek" => (
+            "DeepSeek",
+            settings.deepseek_api_key.clone(),
+            settings.deepseek_model.clone(),
+            settings.deepseek_strong_model.clone(),
+            settings.deepseek_base_url.clone(),
+        ),
+        "qwen" => (
+            "通义千问",
+            settings.qwen_api_key.clone(),
+            settings.qwen_model.clone(),
+            settings.qwen_strong_model.clone(),
+            settings.qwen_base_url.clone(),
+        ),
+        "kimi" => (
+            "Kimi",
+            settings.kimi_api_key.clone(),
+            settings.kimi_model.clone(),
+            settings.kimi_strong_model.clone(),
+            settings.kimi_base_url.clone(),
+        ),
+        _ => (
+            "GLM",
+            settings.glm_api_key.clone(),
+            settings.glm_model.clone(),
+            settings.glm_strong_model.clone(),
+            settings.glm_base_url.clone(),
+        ),
+    };
+    let (primary_model, fallback_model) = match tier {
+        TaskTier::Strong => (strong_model, cheap_model),
+        TaskTier::Cheap => (cheap_model, strong_model),
+    };
+
+    chain.push(Provider::Glm(GlmProvider {
+        label: label.to_string(),
+        api_key: api_key.clone(),
+        model: primary_model,
+        base_url: base_url.clone(),
+        selected_tools: tool_names.to_vec(),
+    }));
+    chain.push(Provider::Glm(GlmProvider {
+        label: label.to_string(),
+        api_key,
+        model: fallback_model,
+        base_url,
+        selected_tools: tool_names.to_vec(),
+    }));
 }
 
 /// 依次尝试 provider 链，第一个成功的返回；全部失败返回最后一个错误（带 failover 提示）。
@@ -246,6 +256,7 @@ async fn step_with_failover(
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct GeminiProvider {
     api_key: String,
     model: String,
@@ -253,6 +264,7 @@ struct GeminiProvider {
     selected_tools: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl GeminiProvider {
     async fn step(&self, history: &[MessageView], app: &AppHandle) -> Result<StepOutput, String> {
         if self.api_key.trim().is_empty() {
@@ -374,6 +386,7 @@ impl GeminiProvider {
     }
 }
 
+#[allow(dead_code)]
 fn history_to_gemini_contents(history: &[MessageView]) -> Vec<Value> {
     let mut out = Vec::new();
     for msg in history {
@@ -424,6 +437,7 @@ fn history_to_gemini_contents(history: &[MessageView]) -> Vec<Value> {
 
 #[derive(Clone, Debug)]
 struct GlmProvider {
+    label: String,
     api_key: String,
     model: String,
     base_url: String,
@@ -433,10 +447,10 @@ struct GlmProvider {
 impl GlmProvider {
     async fn step(&self, history: &[MessageView], app: &AppHandle) -> Result<StepOutput, String> {
         if self.api_key.trim().is_empty() {
-            return Err("尚未配置 GLM API Key".to_string());
+            return Err(format!("尚未配置 {} API Key", self.label));
         }
         if self.model.trim().is_empty() {
-            return Err("GLM 必须指定模型 ID".to_string());
+            return Err(format!("{} 必须指定模型 ID", self.label));
         }
 
         let mut messages = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
@@ -466,7 +480,7 @@ impl GlmProvider {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.map_err(|e| format!("读响应失败: {e}"))?;
-            return Err(format!("GLM API {status}: {text}"));
+            return Err(format!("{} API {status}: {text}", self.label));
         }
         let mut text_buf = String::new();
         let mut calls: Vec<PendingOpenAiToolCall> = Vec::new();
@@ -534,7 +548,10 @@ impl GlmProvider {
                     .await
                     .map_err(|e| format!("读响应失败: {e}"))?;
                 if !fallback_status.is_success() {
-                    return Err(format!("GLM API {fallback_status}: {fallback_text}"));
+                    return Err(format!(
+                        "{} API {fallback_status}: {fallback_text}",
+                        self.label
+                    ));
                 }
                 let fallback_parsed: Value = serde_json::from_str(&fallback_text)
                     .map_err(|e| format!("解析响应失败: {e}"))?;
@@ -571,7 +588,7 @@ impl GlmProvider {
         } else if !text_buf.trim().is_empty() {
             Ok(StepOutput::Text(text_buf))
         } else {
-            Err("GLM 返回为空".to_string())
+            Err(format!("{} 返回为空", self.label))
         }
     }
 }
@@ -630,6 +647,7 @@ struct PendingOpenAiToolCall {
     arguments: String,
 }
 
+#[allow(dead_code)]
 fn parse_gemini_step_output(parsed: &Value, raw_text: &str) -> Result<StepOutput, String> {
     let parts = parsed["candidates"]
         .as_array()
@@ -774,6 +792,9 @@ fn redact(s: &str, settings: &crate::settings::Settings) -> String {
         settings.anthropic_api_key.trim(),
         settings.gemini_api_key.trim(),
         settings.glm_api_key.trim(),
+        settings.deepseek_api_key.trim(),
+        settings.qwen_api_key.trim(),
+        settings.kimi_api_key.trim(),
     ] {
         if key.len() >= 8 {
             out = out.replace(key, "***REDACTED***");
@@ -1463,14 +1484,10 @@ mod tests {
         };
         let chain = build_provider_chain(&settings, &[], TaskTier::Strong);
         // 主模型是 strong（glm-4.5），备用是 cheap（glm-4-flash）。
-        match &chain[0] {
-            Provider::Glm(g) => assert_eq!(g.model, "glm-4.5"),
-            _ => panic!("chain[0] should be Glm"),
-        }
-        match &chain[1] {
-            Provider::Glm(g) => assert_eq!(g.model, "glm-4-flash"),
-            _ => panic!("chain[1] should be Glm"),
-        }
+        let Provider::Glm(primary) = &chain[0];
+        assert_eq!(primary.model, "glm-4.5");
+        let Provider::Glm(fallback) = &chain[1];
+        assert_eq!(fallback.model, "glm-4-flash");
     }
 
     #[test]

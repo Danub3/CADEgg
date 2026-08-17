@@ -1,4 +1,4 @@
-use tauri::{Manager, PhysicalPosition};
+use tauri::Manager;
 
 #[cfg(windows)]
 mod cad;
@@ -36,13 +36,7 @@ pub fn run() {
     builder
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
-            if let Ok(Some(monitor)) = window.current_monitor() {
-                let screen = monitor.size();
-                let win_size = window.outer_size().unwrap_or_default();
-                let x = screen.width as i32 - win_size.width as i32;
-                let y = (screen.height as i32 - win_size.height as i32) / 2;
-                let _ = window.set_position(PhysicalPosition::new(x, y));
-            }
+            let _ = window.center();
             Ok(())
         })
         .run(tauri::generate_context!())
