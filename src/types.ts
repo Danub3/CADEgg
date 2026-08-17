@@ -43,6 +43,7 @@ export type HistoryMessage =
   | { role: "tool"; id: string; name: string; ok: boolean; content: string };
 
 export type AgentEvent =
+  | { kind: "assistant_trace"; delta: string }
   | { kind: "assistant_delta"; delta: string }
   | { kind: "assistant"; text: string | null; tool_calls: ToolCall[] }
   | {
@@ -89,6 +90,7 @@ export interface DemoLogEntry {
 export interface SettingsView {
   provider: Provider;
   work_mode: WorkMode;
+  auto_failover: boolean;
   glm_model: string;
   glm_strong_model: string;
   glm_base_url: string;

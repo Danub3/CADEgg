@@ -144,6 +144,7 @@ fn build_provider_chain(
     settings: &crate::settings::Settings,
     tool_names: &[String],
     tier: TaskTier,
+    auto_failover: bool,
 ) -> Vec<Provider> {
     let mut chain = Vec::new();
     let selected = match settings.provider.as_str() {
@@ -151,10 +152,21 @@ fn build_provider_chain(
         _ => "glm",
     };
 
-    append_openai_compatible_provider(&mut chain, selected, settings, tool_names, tier);
-    for provider in ["glm", "deepseek", "qwen", "kimi"] {
-        if provider != selected {
-            append_openai_compatible_provider(&mut chain, provider, settings, tool_names, tier);
+    append_openai_compatible_provider(
+        &mut chain,
+        selected,
+        settings,
+        tool_names,
+        tier,
+        auto_failover,
+    );
+    if auto_failover {
+        for provider in ["glm", "deepseek", "qwen", "kimi"] {
+            if provider != selected {
+                append_openai_compatible_provider(
+                    &mut chain, provider, settings, tool_names, tier, true,
+                );
+            }
         }
     }
 
@@ -180,6 +192,7 @@ fn append_openai_compatible_provider(
     settings: &crate::settings::Settings,
     tool_names: &[String],
     tier: TaskTier,
+    include_fallback: bool,
 ) {
     let (label, api_key, cheap_model, strong_model, base_url) = match provider {
         "deepseek" => (
@@ -223,13 +236,15 @@ fn append_openai_compatible_provider(
         base_url: base_url.clone(),
         selected_tools: tool_names.to_vec(),
     }));
-    chain.push(Provider::Glm(GlmProvider {
-        label: label.to_string(),
-        api_key,
-        model: fallback_model,
-        base_url,
-        selected_tools: tool_names.to_vec(),
-    }));
+    if include_fallback {
+        chain.push(Provider::Glm(GlmProvider {
+            label: label.to_string(),
+            api_key,
+            model: fallback_model,
+            base_url,
+            selected_tools: tool_names.to_vec(),
+        }));
+    }
 }
 
 fn apply_model_selection(
@@ -301,7 +316,7 @@ async fn step_with_failover(
                     let next = providers[i + 1].display_name();
                     let _ = app.emit(
                         "agent:event",
-                        AgentEvent::AssistantDelta {
+                        AgentEvent::AssistantTrace {
                             delta: &format!("\n[模型切换] 当前模型不可用，正在切换到 {}…\n", next),
                         },
                     );
@@ -379,7 +394,7 @@ impl GeminiProvider {
                 if let Some(t) = p["text"].as_str() {
                     if !t.is_empty() {
                         text_buf.push_str(t);
-                        let _ = app.emit("agent:event", AgentEvent::AssistantDelta { delta: t });
+                        let _ = app.emit("agent:event", AgentEvent::AssistantTrace { delta: t });
                     }
                 } else if let Some(fc) = p.get("functionCall") {
                     let name = fc["name"].as_str().unwrap_or("").to_string();
@@ -558,10 +573,18 @@ impl GlmProvider {
                 .and_then(|a| a.first())
                 .ok_or_else(|| format!("流式响应缺少 choices[0]: {data}"))?;
             let delta = &choice["delta"];
+            if let Some(reasoning) = delta["reasoning_content"].as_str() {
+                if !reasoning.is_empty() {
+                    let _ = app.emit(
+                        "agent:event",
+                        AgentEvent::AssistantTrace { delta: reasoning },
+                    );
+                }
+            }
             if let Some(content) = delta["content"].as_str() {
                 if !content.is_empty() {
                     text_buf.push_str(content);
-                    let _ = app.emit("agent:event", AgentEvent::AssistantDelta { delta: content });
+                    let _ = app.emit("agent:event", AgentEvent::AssistantTrace { delta: content });
                 }
             }
             if let Some(tool_calls) = delta["tool_calls"].as_array() {
@@ -828,7 +851,7 @@ fn extract_sse_data(raw_event: &str) -> Option<String> {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum AgentEvent<'a> {
-    AssistantDelta {
+    AssistantTrace {
         delta: &'a str,
     },
     Assistant {
@@ -1295,12 +1318,13 @@ pub async fn run_agent(
     //   2) 同 provider 降级到另一档位（strong 失败降 cheap，或 cheap 失败升 strong）；
     //   3) 另一个 provider（若已配 key）。
     // 每步失败后自动切下一个，避免单点断连导致整个请求失败。
-    let providers = build_provider_chain(&settings, &tooling.tool_names, tier);
+    let providers =
+        build_provider_chain(&settings, &tooling.tool_names, tier, settings.auto_failover);
     if !provider_key_configured(&settings, &settings.provider) {
         if let Some(first) = providers.first() {
             let _ = app.emit(
                 "agent:event",
-                AgentEvent::AssistantDelta {
+                AgentEvent::AssistantTrace {
                     delta: &format!(
                         "\n[模型切换] {} 未配置 API Key，正在使用 {}…\n",
                         provider_label(&settings.provider),
@@ -1542,7 +1566,7 @@ mod tests {
             gemini_api_key: String::new(),
             ..Default::default()
         };
-        let chain = build_provider_chain(&settings, &[], TaskTier::Strong);
+        let chain = build_provider_chain(&settings, &[], TaskTier::Strong, true);
         // 只应包含 GLM 的 strong + 降级 cheap，Gemini 因无 key 被过滤。
         assert_eq!(chain.len(), 2);
         assert!(matches!(chain[0], Provider::Glm(_)));
@@ -1558,7 +1582,7 @@ mod tests {
             glm_strong_model: "glm-4.5".to_string(),
             ..Default::default()
         };
-        let chain = build_provider_chain(&settings, &[], TaskTier::Strong);
+        let chain = build_provider_chain(&settings, &[], TaskTier::Strong, true);
         // 主模型是 strong（glm-4.5），备用是 cheap（glm-4-flash）。
         let Provider::Glm(primary) = &chain[0];
         assert_eq!(primary.model, "glm-4.5");
@@ -1583,7 +1607,7 @@ mod tests {
                 model: "glm-4.5-flash".to_string(),
             }),
         );
-        let chain = build_provider_chain(&settings, &[], TaskTier::Cheap);
+        let chain = build_provider_chain(&settings, &[], TaskTier::Cheap, true);
 
         assert_eq!(chain.len(), 1);
         let Provider::Glm(primary) = &chain[0];
@@ -1591,9 +1615,29 @@ mod tests {
     }
 
     #[test]
+    fn provider_chain_respects_failover_toggle() {
+        let settings = crate::settings::Settings {
+            provider: "glm".to_string(),
+            glm_api_key: "glm-key-12345678".to_string(),
+            deepseek_api_key: "deepseek-key-12345678".to_string(),
+            glm_model: "glm-4.5-air".to_string(),
+            glm_strong_model: "glm-4.5".to_string(),
+            deepseek_model: "deepseek-v4-flash".to_string(),
+            deepseek_strong_model: "deepseek-v4-pro".to_string(),
+            ..Default::default()
+        };
+
+        let chain = build_provider_chain(&settings, &[], TaskTier::Strong, false);
+
+        assert_eq!(chain.len(), 1);
+        let Provider::Glm(primary) = &chain[0];
+        assert_eq!(primary.model, "glm-4.5");
+    }
+
+    #[test]
     fn provider_chain_no_key_returns_empty() {
         let settings = crate::settings::Settings::default(); // 全空 key
-        let chain = build_provider_chain(&settings, &[], TaskTier::Cheap);
+        let chain = build_provider_chain(&settings, &[], TaskTier::Cheap, true);
         assert!(chain.is_empty());
     }
 }

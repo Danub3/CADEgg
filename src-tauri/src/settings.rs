@@ -18,6 +18,8 @@ pub struct Settings {
     pub provider: String,
     #[serde(default = "default_work_mode")]
     pub work_mode: WorkMode,
+    #[serde(default = "default_auto_failover")]
+    pub auto_failover: bool,
 
     // Claude
     #[serde(default)]
@@ -84,6 +86,9 @@ fn default_provider() -> String {
 fn default_work_mode() -> WorkMode {
     WorkMode::SafetyDemoMode
 }
+fn default_auto_failover() -> bool {
+    true
+}
 fn default_claude_model() -> String {
     "claude-opus-4-7".to_string()
 }
@@ -100,7 +105,7 @@ fn default_gemini_base_url() -> String {
     "https://generativelanguage.googleapis.com".to_string()
 }
 fn default_glm_model() -> String {
-    "glm-4-plus".to_string()
+    "glm-4.5-air".to_string()
 }
 fn default_glm_strong_model() -> String {
     "glm-4.5".to_string()
@@ -109,37 +114,83 @@ fn default_glm_base_url() -> String {
     "https://open.bigmodel.cn/api/paas/v4".to_string()
 }
 fn default_deepseek_model() -> String {
-    "deepseek-chat".to_string()
+    "deepseek-v4-flash".to_string()
 }
 fn default_deepseek_strong_model() -> String {
-    "deepseek-chat".to_string()
+    "deepseek-v4-pro".to_string()
 }
 fn default_deepseek_base_url() -> String {
     "https://api.deepseek.com".to_string()
 }
 fn default_qwen_model() -> String {
-    "qwen-plus".to_string()
+    "qwen3.7-flash".to_string()
 }
 fn default_qwen_strong_model() -> String {
-    "qwen-max".to_string()
+    "qwen3.8-max".to_string()
 }
 fn default_qwen_base_url() -> String {
     "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string()
 }
 fn default_kimi_model() -> String {
-    "moonshot-v1-8k".to_string()
+    "kimi-k2.5".to_string()
 }
 fn default_kimi_strong_model() -> String {
-    "moonshot-v1-32k".to_string()
+    "kimi-k3".to_string()
 }
 fn default_kimi_base_url() -> String {
     "https://api.moonshot.cn/v1".to_string()
 }
 
-const GLM_MODELS: &[&str] = &["glm-4-flash", "glm-4.5-flash", "glm-4.5", "glm-4-plus"];
-const DEEPSEEK_MODELS: &[&str] = &["deepseek-chat"];
-const QWEN_MODELS: &[&str] = &["qwen-plus", "qwen-turbo", "qwen-max"];
-const KIMI_MODELS: &[&str] = &["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"];
+const GLM_MODELS: &[&str] = &[
+    "glm-5.3",
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5-plus",
+    "glm-5-turbo",
+    "glm-4.7",
+    "glm-4.7-flashx",
+    "glm-4.7-flash",
+    "glm-4.6",
+    "glm-4.5",
+    "glm-4.5-air",
+    "glm-4.5-airx",
+    "glm-4.5-flash",
+    "glm-4-plus",
+    "glm-4-air-250414",
+    "glm-4-long",
+    "glm-4-flash-250414",
+    "glm-4-flashx-250414",
+    "glm-4-flash",
+];
+const DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"];
+const QWEN_MODELS: &[&str] = &[
+    "qwen3.8-max",
+    "qwen3.8-max-preview",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "qwen3.7-flash",
+    "qwen3.6-plus",
+    "qwen3.6-flash",
+    "qwen3.5-plus",
+    "qwen3.5-flash",
+    "qwen3-coder-plus",
+    "qwen3-coder-flash",
+    "qwen3-max",
+    "qwen-flash",
+    "qwen-max",
+    "qwen-plus",
+    "qwen-turbo",
+];
+const KIMI_MODELS: &[&str] = &[
+    "kimi-k3",
+    "kimi-k2.7-code",
+    "kimi-k2.7-code-highspeed",
+    "kimi-k2.6",
+    "kimi-k2.5",
+    "moonshot-v1-8k",
+    "moonshot-v1-32k",
+    "moonshot-v1-128k",
+];
 
 pub fn normalize_provider_id(value: &str) -> String {
     match value.trim() {
@@ -238,6 +289,7 @@ impl Default for Settings {
         sanitize_settings(Self {
             provider: default_provider(),
             work_mode: default_work_mode(),
+            auto_failover: default_auto_failover(),
             anthropic_api_key: String::new(),
             model: default_claude_model(),
             base_url: default_claude_base_url(),
@@ -270,6 +322,7 @@ impl Default for Settings {
 pub struct SettingsView {
     pub provider: String,
     pub work_mode: WorkMode,
+    pub auto_failover: bool,
     pub model: String,
     pub base_url: String,
     pub gemini_model: String,
@@ -320,6 +373,7 @@ impl From<&Settings> for SettingsView {
         Self {
             provider: s.provider.clone(),
             work_mode: s.work_mode,
+            auto_failover: s.auto_failover,
             model: s.model.clone(),
             base_url: s.base_url.clone(),
             gemini_model: s.gemini_model.clone(),
@@ -360,6 +414,8 @@ pub struct SettingsUpdate {
     pub provider: String,
     #[serde(default = "default_work_mode")]
     pub work_mode: WorkMode,
+    #[serde(default = "default_auto_failover")]
+    pub auto_failover: bool,
     #[serde(default = "default_claude_model")]
     pub model: String,
     #[serde(default = "default_claude_base_url")]
@@ -438,6 +494,7 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
     let mut current = load(&app).unwrap_or_default();
     current.provider = update.provider;
     current.work_mode = update.work_mode;
+    current.auto_failover = update.auto_failover;
     current.model = update.model;
     current.base_url = update.base_url;
     current.gemini_model = update.gemini_model;
@@ -496,7 +553,7 @@ mod tests {
         let sanitized = sanitize_settings(settings);
 
         assert_eq!(sanitized.provider, "deepseek");
-        assert_eq!(sanitized.deepseek_strong_model, "deepseek-chat");
+        assert_eq!(sanitized.deepseek_strong_model, "deepseek-v4-pro");
     }
 
     #[test]

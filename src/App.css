@@ -639,14 +639,14 @@ button:disabled {
   grid-column: 1 / -1;
   grid-row: 1;
   display: grid;
-  grid-template-columns: 138px minmax(0, 1fr) 104px 86px;
+  grid-template-columns: 138px minmax(0, 1fr) 104px 132px;
   gap: 8px;
   min-width: 0;
 }
 
 .model-picker select,
 .model-picker button,
-.failover-chip {
+.failover-toggle {
   min-width: 0;
   height: 34px;
   border: 3px solid var(--ink);
@@ -665,13 +665,64 @@ button:disabled {
   background: rgb(61 220 132 / var(--control-alpha));
 }
 
-.failover-chip {
-  display: inline-grid;
-  place-items: center;
+.failover-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 0 8px;
   color: var(--paper);
-  background: rgb(30 22 51 / var(--glass-alpha));
+  background: rgb(255 77 109 / 0.48);
   font-size: 12px;
   text-shadow: 0 1px 3px rgb(30 22 51 / var(--text-shadow-strength, 0.3));
+  cursor: pointer;
+  user-select: none;
+}
+
+.failover-toggle.active {
+  background: rgb(30 22 51 / var(--glass-alpha));
+}
+
+.failover-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.failover-toggle b {
+  position: relative;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 16px;
+  border: 2px solid var(--ink);
+  background: rgb(255 253 245 / 0.54);
+}
+
+.failover-toggle b::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 8px;
+  height: 8px;
+  background: var(--ink);
+  transition: transform 120ms ease;
+}
+
+.failover-toggle input:checked + b {
+  background: var(--green);
+}
+
+.failover-toggle input:checked + b::after {
+  transform: translateX(10px);
+}
+
+.failover-toggle span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .welcome {
@@ -776,10 +827,11 @@ button:disabled {
 }
 
 .message-bubble {
-  max-width: min(760px, 82%);
+  max-width: min(860px, 92%);
   padding: 14px 16px;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   text-align: left;
 }
 
@@ -801,7 +853,7 @@ button:disabled {
   display: grid;
   align-self: flex-start;
   gap: 10px;
-  max-width: min(760px, 82%);
+  max-width: min(860px, 92%);
 }
 
 .plan-message summary {
@@ -835,16 +887,7 @@ button:disabled {
   font-size: 12px;
 }
 
-/* Streaming live text bubble */
-.assistant-message.streaming {
-  position: relative;
-  padding-left: 36px;
-}
-
 .streaming-cursor {
-  position: absolute;
-  left: 12px;
-  top: 12px;
   display: inline-block;
   width: 10px;
   height: 18px;
@@ -900,6 +943,58 @@ button:disabled {
   gap: 8px;
 }
 
+.thinking-trace {
+  display: grid;
+  align-self: flex-start;
+  width: min(680px, 92%);
+  gap: 8px;
+  padding: 10px 12px;
+  border: 3px solid var(--ink);
+  background: rgb(255 253 245 / var(--control-alpha));
+  text-align: left;
+}
+
+.thinking-trace header {
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-trace header strong {
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.thinking-trace header em {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(30 22 51 / 0.58);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-trace-body {
+  height: 132px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 2px solid rgb(30 22 51 / 0.34);
+  background: rgb(30 22 51 / 0.06);
+}
+
+.thinking-trace-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  font-family: "Sarasa Gothic SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  font-size: var(--content-font-size, 14px);
+  line-height: 1.55;
+}
+
 .tool-message {
   display: grid;
   align-self: flex-start;
@@ -946,6 +1041,12 @@ button:disabled {
   padding: 10px 14px;
   border: 3px solid var(--ink);
   background: rgb(255 253 245 / var(--control-alpha));
+}
+
+.typing-indicator.compact {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .typing-indicator span {

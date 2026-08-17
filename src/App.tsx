@@ -8,6 +8,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
   type SetStateAction,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -116,6 +117,12 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   byokConfigured: { "zh-CN": "BYOK 已配置", "en-US": "BYOK Ready" },
   byokFillKey: { "zh-CN": "填写 Key", "en-US": "Set Key" },
   autoFailover: { "zh-CN": "自动轮转", "en-US": "Auto Failover" },
+  autoFailoverOn: { "zh-CN": "轮转开", "en-US": "Failover On" },
+  autoFailoverOff: { "zh-CN": "轮转关", "en-US": "Failover Off" },
+  autoFailoverHint: {
+    "zh-CN": "关闭后只使用当前会话选择的模型。",
+    "en-US": "When off, only the selected session model is used.",
+  },
   languageHint: {
     "zh-CN": "界面语言切换，覆盖主界面、设置页、帮助文档和主要操作入口。",
     "en-US": "Switches the main UI, settings, help docs, and primary controls.",
@@ -136,6 +143,12 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
     "zh-CN": "正在分析...",
     "en-US": "Analyzing...",
   },
+  thinkingProcessTitle: { "zh-CN": "思考与生成", "en-US": "Thinking & Generation" },
+  thinkingProcessHint: {
+    "zh-CN": "运行期 token 保留在固定小框里，最终回复完成后整体显示。",
+    "en-US": "Live tokens stay in this fixed trace box; the final answer appears when complete.",
+  },
+  waitingForModel: { "zh-CN": "等待模型响应", "en-US": "Waiting for model" },
   bridgeOnline: { "zh-CN": "BRIDGE 在线", "en-US": "BRIDGE Online" },
   bridgeError: { "zh-CN": "BRIDGE 异常", "en-US": "BRIDGE Error" },
   bridgeIdle: { "zh-CN": "BRIDGE 待测", "en-US": "BRIDGE Idle" },
@@ -312,17 +325,52 @@ const PROVIDER_UI: Record<Provider, Record<"zh-CN" | "en-US", { label: string; s
 };
 
 const MODEL_UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
-  "glm-4-flash": { "zh-CN": "GLM-4-Flash（免费）", "en-US": "GLM-4-Flash (Free)" },
-  "glm-4.5-flash": { "zh-CN": "GLM-4.5-Flash（免费）", "en-US": "GLM-4.5-Flash (Free)" },
+  "glm-5.3": { "zh-CN": "GLM-5.3", "en-US": "GLM-5.3" },
+  "glm-5.2": { "zh-CN": "GLM-5.2", "en-US": "GLM-5.2" },
+  "glm-5.1": { "zh-CN": "GLM-5.1", "en-US": "GLM-5.1" },
+  "glm-5-plus": { "zh-CN": "GLM-5-Plus", "en-US": "GLM-5-Plus" },
+  "glm-5-turbo": { "zh-CN": "GLM-5-Turbo", "en-US": "GLM-5-Turbo" },
+  "glm-4.7": { "zh-CN": "GLM-4.7", "en-US": "GLM-4.7" },
+  "glm-4.7-flashx": { "zh-CN": "GLM-4.7-FlashX", "en-US": "GLM-4.7-FlashX" },
+  "glm-4.7-flash": { "zh-CN": "GLM-4.7-Flash", "en-US": "GLM-4.7-Flash" },
+  "glm-4.6": { "zh-CN": "GLM-4.6", "en-US": "GLM-4.6" },
   "glm-4.5": { "zh-CN": "GLM-4.5（付费）", "en-US": "GLM-4.5 (Paid)" },
+  "glm-4.5-air": { "zh-CN": "GLM-4.5-Air", "en-US": "GLM-4.5-Air" },
+  "glm-4.5-airx": { "zh-CN": "GLM-4.5-AirX", "en-US": "GLM-4.5-AirX" },
+  "glm-4.5-flash": { "zh-CN": "GLM-4.5-Flash（免费）", "en-US": "GLM-4.5-Flash (Free)" },
   "glm-4-plus": { "zh-CN": "GLM-4-Plus（付费）", "en-US": "GLM-4-Plus (Paid)" },
+  "glm-4-air-250414": { "zh-CN": "GLM-4-Air-250414", "en-US": "GLM-4-Air-250414" },
+  "glm-4-long": { "zh-CN": "GLM-4-Long", "en-US": "GLM-4-Long" },
+  "glm-4-flash-250414": { "zh-CN": "GLM-4-Flash-250414", "en-US": "GLM-4-Flash-250414" },
+  "glm-4-flashx-250414": { "zh-CN": "GLM-4-FlashX-250414", "en-US": "GLM-4-FlashX-250414" },
+  "glm-4-flash": { "zh-CN": "GLM-4-Flash（旧版）", "en-US": "GLM-4-Flash (Legacy)" },
+  "deepseek-v4-pro": { "zh-CN": "DeepSeek V4 Pro", "en-US": "DeepSeek V4 Pro" },
+  "deepseek-v4-flash": { "zh-CN": "DeepSeek V4 Flash", "en-US": "DeepSeek V4 Flash" },
   "deepseek-chat": { "zh-CN": "DeepSeek Chat", "en-US": "DeepSeek Chat" },
+  "qwen3.8-max": { "zh-CN": "通义千问 3.8 Max", "en-US": "Qwen 3.8 Max" },
+  "qwen3.8-max-preview": { "zh-CN": "通义千问 3.8 Max Preview", "en-US": "Qwen 3.8 Max Preview" },
+  "qwen3.7-max": { "zh-CN": "通义千问 3.7 Max", "en-US": "Qwen 3.7 Max" },
+  "qwen3.7-plus": { "zh-CN": "通义千问 3.7 Plus", "en-US": "Qwen 3.7 Plus" },
+  "qwen3.7-flash": { "zh-CN": "通义千问 3.7 Flash", "en-US": "Qwen 3.7 Flash" },
+  "qwen3.6-plus": { "zh-CN": "通义千问 3.6 Plus", "en-US": "Qwen 3.6 Plus" },
+  "qwen3.6-flash": { "zh-CN": "通义千问 3.6 Flash", "en-US": "Qwen 3.6 Flash" },
+  "qwen3.5-plus": { "zh-CN": "通义千问 3.5 Plus", "en-US": "Qwen 3.5 Plus" },
+  "qwen3.5-flash": { "zh-CN": "通义千问 3.5 Flash", "en-US": "Qwen 3.5 Flash" },
+  "qwen3-coder-plus": { "zh-CN": "通义千问 Coder Plus", "en-US": "Qwen Coder Plus" },
+  "qwen3-coder-flash": { "zh-CN": "通义千问 Coder Flash", "en-US": "Qwen Coder Flash" },
+  "qwen3-max": { "zh-CN": "通义千问 3 Max", "en-US": "Qwen 3 Max" },
+  "qwen-flash": { "zh-CN": "通义千问 Flash", "en-US": "Qwen Flash" },
+  "qwen-max": { "zh-CN": "通义千问 Max（旧版）", "en-US": "Qwen Max (Legacy)" },
   "qwen-plus": { "zh-CN": "通义千问 Plus", "en-US": "Qwen Plus" },
   "qwen-turbo": { "zh-CN": "通义千问 Turbo", "en-US": "Qwen Turbo" },
-  "qwen-max": { "zh-CN": "通义千问 Max", "en-US": "Qwen Max" },
-  "moonshot-v1-8k": { "zh-CN": "Kimi 8K", "en-US": "Kimi 8K" },
-  "moonshot-v1-32k": { "zh-CN": "Kimi 32K", "en-US": "Kimi 32K" },
-  "moonshot-v1-128k": { "zh-CN": "Kimi 128K", "en-US": "Kimi 128K" },
+  "kimi-k3": { "zh-CN": "Kimi K3", "en-US": "Kimi K3" },
+  "kimi-k2.7-code": { "zh-CN": "Kimi K2.7 Code", "en-US": "Kimi K2.7 Code" },
+  "kimi-k2.7-code-highspeed": { "zh-CN": "Kimi K2.7 Code Highspeed", "en-US": "Kimi K2.7 Code Highspeed" },
+  "kimi-k2.6": { "zh-CN": "Kimi K2.6", "en-US": "Kimi K2.6" },
+  "kimi-k2.5": { "zh-CN": "Kimi K2.5", "en-US": "Kimi K2.5" },
+  "moonshot-v1-8k": { "zh-CN": "Kimi 8K（旧版）", "en-US": "Kimi 8K (Legacy)" },
+  "moonshot-v1-32k": { "zh-CN": "Kimi 32K（旧版）", "en-US": "Kimi 32K (Legacy)" },
+  "moonshot-v1-128k": { "zh-CN": "Kimi 128K（旧版）", "en-US": "Kimi 128K (Legacy)" },
 };
 
 function providerDisplay(provider: Provider, lang: "zh-CN" | "en-US", kind: "label" | "short") {
@@ -666,6 +714,7 @@ export default function App() {
   );
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const thinkingTraceRef = useRef<HTMLDivElement | null>(null);
   const assistantDraftRef = useRef("");
   const sessionObjectsRef = useRef<SessionObject[]>(initialSession.sessionObjects);
   const pendingUndoSnapshotRef = useRef<SessionObject[] | null>(null);
@@ -813,7 +862,7 @@ export default function App() {
     let unlisten: UnlistenFn | null = null;
     listen<AgentEvent>("agent:event", (ev) => {
       const e = ev.payload;
-      if (e.kind === "assistant_delta") {
+      if (e.kind === "assistant_trace" || e.kind === "assistant_delta") {
         assistantDraftRef.current += e.delta;
         setAssistantDraft(assistantDraftRef.current);
       } else if (e.kind === "assistant") {
@@ -824,10 +873,7 @@ export default function App() {
             Object.assign(pendingLogRef.current.params, call.args);
           }
         }
-        if (
-          e.tool_calls.length > 0 ||
-          (e.text && assistantDraftRef.current && e.text === assistantDraftRef.current)
-        ) {
+        if (assistantDraftRef.current && (e.text || e.tool_calls.length > 0)) {
           assistantDraftRef.current = "";
           setAssistantDraft("");
         }
@@ -933,6 +979,12 @@ export default function App() {
   }, [messages, assistantDraft, sending]);
 
   useEffect(() => {
+    const trace = thinkingTraceRef.current;
+    if (!trace) return;
+    trace.scrollTop = trace.scrollHeight;
+  }, [assistantDraft]);
+
+  useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.ctrlKey && e.shiftKey && e.key === "0") {
         setGlassSettings(DEFAULT_GLASS_SETTINGS);
@@ -1010,6 +1062,7 @@ export default function App() {
         update: {
           provider: nextSettings.provider,
           work_mode: nextSettings.work_mode,
+          auto_failover: nextSettings.auto_failover,
           glm_model: nextSettings.glm_model,
           glm_strong_model: nextSettings.glm_strong_model,
           glm_base_url: nextSettings.glm_base_url,
@@ -1242,6 +1295,12 @@ export default function App() {
     );
   }
 
+  async function handleAutoFailoverChange(enabled: boolean) {
+    const nextSettings = { ...settings, auto_failover: enabled };
+    setSettings(nextSettings);
+    await saveSettings(nextSettings);
+  }
+
   async function recoverWindow(message?: string) {
     try {
       await appWindow.unminimize();
@@ -1447,19 +1506,11 @@ export default function App() {
 
             {sending && (
               <div className="agent-status">
-                {assistantDraft ? (
-                  <div className="message-bubble assistant-message streaming">
-                    <span className="streaming-cursor" />
-                    {assistantDraft}
-                  </div>
-                ) : (
-                  <div className="typing-indicator" aria-label={t("thinkingLabel", appPreferences.language)}>
-                    <span />
-                    <span />
-                    <span />
-                    <b>{t("thinkingLabel", appPreferences.language)}</b>
-                  </div>
-                )}
+                <ThinkingTrace
+                  text={assistantDraft}
+                  language={appPreferences.language}
+                  traceRef={thinkingTraceRef}
+                />
               </div>
             )}
 
@@ -1473,6 +1524,7 @@ export default function App() {
               model={activeModel}
               currentKeySet={currentKeySet}
               onModelChange={handleModelChange}
+              onAutoFailoverChange={handleAutoFailoverChange}
               onOpenSettings={() => setView("settings")}
               language={appPreferences.language}
             />
@@ -1569,6 +1621,7 @@ function ModelPicker({
   model,
   currentKeySet,
   onModelChange,
+  onAutoFailoverChange,
   onOpenSettings,
   language,
 }: {
@@ -1577,6 +1630,7 @@ function ModelPicker({
   model: string;
   currentKeySet: boolean;
   onModelChange: (provider: Provider, model: string) => Promise<void>;
+  onAutoFailoverChange: (enabled: boolean) => Promise<void>;
   onOpenSettings: () => void;
   language: "zh-CN" | "en-US";
 }) {
@@ -1627,7 +1681,18 @@ function ModelPicker({
       >
         {currentKeySet ? t("byokConfigured", language) : t("byokFillKey", language)}
       </button>
-      <span className="failover-chip">{t("autoFailover", language)}</span>
+      <label
+        className={`failover-toggle ${settings.auto_failover ? "active" : ""}`}
+        title={t("autoFailoverHint", language)}
+      >
+        <input
+          type="checkbox"
+          checked={settings.auto_failover}
+          onChange={(e) => void onAutoFailoverChange(e.target.checked)}
+        />
+        <b aria-hidden="true" />
+        <span>{settings.auto_failover ? t("autoFailoverOn", language) : t("autoFailoverOff", language)}</span>
+      </label>
     </div>
   );
 }
@@ -2191,6 +2256,13 @@ function SettingsModal({
               title={t("modelSectionTitle", language)}
               desc={t("modelSectionDesc", language)}
             />
+            <SwitchField
+              label={t("autoFailover", language)}
+              checked={settings.auto_failover}
+              onChange={(checked) =>
+                setSettings((prev) => ({ ...prev, auto_failover: checked }))
+              }
+            />
             <div className="provider-settings-list">
               {MODEL_PROVIDERS.map((provider) => {
                 const keyDraft = keyDraftFor(provider.id);
@@ -2221,7 +2293,10 @@ function SettingsModal({
                         className={inputCls}
                         value={baseUrl}
                         onChange={(e) =>
-                          setSettings({ ...settings, [provider.baseUrlField]: e.target.value })
+                          setSettings((prev) => ({
+                            ...prev,
+                            [provider.baseUrlField]: e.target.value,
+                          }))
                         }
                       />
                     </Field>
@@ -2230,7 +2305,10 @@ function SettingsModal({
                         className={inputCls}
                         value={cheapModel}
                         onChange={(e) =>
-                          setSettings({ ...settings, [provider.cheapModelField]: e.target.value })
+                          setSettings((prev) => ({
+                            ...prev,
+                            [provider.cheapModelField]: e.target.value,
+                          }))
                         }
                       >
                         {provider.models.map((model) => (
@@ -2246,7 +2324,10 @@ function SettingsModal({
                         className={inputCls}
                         value={strongModel}
                         onChange={(e) =>
-                          setSettings({ ...settings, [provider.strongModelField]: e.target.value })
+                          setSettings((prev) => ({
+                            ...prev,
+                            [provider.strongModelField]: e.target.value,
+                          }))
                         }
                       >
                         {provider.models.map((model) => (
@@ -2410,6 +2491,38 @@ function StatusPill({ state, label }: { state: "online" | "error" | "idle"; labe
       <span className={`led ${state}`} />
       <span>{label}</span>
     </div>
+  );
+}
+
+function ThinkingTrace({
+  text,
+  language,
+  traceRef,
+}: {
+  text: string;
+  language: "zh-CN" | "en-US";
+  traceRef: RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <section className="thinking-trace" aria-live="polite">
+      <header>
+        <span className="streaming-cursor" />
+        <strong>{t("thinkingProcessTitle", language)}</strong>
+        <em>{t("thinkingProcessHint", language)}</em>
+      </header>
+      <div ref={traceRef} className="thinking-trace-body">
+        {text ? (
+          <pre>{text}</pre>
+        ) : (
+          <div className="typing-indicator compact" aria-label={t("waitingForModel", language)}>
+            <span />
+            <span />
+            <span />
+            <b>{t("waitingForModel", language)}</b>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
