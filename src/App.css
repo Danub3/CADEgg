@@ -791,8 +791,7 @@ button:disabled {
 }
 
 .assistant-message,
-.plan-message,
-.draft-message {
+.plan-message {
   align-self: flex-start;
   background: rgb(255 253 245 / var(--control-alpha));
 }
@@ -804,8 +803,7 @@ button:disabled {
   max-width: min(760px, 82%);
 }
 
-.plan-message summary,
-.draft-message summary {
+.plan-message summary {
   cursor: pointer;
   font-weight: 900;
 }
@@ -834,6 +832,71 @@ button:disabled {
   color: rgb(30 22 51 / 0.72);
   font-family: "Consolas", monospace;
   font-size: 12px;
+}
+
+/* Streaming live text bubble */
+.assistant-message.streaming {
+  position: relative;
+  padding-left: 36px;
+}
+
+.streaming-cursor {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: inline-block;
+  width: 10px;
+  height: 18px;
+  background: var(--purple);
+  animation: blink 0.7s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* Tool call progress indicators */
+.tool-call-list article {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.tool-call-list article .tool-status {
+  padding-top: 2px;
+}
+
+.tool-call-list article.tool-pending {
+  opacity: 0.72;
+}
+
+.tool-call-list article.tool-done {
+  opacity: 1;
+}
+
+.tool-call-list article.tool-done strong {
+  color: var(--green);
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgb(139 92 246 / 0.3);
+  border-top-color: var(--purple);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Agent status area */
+.agent-status {
+  display: grid;
+  gap: 8px;
 }
 
 .tool-message {

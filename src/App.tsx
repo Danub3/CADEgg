@@ -383,6 +383,8 @@ export default function App() {
   const runTouchedObjectTableRef = useRef(false);
   const pendingPostRunSyncRef = useRef(false);
   const pendingToolCallsRef = useRef<Record<string, ToolCall>>({});
+  const completedToolIdsRef = useRef<Set<string>>(new Set());
+  const [completedToolIds, setCompletedToolIds] = useState<Set<string>>(new Set());
   const lastUserInputRef = useRef("");
   const pendingLogRef = useRef<{
     toolCalls: string[];
@@ -569,6 +571,8 @@ export default function App() {
           assistantDraftRef.current = "";
           setAssistantDraft("");
         }
+        completedToolIdsRef.current.add(e.result.id);
+        setCompletedToolIds(new Set(completedToolIdsRef.current));
         const pendingCall = e.result.confirmation_required
           ? pendingToolCallsRef.current[e.result.id]
           : undefined;
@@ -685,6 +689,8 @@ export default function App() {
     setAssistantDraft("");
     setSending(true);
     setErrorMsg(null);
+    completedToolIdsRef.current = new Set();
+    setCompletedToolIds(new Set());
 
     try {
       let syncedObjects = sessionObjectsRef.current;
@@ -906,6 +912,8 @@ export default function App() {
   function applySession(session: ChatSession) {
     assistantDraftRef.current = "";
     pendingToolCallsRef.current = {};
+    completedToolIdsRef.current = new Set();
+    setCompletedToolIds(new Set());
     pendingLogRef.current = null;
     pendingUndoSnapshotRef.current = null;
     runTouchedObjectTableRef.current = false;
@@ -964,6 +972,11 @@ export default function App() {
       [meta.strongModelField]: model,
     };
     setSettings(nextSettings);
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === activeSessionId ? { ...s, provider, model, updatedAt: Date.now() } : s,
+      ),
+    );
     await saveSettings(nextSettings);
   }
 
@@ -1132,22 +1145,24 @@ export default function App() {
                 onOpenSettings={() => setView("settings")}
               />
             ) : (
-              messages.map((m, i) => renderMessage(m, i, handleConfirmToolCall))
-            )}
-
-            {assistantDraft && (
-              <details className="message-bubble draft-message" open>
-                <summary>思考中</summary>
-                <div>{assistantDraft}</div>
-              </details>
+              messages.map((m, i) => renderMessage(m, i, handleConfirmToolCall, completedToolIds))
             )}
 
             {sending && (
-              <div className="typing-indicator" aria-label="正在执行">
-                <span />
-                <span />
-                <span />
-                <b>CADEgg 思考中...</b>
+              <div className="agent-status">
+                {assistantDraft ? (
+                  <div className="message-bubble assistant-message streaming">
+                    <span className="streaming-cursor" />
+                    {assistantDraft}
+                  </div>
+                ) : (
+                  <div className="typing-indicator" aria-label="正在分析">
+                    <span />
+                    <span />
+                    <span />
+                    <b>正在分析...</b>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1888,7 +1903,8 @@ function SettingsModal({
 function renderMessage(
   m: Message,
   i: number,
-  onConfirmToolCall: (messageIndex: number, call: ToolCall) => void
+  onConfirmToolCall: (messageIndex: number, call: ToolCall) => void,
+  completedToolIds: Set<string>
 ) {
   if (m.role === "user") {
     return (
@@ -1906,12 +1922,16 @@ function renderMessage(
         </summary>
         {m.text && <div className="message-text">{m.text}</div>}
         <div className="tool-call-list">
-          {m.tool_calls.map((tc) => (
-            <article key={tc.id}>
-              <strong>{tc.name}</strong>
-              <code>{compactToolArgs(tc.args)}</code>
-            </article>
-          ))}
+          {m.tool_calls.map((tc) => {
+            const done = completedToolIds.has(tc.id);
+            return (
+              <article key={tc.id} className={done ? "tool-done" : "tool-pending"}>
+                <span className="tool-status">{done ? <IconCheck /> : <span className="spinner" />}</span>
+                <strong>{tc.name}</strong>
+                <code>{compactToolArgs(tc.args)}</code>
+              </article>
+            );
+          })}
         </div>
       </details>
     );
