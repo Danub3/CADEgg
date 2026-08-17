@@ -1,28 +1,41 @@
 import type { Provider, SettingsView } from "./types";
 
-export const GLM_MODELS = [
-  { id: "glm-4-flash", label: "GLM-4-Flash（免费）" },
-  { id: "glm-4.5-flash", label: "GLM-4.5-Flash（免费）" },
-  { id: "glm-4.5", label: "GLM-4.5（付费，最强）" },
-  { id: "glm-4-plus", label: "GLM-4-Plus（付费）" },
+export type ModelTier = "production" | "limited" | "unavailable";
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  tier: ModelTier;
+}
+
+export const GLM_MODELS: ModelOption[] = [
+  { id: "glm-4-flash", label: "GLM-4-Flash（免费）", tier: "unavailable" },
+  { id: "glm-4.5-flash", label: "GLM-4.5-Flash（免费）", tier: "unavailable" },
+  { id: "glm-4.5", label: "GLM-4.5（付费）", tier: "production" },
+  { id: "glm-4-plus", label: "GLM-4-Plus（付费）", tier: "limited" },
 ];
 
-export const DEEPSEEK_MODELS = [
-  { id: "deepseek-chat", label: "DeepSeek Chat" },
-  { id: "deepseek-reasoner", label: "DeepSeek Reasoner" },
+export const DEEPSEEK_MODELS: ModelOption[] = [
+  { id: "deepseek-chat", label: "DeepSeek Chat", tier: "production" },
 ];
 
-export const QWEN_MODELS = [
-  { id: "qwen-plus", label: "通义千问 Plus" },
-  { id: "qwen-turbo", label: "通义千问 Turbo" },
-  { id: "qwen-max", label: "通义千问 Max" },
+export const QWEN_MODELS: ModelOption[] = [
+  { id: "qwen-plus", label: "通义千问 Plus", tier: "limited" },
+  { id: "qwen-turbo", label: "通义千问 Turbo", tier: "limited" },
+  { id: "qwen-max", label: "通义千问 Max", tier: "production" },
 ];
 
-export const KIMI_MODELS = [
-  { id: "moonshot-v1-8k", label: "Kimi 8K" },
-  { id: "moonshot-v1-32k", label: "Kimi 32K" },
-  { id: "moonshot-v1-128k", label: "Kimi 128K" },
+export const KIMI_MODELS: ModelOption[] = [
+  { id: "moonshot-v1-8k", label: "Kimi 8K", tier: "unavailable" },
+  { id: "moonshot-v1-32k", label: "Kimi 32K", tier: "unavailable" },
+  { id: "moonshot-v1-128k", label: "Kimi 128K", tier: "unavailable" },
 ];
+
+export const MODEL_TIER_LABEL: Record<ModelTier, string> = {
+  production: "生产可用",
+  limited: "勉强可用",
+  unavailable: "不建议",
+};
 
 export const MODEL_PROVIDERS: Array<{
   id: Provider;
@@ -34,7 +47,7 @@ export const MODEL_PROVIDERS: Array<{
   strongModelField: keyof SettingsView;
   keySetField: keyof SettingsView;
   keyPreviewField: keyof SettingsView;
-  models: Array<{ id: string; label: string }>;
+  models: ModelOption[];
 }> = [
   {
     id: "glm",
@@ -93,11 +106,11 @@ export function providerMeta(provider: Provider) {
 export const DEFAULT_VIEW: SettingsView = {
   provider: "glm",
   work_mode: "safety_demo_mode",
-  glm_model: "glm-4-flash",
-  glm_strong_model: "glm-4.5-flash",
+  glm_model: "glm-4-plus",
+  glm_strong_model: "glm-4.5",
   glm_base_url: "https://open.bigmodel.cn/api/paas/v4",
   deepseek_model: "deepseek-chat",
-  deepseek_strong_model: "deepseek-reasoner",
+  deepseek_strong_model: "deepseek-chat",
   deepseek_base_url: "https://api.deepseek.com",
   qwen_model: "qwen-plus",
   qwen_strong_model: "qwen-max",

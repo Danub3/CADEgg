@@ -100,10 +100,10 @@ fn default_gemini_base_url() -> String {
     "https://generativelanguage.googleapis.com".to_string()
 }
 fn default_glm_model() -> String {
-    "glm-4-flash".to_string()
+    "glm-4-plus".to_string()
 }
 fn default_glm_strong_model() -> String {
-    "glm-4.5-flash".to_string()
+    "glm-4.5".to_string()
 }
 fn default_glm_base_url() -> String {
     "https://open.bigmodel.cn/api/paas/v4".to_string()
@@ -112,7 +112,7 @@ fn default_deepseek_model() -> String {
     "deepseek-chat".to_string()
 }
 fn default_deepseek_strong_model() -> String {
-    "deepseek-reasoner".to_string()
+    "deepseek-chat".to_string()
 }
 fn default_deepseek_base_url() -> String {
     "https://api.deepseek.com".to_string()

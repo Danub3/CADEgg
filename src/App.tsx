@@ -27,7 +27,7 @@ import type {
   ToolCall,
   View,
 } from "./types";
-import { DEFAULT_VIEW, MODEL_PROVIDERS, providerMeta } from "./constants";
+import { DEFAULT_VIEW, MODEL_PROVIDERS, MODEL_TIER_LABEL, providerMeta } from "./constants";
 import {
   applyObjectUpdates,
   cloneSessionObjects,
@@ -1299,7 +1299,7 @@ function ModelPicker({
         {!hasPreset && <option value="__custom">{model}</option>}
         {meta.models.map((item) => (
           <option key={item.id} value={item.id}>
-            {item.label}
+            {item.label}{item.tier !== "production" ? ` (${MODEL_TIER_LABEL[item.tier]})` : ""}
           </option>
         ))}
       </select>
