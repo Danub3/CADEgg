@@ -4880,7 +4880,7 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
     provider: "GLM",
     model: "glm-4.7",
     status: "candidate",
-    rating: 4.5,
+    rating: 4,
     officialZh: "智谱建议从 GLM-4.5 迁移到 GLM-4.7。",
     officialEn: "Zhipu recommends migration from GLM-4.5 to GLM-4.7.",
     cadeggZh: "下一轮优先实测的强模型。",
@@ -4904,7 +4904,7 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
     provider: "GLM",
     model: "glm-4.5",
     status: "primary",
-    rating: 4.5,
+    rating: 4,
     officialZh: "官方提示后续应迁移到 GLM-4.7。",
     officialEn: "Official docs indicate migration toward GLM-4.7.",
     cadeggZh: "当前默认强模型；已接入，短期保留稳定性。",
@@ -4952,7 +4952,7 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
     provider: "DeepSeek",
     model: "deepseek-v4-pro",
     status: "candidate",
-    rating: 4.5,
+    rating: 4,
     officialZh: "DeepSeek 当前高能力 API 模型。",
     officialEn: "Current high-capability DeepSeek API model.",
     cadeggZh: "强模型候选；需要做 CAD 工具调用回归。",
@@ -4964,7 +4964,7 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
     provider: "DeepSeek",
     model: "deepseek-v4-flash",
     status: "light",
-    rating: 3.5,
+    rating: 4.5,
     officialZh: "DeepSeek 当前轻量 API 模型。",
     officialEn: "Current lightweight DeepSeek API model.",
     cadeggZh: "适合低成本问答和失败重试备用。",
@@ -5048,7 +5048,7 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
     provider: "Kimi",
     model: "kimi-k2.7-code",
     status: "candidate",
-    rating: 4,
+    rating: 4.5,
     officialZh: "Kimi Coding 模型，长上下文指令遵循更可靠。",
     officialEn: "Kimi coding model with more reliable long-context instruction following.",
     cadeggZh: "适合脚本、规则和 CAD 代码辅助；不默认执行任意 LISP。",
@@ -5060,7 +5060,7 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
     provider: "Kimi",
     model: "kimi-k2.6",
     status: "candidate",
-    rating: 3.5,
+    rating: 4,
     officialZh: "Kimi API 当前模型列表中的新模型。",
     officialEn: "New model in the current Kimi API model list.",
     cadeggZh: "Kimi 默认强模型；需要 CAD 工具链回归。",
@@ -5195,9 +5195,33 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
             </div>
             <p className="settings-note">
               {isZh
-                ? "说明：当前星级是官方资料、模型定位、价格/免费状态和 CADEgg 当前接入经验的综合评分；后续实测会用同一组 CAD 任务记录首 token、总耗时、工具调用成功率、校核通过率和失败恢复，并回写星级。"
-                : "Note: current stars combine official docs, model positioning, cost/free status, and CADEgg integration experience. Later benchmarks will run the same CAD tasks and feed first-token latency, total latency, tool-call success, validation pass rate, and recovery behavior back into the stars."}
+                ? "说明：模型列表里的星级已于 2026-08-18 按 CADEgg 实测基准（38 个模型 × 固定 6 用例）回写；权重为工具调用可靠性 25% · CAD/规范准确性 25% · 稳定性 15% · 速度 15% · 成本 10% · 长上下文 10%。上表保留官方资料与接入定位。"
+                : "Note: the model-list stars were rewritten on 2026-08-18 from CADEgg's measured benchmark (38 models × 6 fixed cases). Weights: tool reliability 25% · CAD/standard accuracy 25% · stability 15% · speed 15% · cost 10% · long context 10%. The table above keeps official docs and integration positioning."}
             </p>
+            <div className="help-guide benchmark-evidence-guide">
+              <h4>{isZh ? "实测基准要点（2026-08-18）" : "Measured Benchmark Highlights (2026-08-18)"}</h4>
+              <ul>
+                {isZh ? (
+                  <>
+                    <li>实测最高分：GLM-5.2（0.878）、通义千问 3-Coder-Plus（0.867）、GLM-4-Flash-250414（0.854）。</li>
+                    <li>速度最快：Kimi moonshot 系列约 0.9s/请求；GLM-4.5 最慢（约 9-10s），GLM-4.5-Flash 平均 36s。</li>
+                    <li>工具 JSON 与多轮接续普遍稳定；「缺参时是否先追问」仍是所有模型的共同弱项（产品侧会注入知识卡允许按规范默认值出图）。</li>
+                    <li>Kimi k2/k3 系列仅接受 temperature=1：基准已自动兼容；Kimi 账户限额（RPM）从 Tier0 升级 Tier1 后不再限流。</li>
+                    <li>例外：glm-4.7-flash 实测期间持续 429「访问量过大」，未取得完整数据，保留官方评分 3.5。</li>
+                    <li>完整报告：记忆目录 benchmark-results.json / benchmark-results.md。</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Top scores: GLM-5.2 (0.878), Qwen 3-Coder-Plus (0.867), GLM-4-Flash-250414 (0.854).</li>
+                    <li>Fastest: Kimi moonshot series ≈0.9s/request; GLM-4.5 is slowest (≈9-10s), GLM-4.5-Flash averaged 36s.</li>
+                    <li>Tool JSON and multi-turn continuity are generally stable; "clarify missing params first" remains the common weak spot (the product injects knowledge cards allowing standard defaults).</li>
+                    <li>Kimi k2/k3 accept only temperature=1: the benchmark auto-falls back. Kimi rate limits no longer throttle after Tier0→Tier1 upgrade.</li>
+                    <li>Exception: glm-4.7-flash kept hitting 429 (overloaded) during the run; it keeps the official 3.5 rating.</li>
+                    <li>Full report: benchmark-results.json / benchmark-results.md in the memory folder.</li>
+                  </>
+                )}
+              </ul>
+            </div>
             <div className="model-source-links">
               <strong>{isZh ? "官方来源" : "Official Sources"}</strong>
               {MODEL_SOURCE_LINKS.map((source) => (
