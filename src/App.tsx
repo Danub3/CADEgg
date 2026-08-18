@@ -389,6 +389,12 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
     "zh-CN": "将测试列表全部 {count} 个模型（约 {requests} 次请求），预计 30-40 分钟；Kimi 每请求间隔 21 秒，请耐心等待。",
     "en-US": "Tests all {count} listed models (≈{requests} requests), est. 30-40 min; Kimi waits 21s per request.",
   },
+  benchmarkScopeFailed: { "zh-CN": "重跑失败模型", "en-US": "Retry Failed" },
+  benchmarkScopeFailedHint: {
+    "zh-CN": "重测上次 {count} 个未完全成功的模型（约 {requests} 次请求，含限流间隔）。",
+    "en-US": "Re-tests {count} models that did not fully succeed (≈{requests} requests, incl. pacing).",
+  },
+  benchmarkNoFailed: { "zh-CN": "上次没有失败的模型", "en-US": "No failed models in the last run" },
   settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
   minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
   maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
@@ -1516,7 +1522,7 @@ export default function App() {
   }
 
   const [benchmarkCandidates, setBenchmarkCandidates] = useState<BenchmarkCandidate[]>([]);
-  const [benchmarkScope, setBenchmarkScope] = useState<"configured" | "all">("configured");
+  const [benchmarkScope, setBenchmarkScope] = useState<"configured" | "all" | "failed">("configured");
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [benchmarkProgress, setBenchmarkProgress] = useState<BenchmarkEvent | null>(null);
   const [benchmarkSummary, setBenchmarkSummary] = useState<BenchmarkSummary | null>(null);
@@ -1543,7 +1549,15 @@ export default function App() {
     setBenchmarkProgress(null);
     setBenchmarkSummary(null);
     try {
-      const specs = benchmarkScope === "all" ? ALL_BENCHMARK_SPECS : null;
+      const failedSpecs = (benchmarkSummary?.models ?? [])
+        .filter((m) => m.succeeded < m.requests)
+        .map((m) => ({ provider: m.provider, model: m.model }));
+      const specs =
+        benchmarkScope === "all"
+          ? ALL_BENCHMARK_SPECS
+          : benchmarkScope === "failed"
+            ? failedSpecs
+            : null;
       const summary = await invoke<BenchmarkSummary>("run_model_benchmark", {
         location: appPreferencesRef.current.storageLocation,
         maxRequests: BENCHMARK_MAX_REQUESTS,
@@ -3546,8 +3560,8 @@ function BenchmarkCard({
   language,
 }: {
   candidates: BenchmarkCandidate[];
-  scope: "configured" | "all";
-  onScopeChange: (scope: "configured" | "all") => void;
+  scope: "configured" | "all" | "failed";
+  onScopeChange: (scope: "configured" | "all" | "failed") => void;
   running: boolean;
   progress: BenchmarkEvent | null;
   summary: BenchmarkSummary | null;
@@ -3560,8 +3574,12 @@ function BenchmarkCard({
   const runnable = candidates.filter((c) => !c.skip_reason);
   const skipped = candidates.filter((c) => c.skip_reason);
   const allCount = ALL_BENCHMARK_SPECS.length;
-  const estimate = scope === "all" ? allCount * 6 : runnable.length * 6;
-  const canStart = running || (scope === "all" ? allCount === 0 : runnable.length === 0);
+  const failedCount = (summary?.models ?? []).filter((m) => m.succeeded < m.requests).length;
+  const estimate =
+    scope === "all" ? allCount * 6 : scope === "failed" ? failedCount * 6 : runnable.length * 6;
+  const canStart =
+    running ||
+    (scope === "all" ? allCount === 0 : scope === "failed" ? failedCount === 0 : runnable.length === 0);
   return (
     <section className="rail-card benchmark-card">
       <PanelHeader
@@ -3587,6 +3605,14 @@ function BenchmarkCard({
           >
             {t("benchmarkScopeAll", language)}
           </button>
+          <button
+            type="button"
+            className={scope === "failed" ? "active" : ""}
+            onClick={() => onScopeChange("failed")}
+            disabled={running || failedCount === 0}
+          >
+            {t("benchmarkScopeFailed", language)}
+          </button>
         </div>
       </div>
       <p className="benchmark-meta">
@@ -3595,11 +3621,18 @@ function BenchmarkCard({
               count: String(allCount),
               requests: String(estimate),
             })
-          : `${t("benchmarkRunnable", language, { count: String(runnable.length) })} · ${t(
-              "benchmarkEstimate",
-              language,
-              { count: String(estimate) }
-            )}`}
+          : scope === "failed"
+            ? failedCount > 0
+              ? t("benchmarkScopeFailedHint", language, {
+                  count: String(failedCount),
+                  requests: String(estimate),
+                })
+              : t("benchmarkNoFailed", language)
+            : `${t("benchmarkRunnable", language, { count: String(runnable.length) })} · ${t(
+                "benchmarkEstimate",
+                language,
+                { count: String(estimate) }
+              )}`}
       </p>
       {scope === "configured" && skipped.length > 0 && (
         <p className="benchmark-skipped">

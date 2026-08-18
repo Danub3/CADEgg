@@ -308,37 +308,48 @@ async fn chat_once(
 ) -> Result<ChatResponse, String> {
     let base = base_url.trim_end_matches('/');
     let url = format!("{base}/chat/completions");
-    let mut body = json!({
-        "model": model,
-        "messages": messages,
-        "temperature": 0,
-    });
-    if with_tools {
-        body["tools"] = crate::tools::openai_tools_for(&[
-            "draw_line".to_string(),
-            "draw_elevator_shaft_protection".to_string(),
-            "draw_text".to_string(),
-            "move".to_string(),
-        ]);
-        body["tool_choice"] = json!("auto");
-    }
+    // 部分模型（如 Kimi k2/k3）只允许 temperature=1：先试 0，被拒后去掉该字段重试。
+    for temperature in [Some(0.0_f64), None] {
+        let mut body = json!({
+            "model": model,
+            "messages": messages,
+        });
+        if let Some(t) = temperature {
+            body["temperature"] = json!(t);
+        }
+        if with_tools {
+            body["tools"] = crate::tools::openai_tools_for(&[
+                "draw_line".to_string(),
+                "draw_elevator_shaft_protection".to_string(),
+                "draw_text".to_string(),
+                "move".to_string(),
+            ]);
+            body["tool_choice"] = json!("auto");
+        }
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("网络请求失败: {e}"))?;
-    let status = resp.status();
-    let raw = resp.text().await.map_err(|e| format!("读响应失败: {e}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "API {status}: {}",
-            raw.chars().take(300).collect::<String>()
-        ));
+        let resp = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("网络请求失败: {e}"))?;
+        let status = resp.status();
+        let raw = resp.text().await.map_err(|e| format!("读响应失败: {e}"))?;
+        if !status.is_success() {
+            let err = format!("API {status}: {}", raw.chars().take(300).collect::<String>());
+            if temperature.is_some() && err.to_ascii_lowercase().contains("temperature") {
+                continue; // 去掉 temperature 字段重试一次
+            }
+            return Err(err);
+        }
+        return parse_chat_response(&raw, model);
     }
+    Err("temperature 参数不被支持且无法重试".to_string())
+}
+
+fn parse_chat_response(raw: &str, model: &str) -> Result<ChatResponse, String> {
 
     let parsed: Value =
         serde_json::from_str(&raw).map_err(|e| format!("解析响应失败: {e}"))?;
@@ -550,9 +561,13 @@ async fn run_case(
         match r {
             Ok(resp) => break Ok(resp),
             Err(e) => {
-                if is_rate_limit_error(&e) && attempt < MAX_ATTEMPTS_PER_CASE {
+                if attempt < MAX_ATTEMPTS_PER_CASE {
                     retried = true;
-                    let wait_ms = parse_retry_after_secs(&e).unwrap_or(pause_ms).max(pause_ms);
+                    let wait_ms = if is_rate_limit_error(&e) {
+                        parse_retry_after_secs(&e).unwrap_or(pause_ms).max(pause_ms)
+                    } else {
+                        pause_ms.max(2_000)
+                    };
                     let _ = app.emit(
                         "benchmark:event",
                         BenchmarkEvent {
@@ -562,7 +577,7 @@ async fn run_case(
                             provider: Some(cand.provider.clone()),
                             model: Some(cand.model.clone()),
                             message: format!(
-                                "{} / {} · {} 触发限流，{}s 后重试（第 {} 次）",
+                                "{} / {} · {} 请求失败，{}s 后重试（第 {} 次）",
                                 cand.provider_label,
                                 cand.model,
                                 case_label,
