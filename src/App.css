@@ -1457,6 +1457,86 @@ button:disabled {
   font-weight: 800;
 }
 
+.benchmark-card .benchmark-meta {
+  margin: 0;
+  color: rgb(30 22 51 / 0.62);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.benchmark-skipped {
+  margin: 0;
+  color: rgb(120 53 15 / 0.75);
+  font-size: var(--tiny-font-size, 11px);
+  line-height: 1.4;
+}
+
+.benchmark-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 2px solid rgb(14 165 233 / 0.30);
+  background: rgb(14 165 233 / 0.08);
+}
+
+.benchmark-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 900;
+}
+
+.benchmark-progress p {
+  margin: 0;
+  color: rgb(30 22 51 / 0.65);
+  font-size: var(--tiny-font-size, 11px);
+  line-height: 1.4;
+}
+
+.benchmark-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.benchmark-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.benchmark-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+}
+
+.benchmark-score {
+  flex-shrink: 0;
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.benchmark-weights {
+  margin: 0;
+  color: rgb(30 22 51 / 0.52);
+  font-size: calc(var(--tiny-font-size, 11px) - 1px);
+  line-height: 1.4;
+}
+
 .typing-indicator {
   display: inline-flex;
   align-self: flex-start;

@@ -176,7 +176,7 @@ const DOMAIN_RULES: &[DomainRule] = &[
     },
 ];
 
-fn scoped_response_for_unrelated_request(user_input: &str) -> Option<&'static str> {
+pub(crate) fn scoped_response_for_unrelated_request(user_input: &str) -> Option<&'static str> {
     let trimmed = user_input.trim();
     if trimmed.is_empty() {
         return None;
@@ -492,7 +492,7 @@ fn provider_key_configured(settings: &crate::settings::Settings, provider: &str)
     }
 }
 
-fn provider_label(provider: &str) -> &'static str {
+pub(crate) fn provider_label(provider: &str) -> &'static str {
     match provider {
         "deepseek" => "DeepSeek",
         "qwen" => "通义千问",
@@ -1195,13 +1195,13 @@ fn parse_glm_step_output(
     }
 }
 
-fn json_u64(value: Option<&Value>) -> Option<u64> {
+pub(crate) fn json_u64(value: Option<&Value>) -> Option<u64> {
     value
         .and_then(Value::as_u64)
         .or_else(|| value.and_then(Value::as_i64).filter(|v| *v >= 0).map(|v| v as u64))
 }
 
-fn parse_openai_usage(
+pub(crate) fn parse_openai_usage(
     value: Option<&Value>,
     provider: &str,
     model: &str,
@@ -1341,7 +1341,7 @@ enum AgentEvent<'a> {
     },
 }
 
-fn redact(s: &str, settings: &crate::settings::Settings) -> String {
+pub(crate) fn redact(s: &str, settings: &crate::settings::Settings) -> String {
     let mut out = s.to_string();
     for key in [
         settings.anthropic_api_key.trim(),

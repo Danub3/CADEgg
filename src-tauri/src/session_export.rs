@@ -163,6 +163,14 @@ fn project_dir() -> Result<PathBuf, String> {
     Ok(cwd)
 }
 
+/// 记忆包根目录（供 benchmark 等模块复用）。
+pub(crate) fn memory_bundle_dir(
+    app: &tauri::AppHandle,
+    location: SessionStorageLocation,
+) -> Result<PathBuf, String> {
+    Ok(session_dir(app, location)?.join("memory"))
+}
+
 fn session_dir(
     app: &tauri::AppHandle,
     location: SessionStorageLocation,

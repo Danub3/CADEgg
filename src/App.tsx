@@ -19,6 +19,10 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import "./App.css";
 import type {
   AgentEvent,
+  BenchmarkCandidate,
+  BenchmarkEvent,
+  BenchmarkModelResult,
+  BenchmarkSummary,
   DemoLogEntry,
   ElevatorValidation,
   MemoryBundleInfo,
@@ -352,6 +356,25 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   memoryPreviewHide: { "zh-CN": "收起预览", "en-US": "Collapse" },
   memoryCarriedBadge: { "zh-CN": "将携带全局记忆 · 约 {tokens} tokens", "en-US": "Carrying global memory · ≈{tokens} tokens" },
   memoryTruncated: { "zh-CN": "已截断", "en-US": "truncated" },
+  benchmarkTitle: { "zh-CN": "模型基准", "en-US": "Model Benchmark" },
+  benchmarkRunnable: { "zh-CN": "可测 {count} 个模型", "en-US": "{count} runnable models" },
+  benchmarkEstimate: {
+    "zh-CN": "每模型 6 次小请求，预计 ≤ {count} 次（硬上限 64，可随时取消）",
+    "en-US": "6 small requests per model, est. ≤ {count} (hard cap 64, cancellable)",
+  },
+  benchmarkSkipped: { "zh-CN": "跳过：{text}", "en-US": "Skipped: {text}" },
+  benchmarkStart: { "zh-CN": "开始基准", "en-US": "Run Benchmark" },
+  benchmarkCancel: { "zh-CN": "取消", "en-US": "Cancel" },
+  benchmarkSaved: { "zh-CN": "结果已保存到记忆目录 benchmark-results.md", "en-US": "Saved to benchmark-results.md in the memory folder" },
+  benchmarkOpenDir: { "zh-CN": "打开结果目录", "en-US": "Open Results Folder" },
+  benchmarkFailed: { "zh-CN": "基准失败：{error}", "en-US": "Benchmark failed: {error}" },
+  benchmarkLastRun: { "zh-CN": "最近测试：{date}", "en-US": "Last run: {date}" },
+  benchmarkNever: { "zh-CN": "还没有基准结果", "en-US": "No benchmark results yet" },
+  benchmarkWeights: {
+    "zh-CN": "权重：工具 25% · 准确性 25% · 稳定性 15% · 速度 15% · 成本 10% · 长上下文 10%",
+    "en-US": "Weights: tools 25% · accuracy 25% · stability 15% · speed 15% · cost 10% · long context 10%",
+  },
+  benchmarkCancelledNote: { "zh-CN": "已取消（部分结果保留）", "en-US": "Cancelled (partial results kept)" },
   settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
   minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
   maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
@@ -1478,6 +1501,66 @@ export default function App() {
     }
   }
 
+  const [benchmarkCandidates, setBenchmarkCandidates] = useState<BenchmarkCandidate[]>([]);
+  const [benchmarkRunning, setBenchmarkRunning] = useState(false);
+  const [benchmarkProgress, setBenchmarkProgress] = useState<BenchmarkEvent | null>(null);
+  const [benchmarkSummary, setBenchmarkSummary] = useState<BenchmarkSummary | null>(null);
+  const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
+  const benchmarkCancelledRef = useRef(false);
+
+  async function refreshBenchmarkState() {
+    try {
+      const candidates = await invoke<BenchmarkCandidate[]>("benchmark_candidates");
+      setBenchmarkCandidates(candidates);
+      const summary = await invoke<BenchmarkSummary | null>("read_benchmark_results", {
+        location: appPreferencesRef.current.storageLocation,
+      });
+      setBenchmarkSummary(summary);
+    } catch (e) {
+      console.error("load benchmark state:", e);
+    }
+  }
+
+  async function startBenchmark() {
+    if (benchmarkRunning) return;
+    setBenchmarkRunning(true);
+    setBenchmarkError(null);
+    setBenchmarkProgress(null);
+    setBenchmarkSummary(null);
+    try {
+      const summary = await invoke<BenchmarkSummary>("run_model_benchmark", {
+        location: appPreferencesRef.current.storageLocation,
+        maxRequests: 64,
+      });
+      setBenchmarkSummary(summary);
+    } catch (e) {
+      setBenchmarkError(String(e));
+    } finally {
+      setBenchmarkRunning(false);
+      setBenchmarkProgress(null);
+    }
+  }
+
+  async function cancelBenchmark() {
+    benchmarkCancelledRef.current = true;
+    try {
+      await invoke("cancel_model_benchmark");
+    } catch (e) {
+      console.error("cancel benchmark:", e);
+    }
+  }
+
+  async function openBenchmarkResultsDir() {
+    const path = benchmarkSummary?.results_json_path;
+    if (!path) return;
+    const dir = path.replace(/[/\\][^/\\]*$/, "");
+    try {
+      await openPath(dir);
+    } catch (e) {
+      setBenchmarkError(String(e));
+    }
+  }
+
   function tryParseValidation(content: string): ElevatorValidation | null {
     return parseValidationPayload(content);
   }
@@ -1735,6 +1818,29 @@ export default function App() {
   useEffect(() => {
     void refreshMemoryBundle();
   }, [appPreferences.storageLocation]);
+
+  useEffect(() => {
+    void refreshBenchmarkState();
+  }, []);
+
+  useEffect(() => {
+    void refreshBenchmarkState();
+  }, [appPreferences.storageLocation]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+    listen<BenchmarkEvent>("benchmark:event", (ev) => {
+      if (!cancelled) setBenchmarkProgress(ev.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!taskStartedAt) return;
@@ -2737,6 +2843,17 @@ export default function App() {
             openError={memoryDirError}
             language={appPreferences.language}
           />
+          <BenchmarkCard
+            candidates={benchmarkCandidates}
+            running={benchmarkRunning}
+            progress={benchmarkProgress}
+            summary={benchmarkSummary}
+            error={benchmarkError}
+            onStart={() => void startBenchmark()}
+            onCancel={() => void cancelBenchmark()}
+            onOpenResultsDir={() => void openBenchmarkResultsDir()}
+            language={appPreferences.language}
+          />
         </aside>
       </div>
 
@@ -3391,6 +3508,107 @@ function MemoryCard({
             </>
           )}
         </div>
+      )}
+    </section>
+  );
+}
+
+function BenchmarkCard({
+  candidates,
+  running,
+  progress,
+  summary,
+  error,
+  onStart,
+  onCancel,
+  onOpenResultsDir,
+  language,
+}: {
+  candidates: BenchmarkCandidate[];
+  running: boolean;
+  progress: BenchmarkEvent | null;
+  summary: BenchmarkSummary | null;
+  error: string | null;
+  onStart: () => void;
+  onCancel: () => void;
+  onOpenResultsDir: () => void;
+  language: "zh-CN" | "en-US";
+}) {
+  const runnable = candidates.filter((c) => !c.skip_reason);
+  const skipped = candidates.filter((c) => c.skip_reason);
+  const estimate = runnable.length * 6;
+  return (
+    <section className="rail-card benchmark-card">
+      <PanelHeader
+        title={t("benchmarkTitle", language)}
+        status={running || summary ? "online" : "idle"}
+      />
+      <p className="benchmark-meta">
+        {t("benchmarkRunnable", language, { count: String(runnable.length) })} ·{" "}
+        {t("benchmarkEstimate", language, { count: String(estimate) })}
+      </p>
+      {skipped.length > 0 && (
+        <p className="benchmark-skipped">
+          {t("benchmarkSkipped", language, {
+            text: skipped
+              .map((s) => `${s.provider_label}（${s.skip_reason}）`)
+              .join("；"),
+          })}
+        </p>
+      )}
+      <div className="button-row">
+        <button type="button" onClick={onStart} disabled={running || runnable.length === 0}>
+          {t("benchmarkStart", language)}
+        </button>
+        <button type="button" onClick={onCancel} disabled={!running}>
+          {t("benchmarkCancel", language)}
+        </button>
+      </div>
+      {running && progress && (
+        <div className="benchmark-progress">
+          <div className="benchmark-progress-head">
+            <span>
+              {progress.current}/{progress.total}
+            </span>
+            <span>{progress.model ? `${progress.provider} / ${progress.model}` : ""}</span>
+          </div>
+          <p>{progress.message}</p>
+        </div>
+      )}
+      {error && (
+        <p className="inline-error">{t("benchmarkFailed", language, { error })}</p>
+      )}
+      {summary && !running && (
+        <div className="benchmark-results">
+          <p className="benchmark-meta">
+            {t("benchmarkLastRun", language, {
+              date: new Date(summary.started_at_ms).toLocaleString(),
+            })}
+            {summary.cancelled ? ` · ${t("benchmarkCancelledNote", language)}` : ""}
+          </p>
+          <div className="benchmark-rows">
+            {summary.models.map((m: BenchmarkModelResult) => (
+              <div key={`${m.provider}-${m.model}`} className="benchmark-row">
+                <span className="benchmark-model">
+                  {m.provider_label} / {m.model}
+                </span>
+                <span className="benchmark-score" title={`score=${m.score.toFixed(3)}`}>
+                  {m.rating.toFixed(1)}★ · {m.score.toFixed(2)} · {m.succeeded}/{m.requests} ·{" "}
+                  {formatDuration(m.avg_duration_ms)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="benchmark-weights">{t("benchmarkWeights", language)}</p>
+          <div className="button-row">
+            <button type="button" onClick={onOpenResultsDir}>
+              {t("benchmarkOpenDir", language)}
+            </button>
+          </div>
+        </div>
+      )}
+      {!summary && !running && (
+        <p className="benchmark-meta">{t("benchmarkNever", language)}</p>
       )}
     </section>
   );

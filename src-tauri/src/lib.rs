@@ -2,6 +2,7 @@ use tauri::Manager;
 
 #[cfg(windows)]
 mod cad;
+mod benchmark;
 mod knowledge;
 mod llm;
 mod safety;
@@ -25,6 +26,10 @@ pub fn run() {
         session_export::save_session_markdown,
         session_export::save_session_memory_bundle,
         session_export::read_memory_bundle,
+        benchmark::benchmark_candidates,
+        benchmark::cancel_model_benchmark,
+        benchmark::read_benchmark_results,
+        benchmark::run_model_benchmark,
         llm::run_agent,
         llm::confirm_tool_call,
     ]);
@@ -36,6 +41,10 @@ pub fn run() {
         session_export::save_session_markdown,
         session_export::save_session_memory_bundle,
         session_export::read_memory_bundle,
+        benchmark::benchmark_candidates,
+        benchmark::cancel_model_benchmark,
+        benchmark::read_benchmark_results,
+        benchmark::run_model_benchmark,
         llm::run_agent,
         llm::confirm_tool_call,
     ]);

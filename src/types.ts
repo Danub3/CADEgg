@@ -152,6 +152,55 @@ export interface MemoryBundleInfo {
   global_memory_exists: boolean;
 }
 
+export interface BenchmarkCandidate {
+  provider: string;
+  provider_label: string;
+  model: string;
+  skip_reason?: string;
+}
+
+export interface BenchmarkCaseResult {
+  id: string;
+  label: string;
+  score: number;
+  note: string;
+}
+
+export interface BenchmarkModelResult {
+  provider: string;
+  provider_label: string;
+  model: string;
+  requests: number;
+  succeeded: number;
+  avg_duration_ms: number;
+  avg_output_tokens?: number;
+  score: number;
+  rating: number;
+  cases: BenchmarkCaseResult[];
+  errors: string[];
+}
+
+export interface BenchmarkSummary {
+  started_at_ms: number;
+  finished_at_ms?: number;
+  cancelled: boolean;
+  candidates_total: number;
+  models_tested: number;
+  max_requests: number;
+  models: BenchmarkModelResult[];
+  results_json_path: string;
+  results_md_path: string;
+}
+
+export interface BenchmarkEvent {
+  kind: string;
+  current: number;
+  total: number;
+  provider?: string;
+  model?: string;
+  message: string;
+}
+
 export interface SettingsView {
   provider: Provider;
   work_mode: WorkMode;
