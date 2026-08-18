@@ -63,78 +63,142 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
-fn is_domain_related_request(user_input: &str) -> bool {
-    let text = user_input.to_lowercase();
-    contains_any(
-        &text,
-        &[
-            "cad",
-            "autocad",
-            "图",
-            "图纸",
-            "出图",
-            "绘",
-            "画",
-            "线",
-            "圆",
-            "矩形",
-            "多段线",
-            "对象",
-            "handle",
-            "模型空间",
-            "图层",
-            "标注",
-            "尺寸",
-            "楼梯",
-            "电梯",
-            "井口",
-            "防护",
-            "施工",
-            "安全",
-            "临边",
-            "洞口",
-            "规范",
-            "jgj",
-            "gb",
-            "踢脚板",
-            "警示",
-            "材料表",
-            "门",
-            "立杆",
-            "横杆",
-            "draw",
-            "drawing",
-            "line",
-            "circle",
-            "rectangle",
-            "polyline",
-            "object",
-            "layer",
-            "dimension",
-            "stair",
-            "safety",
-            "construction",
-            "key",
-            "api",
-            "glm",
-            "deepseek",
-            "qwen",
-            "kimi",
-            "模型",
-            "设置",
-            "轮转",
-            "bridge",
-            "会话",
-            "字体",
-        ],
-    )
+// ---------------- domain-intent 规则表（本地确定性守卫，不调用模型） ----------------
+//
+// 评估顺序：
+//   1) 命中任一「允许类」关键词 → 放行（进入模型，模糊表达由模型继续澄清）。
+//   2) 未命中允许类，但命中「拒绝类」关键词 → 直接拒绝，不消耗 token。
+//   3) 都没命中 → 放行（宁可放行让模型澄清，也不误拒 CAD 表达）。
+//
+// 维护方式：新增领域词汇时按类别追加到对应数组即可；拒绝类只在「没有任何允许类
+// 信号」时才生效，因此不会误伤带领域词汇的请求。禁止把会调用模型的分类器放在这里。
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DomainRuleKind {
+    Allow,
+    Reject,
 }
 
+struct DomainRule {
+    label: &'static str,
+    kind: DomainRuleKind,
+    patterns: &'static [&'static str],
+}
+
+const DOMAIN_RULES: &[DomainRule] = &[
+    // ---- 允许类：CAD 绘图 / 编辑动作 ----
+    DomainRule {
+        label: "cad-action",
+        kind: DomainRuleKind::Allow,
+        patterns: &[
+            "cad", "autocad", "draw", "drawing", "绘", "画", "出图", "生成图", "建模", "草图",
+            "图纸", "多段线", "polyline", "矩形", "rectangle", "圆", "circle", "直线", "line",
+            "标注", "dimension", "图层", "layer", "模型空间", "modelspace", "handle", "对象",
+            "object", "偏移", "offset", "镜像", "mirror", "旋转", "rotate", "复制", "copy",
+            "删除", "erase", "修剪", "trim", "延伸", "extend", "移动", "move", "阵列", "array",
+            "块", "block", "布局", "layout", "视口", "viewport", "门", "窗",
+        ],
+    },
+    // ---- 允许类：图纸检查 / 图面查询 ----
+    DomainRule {
+        label: "cad-query",
+        kind: DomainRuleKind::Allow,
+        patterns: &[
+            "检查", "校核", "复核", "审查", "查询", "验收", "核对", "读图", "图面", "面积",
+            "长度", "距离", "数量", "统计", "属性", "坐标", "颜色", "线型", "线宽", "比例",
+            "单位", "标高", "尺寸", "测量", "measure",
+        ],
+    },
+    // ---- 允许类：施工安全防护与建筑规范 ----
+    DomainRule {
+        label: "safety-standard",
+        kind: DomainRuleKind::Allow,
+        patterns: &[
+            "安全", "safety", "防护", "施工", "construction", "临边", "洞口", "井口", "电梯",
+            "楼梯", "stair", "立杆", "横杆", "踢脚板", "警示", "材料表", "规范", "标准", "图集",
+            "jgj", "gb/t", "gb ", "脚手架", "基坑", "塔吊", "安全带", "护栏", "挡脚板", "密目网",
+            "防水", "混凝土", "钢筋", "模板", "砌体", "屋面", "无障碍",
+        ],
+    },
+    // ---- 允许类：模型配置 ----
+    DomainRule {
+        label: "model-config",
+        kind: DomainRuleKind::Allow,
+        patterns: &[
+            "模型", "model", "key", "api", "glm", "deepseek", "qwen", "kimi", "gemini",
+            "供应商", "provider", "轮转", "failover", "切换模型", "配置", "密钥",
+        ],
+    },
+    // ---- 允许类：应用设置与使用 ----
+    DomainRule {
+        label: "app-settings",
+        kind: DomainRuleKind::Allow,
+        patterns: &[
+            "设置", "setting", "字体", "语言", "窗口", "置顶", "会话", "导出", "记忆",
+            "bridge", "连接", "刷新", "帮助", "版本", "快捷键", "深色", "外观", "界面",
+        ],
+    },
+    // ---- 拒绝类：纯数学计算 ----
+    DomainRule {
+        label: "unrelated-math",
+        kind: DomainRuleKind::Reject,
+        patterns: &[
+            "1+1", "2+2", "等于几", "几加几", "几乘几", "算数", "口算", "九九乘法", "解方程",
+            "微积分", "求导", "积分题",
+        ],
+    },
+    // ---- 拒绝类：文学创作与办公文案 ----
+    DomainRule {
+        label: "unrelated-creative",
+        kind: DomainRuleKind::Reject,
+        patterns: &[
+            "写一首", "写首诗", "写诗", "诗歌", "作诗", "歌词", "写小说", "写作文", "散文",
+            "押韵", "周报", "简历", "ppt", "海报",
+        ],
+    },
+    // ---- 拒绝类：闲聊 ----
+    DomainRule {
+        label: "unrelated-chitchat",
+        kind: DomainRuleKind::Reject,
+        patterns: &[
+            "天气", "笑话", "讲个故事", "你好吗", "吃了吗", "聊聊天", "无聊", "讲段子",
+            "脑筋急转弯",
+        ],
+    },
+    // ---- 拒绝类：通用百科 ----
+    DomainRule {
+        label: "unrelated-encyclopedia",
+        kind: DomainRuleKind::Reject,
+        patterns: &[
+            "量子力学", "相对论", "宇宙大爆炸", "哲学问题", "历史人物", "娱乐圈", "足球比赛",
+            "nba", "游戏攻略",
+        ],
+    },
+];
+
 fn scoped_response_for_unrelated_request(user_input: &str) -> Option<&'static str> {
-    if user_input.trim().is_empty() || is_domain_related_request(user_input) {
+    let trimmed = user_input.trim();
+    if trimmed.is_empty() {
         return None;
     }
-    Some("这个问题不属于 CADEgg 的 AutoCAD/施工安全绘图范围。我可以帮你处理 CAD 绘制、编辑、图面查询、施工安全防护规范、模型 Key 和应用设置相关任务。")
+    let text = trimmed.to_lowercase();
+
+    let allowed = DOMAIN_RULES
+        .iter()
+        .any(|rule| rule.kind == DomainRuleKind::Allow && contains_any(&text, rule.patterns));
+    if allowed {
+        return None;
+    }
+
+    let rejected = DOMAIN_RULES
+        .iter()
+        .any(|rule| rule.kind == DomainRuleKind::Reject && contains_any(&text, rule.patterns));
+    if rejected {
+        return Some("这个问题不属于 CADEgg 的 AutoCAD/施工安全绘图范围。我可以帮你处理 CAD 绘制、编辑、图面查询、施工安全防护规范、模型 Key 和应用设置相关任务。");
+    }
+
+    // 未命中任何规则：默认放行，让模型澄清（模糊 CAD 表达不能误拒）。
+    None
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -1999,9 +2063,39 @@ mod tests {
     }
 
     #[test]
+    fn domain_rule_table_is_wellformed() {
+        for rule in DOMAIN_RULES {
+            assert!(!rule.label.is_empty());
+            assert!(
+                !rule.patterns.is_empty(),
+                "规则 {} 的 patterns 为空",
+                rule.label
+            );
+            assert!(
+                rule.patterns.iter().all(|p| !p.trim().is_empty()),
+                "规则 {} 存在空白 pattern",
+                rule.label
+            );
+        }
+    }
+
+    #[test]
     fn scope_guard_rejects_unrelated_questions() {
         assert!(scoped_response_for_unrelated_request("1+1等于几？").is_some());
         assert!(scoped_response_for_unrelated_request("写一首诗").is_some());
+        assert!(scoped_response_for_unrelated_request("今天天气怎么样").is_some());
+        assert!(scoped_response_for_unrelated_request("给我讲个笑话").is_some());
+        assert!(scoped_response_for_unrelated_request("介绍一下量子力学").is_some());
+        assert!(scoped_response_for_unrelated_request("帮我写个周报").is_some());
+    }
+
+    #[test]
+    fn scope_guard_allows_vague_cad_for_clarification() {
+        // CAD 相关但表达模糊的问题必须放行，由模型追问澄清。
+        assert!(scoped_response_for_unrelated_request("帮我处理一下这个图").is_none());
+        assert!(scoped_response_for_unrelated_request("上面那个对象再改改").is_none());
+        assert!(scoped_response_for_unrelated_request("这个还要调整一下").is_none());
+        assert!(scoped_response_for_unrelated_request("算一下这面墙的面积").is_none());
     }
 
     #[test]
@@ -2009,6 +2103,17 @@ mod tests {
         assert!(scoped_response_for_unrelated_request("画一条 7000mm 的直线").is_none());
         assert!(scoped_response_for_unrelated_request("电梯井口防护要满足什么规范？").is_none());
         assert!(scoped_response_for_unrelated_request("GLM Key 怎么配置？").is_none());
+        assert!(scoped_response_for_unrelated_request("怎么配置 DeepSeek API Key").is_none());
+        assert!(scoped_response_for_unrelated_request("怎么切换深色模式").is_none());
+        assert!(scoped_response_for_unrelated_request("立杆间距最大多少").is_none());
+    }
+
+    #[test]
+    fn scope_guard_keeps_domain_signals_above_reject_patterns() {
+        // 拒绝词只在没有任何允许类信号时才生效：带领域词的请求不受影响。
+        assert!(scoped_response_for_unrelated_request("计算一下这条线的长度").is_none());
+        assert!(scoped_response_for_unrelated_request("这张图纸的历史版本怎么查").is_none());
+        assert!(scoped_response_for_unrelated_request("检查一下这个圆的半径").is_none());
     }
 
     #[test]
