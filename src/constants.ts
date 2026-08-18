@@ -1,5 +1,9 @@
 import type { Provider, SettingsView } from "./types";
 
+// 评级说明：rating 为 CADEgg 实测基准回写（最近测试 2026-08-18，结果见记忆目录 benchmark-results.json/md）。
+// 评分权重：工具调用可靠性 25% · CAD/规范准确性 25% · 稳定性 15% · 速度 15% · 成本 10% · 长上下文 10%。
+// 未实测的模型保持官方资料综合评分；模型标签只标免费，未标注一律按消耗 token/额度处理。
+
 export type ModelTier = "production" | "limited" | "unavailable";
 export type ModelRating = 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5;
 
@@ -19,7 +23,7 @@ export const GLM_MODELS: ModelOption[] = [
   { id: "glm-4.7-flashx", label: "GLM-4.7-FlashX", tier: "limited", rating: 3.5 },
   { id: "glm-4.7-flash", label: "GLM-4.7-Flash（免费）", tier: "limited", rating: 3.5 },
   { id: "glm-4.6", label: "GLM-4.6", tier: "production", rating: 4 },
-  { id: "glm-4.5", label: "GLM-4.5", tier: "production", rating: 4.5 },
+  { id: "glm-4.5", label: "GLM-4.5", tier: "production", rating: 4 },
   { id: "glm-4.5-air", label: "GLM-4.5-Air", tier: "limited", rating: 3 },
   { id: "glm-4.5-airx", label: "GLM-4.5-AirX", tier: "limited", rating: 3.5 },
   { id: "glm-4.5-flash", label: "GLM-4.5-Flash（免费）", tier: "limited", rating: 3.5 },
@@ -29,7 +33,7 @@ export const GLM_MODELS: ModelOption[] = [
 
 export const DEEPSEEK_MODELS: ModelOption[] = [
   { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", tier: "production", rating: 4.5 },
-  { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", tier: "production", rating: 3.5 },
+  { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", tier: "production", rating: 4 },
 ];
 
 export const QWEN_MODELS: ModelOption[] = [
@@ -45,8 +49,8 @@ export const QWEN_MODELS: ModelOption[] = [
   { id: "qwen3-coder-flash", label: "通义千问 Coder Flash", tier: "limited", rating: 3 },
   { id: "qwen3-max", label: "通义千问 3 Max", tier: "production", rating: 4 },
   { id: "qwen-flash", label: "通义千问 Flash", tier: "limited", rating: 2.5 },
-  { id: "qwen-max", label: "通义千问 Max（旧版）", tier: "production", rating: 3 },
-  { id: "qwen-plus", label: "通义千问 Plus", tier: "limited", rating: 3.5 },
+  { id: "qwen-max", label: "通义千问 Max（旧版）", tier: "production", rating: 4 },
+  { id: "qwen-plus", label: "通义千问 Plus", tier: "limited", rating: 4 },
   { id: "qwen-turbo", label: "通义千问 Turbo", tier: "limited", rating: 2.5 },
 ];
 
@@ -56,8 +60,8 @@ export const KIMI_MODELS: ModelOption[] = [
   { id: "kimi-k2.6", label: "Kimi K2.6", tier: "production", rating: 3.5 },
   { id: "kimi-k2.5", label: "Kimi K2.5", tier: "limited", rating: 3 },
   { id: "moonshot-v1-8k", label: "Kimi 8K（旧版）", tier: "unavailable", rating: 2 },
-  { id: "moonshot-v1-32k", label: "Kimi 32K（旧版）", tier: "unavailable", rating: 2 },
-  { id: "moonshot-v1-128k", label: "Kimi 128K（旧版）", tier: "unavailable", rating: 2 },
+  { id: "moonshot-v1-32k", label: "Kimi 32K（旧版）", tier: "unavailable", rating: 4 },
+  { id: "moonshot-v1-128k", label: "Kimi 128K（旧版）", tier: "unavailable", rating: 4 },
 ];
 
 export function modelRating(model: ModelOption): ModelRating {
