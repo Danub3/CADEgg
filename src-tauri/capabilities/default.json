@@ -16,6 +16,12 @@
     "core:window:allow-set-effects",
     "core:window:allow-set-always-on-top",
     "opener:default",
-    "opener:allow-open-path"
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "**/cadegg-sessions/**" }
+      ]
+    }
   ]
 }
