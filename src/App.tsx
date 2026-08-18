@@ -88,6 +88,13 @@ interface AppPreferences {
 /// 携带记忆的 token 预算：超过部分截断，避免隐性成本膨胀。
 const MEMORY_CARRY_TOKEN_BUDGET = 1200;
 
+/// 全量基准清单：模型列表里的全部模型（与 constants.ts 单一事实源保持一致）。
+const ALL_BENCHMARK_SPECS = MODEL_PROVIDERS.flatMap((provider) =>
+  provider.models.map((model) => ({ provider: provider.id, model: model.id }))
+);
+/// 全量基准请求上限（≈ 38 模型 × 6 请求 = 228，留余量）。
+const BENCHMARK_MAX_REQUESTS = 256;
+
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
   language: "zh-CN",
   fontSize: 14,
@@ -375,6 +382,13 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
     "en-US": "Weights: tools 25% · accuracy 25% · stability 15% · speed 15% · cost 10% · long context 10%",
   },
   benchmarkCancelledNote: { "zh-CN": "已取消（部分结果保留）", "en-US": "Cancelled (partial results kept)" },
+  benchmarkScopeLabel: { "zh-CN": "测试范围", "en-US": "Scope" },
+  benchmarkScopeConfigured: { "zh-CN": "配置模型", "en-US": "Configured" },
+  benchmarkScopeAll: { "zh-CN": "列表全部模型", "en-US": "All Listed" },
+  benchmarkScopeAllHint: {
+    "zh-CN": "将测试列表全部 {count} 个模型（约 {requests} 次请求），预计 30-40 分钟；Kimi 每请求间隔 21 秒，请耐心等待。",
+    "en-US": "Tests all {count} listed models (≈{requests} requests), est. 30-40 min; Kimi waits 21s per request.",
+  },
   settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
   minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
   maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
@@ -1502,6 +1516,7 @@ export default function App() {
   }
 
   const [benchmarkCandidates, setBenchmarkCandidates] = useState<BenchmarkCandidate[]>([]);
+  const [benchmarkScope, setBenchmarkScope] = useState<"configured" | "all">("configured");
   const [benchmarkRunning, setBenchmarkRunning] = useState(false);
   const [benchmarkProgress, setBenchmarkProgress] = useState<BenchmarkEvent | null>(null);
   const [benchmarkSummary, setBenchmarkSummary] = useState<BenchmarkSummary | null>(null);
@@ -1528,9 +1543,11 @@ export default function App() {
     setBenchmarkProgress(null);
     setBenchmarkSummary(null);
     try {
+      const specs = benchmarkScope === "all" ? ALL_BENCHMARK_SPECS : null;
       const summary = await invoke<BenchmarkSummary>("run_model_benchmark", {
         location: appPreferencesRef.current.storageLocation,
-        maxRequests: 64,
+        maxRequests: BENCHMARK_MAX_REQUESTS,
+        models: specs,
       });
       setBenchmarkSummary(summary);
     } catch (e) {
@@ -2845,6 +2862,8 @@ export default function App() {
           />
           <BenchmarkCard
             candidates={benchmarkCandidates}
+            scope={benchmarkScope}
+            onScopeChange={setBenchmarkScope}
             running={benchmarkRunning}
             progress={benchmarkProgress}
             summary={benchmarkSummary}
@@ -3515,6 +3534,8 @@ function MemoryCard({
 
 function BenchmarkCard({
   candidates,
+  scope,
+  onScopeChange,
   running,
   progress,
   summary,
@@ -3525,6 +3546,8 @@ function BenchmarkCard({
   language,
 }: {
   candidates: BenchmarkCandidate[];
+  scope: "configured" | "all";
+  onScopeChange: (scope: "configured" | "all") => void;
   running: boolean;
   progress: BenchmarkEvent | null;
   summary: BenchmarkSummary | null;
@@ -3536,18 +3559,49 @@ function BenchmarkCard({
 }) {
   const runnable = candidates.filter((c) => !c.skip_reason);
   const skipped = candidates.filter((c) => c.skip_reason);
-  const estimate = runnable.length * 6;
+  const allCount = ALL_BENCHMARK_SPECS.length;
+  const estimate = scope === "all" ? allCount * 6 : runnable.length * 6;
+  const canStart = running || (scope === "all" ? allCount === 0 : runnable.length === 0);
   return (
     <section className="rail-card benchmark-card">
       <PanelHeader
         title={t("benchmarkTitle", language)}
         status={running || summary ? "online" : "idle"}
       />
+      <div className="benchmark-scope">
+        <span>{t("benchmarkScopeLabel", language)}</span>
+        <div className="benchmark-scope-buttons">
+          <button
+            type="button"
+            className={scope === "configured" ? "active" : ""}
+            onClick={() => onScopeChange("configured")}
+            disabled={running}
+          >
+            {t("benchmarkScopeConfigured", language)}
+          </button>
+          <button
+            type="button"
+            className={scope === "all" ? "active" : ""}
+            onClick={() => onScopeChange("all")}
+            disabled={running}
+          >
+            {t("benchmarkScopeAll", language)}
+          </button>
+        </div>
+      </div>
       <p className="benchmark-meta">
-        {t("benchmarkRunnable", language, { count: String(runnable.length) })} ·{" "}
-        {t("benchmarkEstimate", language, { count: String(estimate) })}
+        {scope === "all"
+          ? t("benchmarkScopeAllHint", language, {
+              count: String(allCount),
+              requests: String(estimate),
+            })
+          : `${t("benchmarkRunnable", language, { count: String(runnable.length) })} · ${t(
+              "benchmarkEstimate",
+              language,
+              { count: String(estimate) }
+            )}`}
       </p>
-      {skipped.length > 0 && (
+      {scope === "configured" && skipped.length > 0 && (
         <p className="benchmark-skipped">
           {t("benchmarkSkipped", language, {
             text: skipped
@@ -3557,7 +3611,7 @@ function BenchmarkCard({
         </p>
       )}
       <div className="button-row">
-        <button type="button" onClick={onStart} disabled={running || runnable.length === 0}>
+        <button type="button" onClick={onStart} disabled={canStart}>
           {t("benchmarkStart", language)}
         </button>
         <button type="button" onClick={onCancel} disabled={!running}>

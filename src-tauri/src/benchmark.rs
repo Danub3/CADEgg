@@ -19,8 +19,8 @@ use crate::llm::{
 use crate::session_export::{memory_bundle_dir, SessionStorageLocation};
 use crate::settings::Settings;
 
-/// 全量运行硬上限：请求次数。
-pub const MAX_BENCHMARK_REQUESTS: u32 = 64;
+/// 全量运行硬上限：请求次数（全部模型 ≈ 38×6=228，留余量）。
+pub const MAX_BENCHMARK_REQUESTS: u32 = 256;
 /// 每个模型固定请求数（p1/p2/p3/p4/p6_turn1/p6_turn2）。
 const REQUESTS_PER_MODEL: usize = 6;
 /// 单请求超时。
@@ -125,6 +125,42 @@ pub struct BenchmarkEvent {
 }
 
 // ---------------- 候选模型 ----------------
+
+/// 前端传入的待测模型清单项。
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BenchmarkModelSpec {
+    pub provider: String,
+    pub model: String,
+}
+
+/// 按前端传入的完整模型清单构建候选（去重；未配 key 的供应商标记跳过）。
+pub(crate) fn benchmark_candidates_from_specs(
+    settings: &Settings,
+    specs: &[BenchmarkModelSpec],
+) -> Vec<BenchmarkCandidate> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for spec in specs {
+        let model = spec.model.trim().to_string();
+        if model.is_empty() || !seen.insert(format!("{}|{}", spec.provider, model)) {
+            continue;
+        }
+        let (label, key, _base_url) = provider_creds(settings, &spec.provider);
+        let skip_reason = if key.trim().is_empty() {
+            Some(format!("{} API Key 未配置", label))
+        } else {
+            None
+        };
+        out.push(BenchmarkCandidate {
+            provider: spec.provider.clone(),
+            provider_label: label,
+            model,
+            skip_reason,
+        });
+    }
+    out
+}
 
 fn provider_creds(settings: &Settings, provider: &str) -> (String, String, String) {
     match provider {
@@ -818,11 +854,12 @@ pub async fn run_model_benchmark(
     app: AppHandle,
     location: SessionStorageLocation,
     max_requests: Option<u32>,
+    models: Option<Vec<BenchmarkModelSpec>>,
 ) -> Result<BenchmarkSummary, String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("已有基准测试在运行".to_string());
     }
-    let result = run_benchmark_inner(&app, location, max_requests).await;
+    let result = run_benchmark_inner(&app, location, max_requests, models).await;
     RUNNING.store(false, Ordering::SeqCst);
     result
 }
@@ -831,6 +868,7 @@ async fn run_benchmark_inner(
     app: &AppHandle,
     location: SessionStorageLocation,
     max_requests: Option<u32>,
+    models: Option<Vec<BenchmarkModelSpec>>,
 ) -> Result<BenchmarkSummary, String> {
     CANCELLED.store(false, Ordering::SeqCst);
     REQUEST_COUNT.store(0, Ordering::SeqCst);
@@ -840,7 +878,10 @@ async fn run_benchmark_inner(
         .min(MAX_BENCHMARK_REQUESTS);
     let started_at_ms = now_ms();
 
-    let candidates = benchmark_candidates_from_settings(&settings);
+    let candidates = match models.as_ref().filter(|list| !list.is_empty()) {
+        Some(specs) => benchmark_candidates_from_specs(&settings, specs),
+        None => benchmark_candidates_from_settings(&settings),
+    };
     let runnable: Vec<&BenchmarkCandidate> =
         candidates.iter().filter(|c| c.skip_reason.is_none()).collect();
     let total_models = runnable.len();
@@ -990,6 +1031,27 @@ mod tests {
         assert_eq!(score_p6_turn2(&fake_response("已把该线改成 5000mm", vec![], true)).0, 1.0);
         assert_eq!(score_p6_turn2(&fake_response("该线长 3000mm", vec![], true)).0, 0.5);
         assert_eq!(score_p6_turn2(&fake_response("好的", vec![], true)).0, 0.0);
+    }
+
+    #[test]
+    fn candidates_from_specs_dedupe_and_skip_unconfigured() {
+        let settings = Settings {
+            provider: "glm".to_string(),
+            glm_api_key: "glm-key-12345678".to_string(),
+            ..Default::default()
+        };
+        let specs = vec![
+            BenchmarkModelSpec { provider: "glm".to_string(), model: "glm-5.2".to_string() },
+            BenchmarkModelSpec { provider: "glm".to_string(), model: "glm-5.2".to_string() },
+            BenchmarkModelSpec { provider: "deepseek".to_string(), model: "deepseek-v4-pro".to_string() },
+        ];
+        let candidates = benchmark_candidates_from_specs(&settings, &specs);
+        assert_eq!(candidates.len(), 2, "同 provider+model 应去重");
+        assert!(candidates.iter().all(|c| c.provider_label.len() > 0));
+        let glm = candidates.iter().find(|c| c.provider == "glm").unwrap();
+        assert!(glm.skip_reason.is_none());
+        let ds = candidates.iter().find(|c| c.provider == "deepseek").unwrap();
+        assert!(ds.skip_reason.as_deref().unwrap_or("").contains("未配置"));
     }
 
     #[test]

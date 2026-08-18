@@ -1537,6 +1537,46 @@ button:disabled {
   line-height: 1.4;
 }
 
+.benchmark-scope {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.benchmark-scope > span {
+  color: rgb(30 22 51 / 0.62);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.benchmark-scope-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.benchmark-scope-buttons button {
+  border: 2px solid rgb(30 22 51 / 0.18);
+  background: rgb(255 253 245 / var(--control-alpha, 0.85));
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.benchmark-scope-buttons button.active {
+  border-color: rgb(124 58 237 / 0.55);
+  background: rgb(139 92 246 / 0.18);
+  color: rgb(88 28 135);
+}
+
+.benchmark-scope-buttons button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .typing-indicator {
   display: inline-flex;
   align-self: flex-start;
