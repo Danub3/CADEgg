@@ -48,6 +48,7 @@ pub fn is_elevator_shaft_request(user_input: &str) -> bool {
         &[
             "电梯井",
             "电梯口",
+            "电梯洞",
             "井道",
             "电梯洞口",
             "电梯门洞",
@@ -230,6 +231,13 @@ mod tests {
         assert!(is_elevator_shaft_request("井口防护门怎么画"));
         assert!(!is_elevator_shaft_request("画一个楼层临边防护栏杆"));
         assert!(!is_elevator_shaft_request("基坑边安全防护怎么做"));
+    }
+
+    #[test]
+    fn elevator_request_accepts_slang() {
+        assert!(is_elevator_shaft_request("画一个电梯洞"));
+        assert!(is_elevator_shaft_request("电梯洞口的防护"));
+        assert!(!is_elevator_shaft_request("画一个普通的洞"));
     }
 
     #[test]

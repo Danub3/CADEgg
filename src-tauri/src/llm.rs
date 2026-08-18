@@ -97,6 +97,7 @@ const DOMAIN_RULES: &[DomainRule] = &[
             "object", "偏移", "offset", "镜像", "mirror", "旋转", "rotate", "复制", "copy",
             "删除", "erase", "修剪", "trim", "延伸", "extend", "移动", "move", "阵列", "array",
             "块", "block", "布局", "layout", "视口", "viewport", "门", "窗",
+            "洞", "孔", "开口",
         ],
     },
     // ---- 允许类：图纸检查 / 图面查询 ----
@@ -176,6 +177,22 @@ const DOMAIN_RULES: &[DomainRule] = &[
     },
 ];
 
+/// 检测「数字 运算符 数字」的算术表达式（拦截 1+1 变体）。
+/// '-' 运算符仅在整句无 ASCII 字母时生效，避免误伤 GB50016-2014 这类标准号。
+pub(crate) fn looks_like_arithmetic(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let has_letters = chars.iter().any(|c| c.is_ascii_alphabetic());
+    for (i, &c) in chars.iter().enumerate() {
+        let is_op = matches!(c, '+' | '*' | '×' | '÷' | '/' | '=') || (c == '-' && !has_letters);
+        if is_op && i > 0 && i + 1 < chars.len() {
+            if chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn scoped_response_for_unrelated_request(user_input: &str) -> Option<&'static str> {
     let trimmed = user_input.trim();
     if trimmed.is_empty() {
@@ -190,9 +207,15 @@ pub(crate) fn scoped_response_for_unrelated_request(user_input: &str) -> Option<
         return None;
     }
 
-    let rejected = DOMAIN_RULES
-        .iter()
-        .any(|rule| rule.kind == DomainRuleKind::Reject && contains_any(&text, rule.patterns));
+    // 问候语：固定友好回复，不进入模型（带领域词的问候如「你好，帮我画条线」已在上面放行）。
+    if contains_any(&text, &["你好", "您好", "在吗"]) {
+        return Some("你好！我是 CADEgg。我可以帮你做 CAD 绘制、编辑、图面查询、施工安全防护规范检查，以及模型 Key 和应用设置相关任务。请直接描述你的需求。");
+    }
+
+    let rejected = looks_like_arithmetic(&text)
+        || DOMAIN_RULES
+            .iter()
+            .any(|rule| rule.kind == DomainRuleKind::Reject && contains_any(&text, rule.patterns));
     if rejected {
         return Some("这个问题不属于 CADEgg 的 AutoCAD/施工安全绘图范围。我可以帮你处理 CAD 绘制、编辑、图面查询、施工安全防护规范、模型 Key 和应用设置相关任务。");
     }
@@ -2114,6 +2137,25 @@ mod tests {
         assert!(scoped_response_for_unrelated_request("计算一下这条线的长度").is_none());
         assert!(scoped_response_for_unrelated_request("这张图纸的历史版本怎么查").is_none());
         assert!(scoped_response_for_unrelated_request("检查一下这个圆的半径").is_none());
+    }
+
+    #[test]
+    fn scope_guard_rejects_arithmetic_variants_and_greetings() {
+        assert!(scoped_response_for_unrelated_request("18312+131213=几？").is_some());
+        assert!(scoped_response_for_unrelated_request("100-30等于多少").is_some());
+        assert!(scoped_response_for_unrelated_request("你好").is_some());
+        assert!(scoped_response_for_unrelated_request("在吗").is_some());
+        // 标准号与 CAD 尺寸不能被误伤
+        assert!(scoped_response_for_unrelated_request("22G101-2 图集").is_none());
+        assert!(scoped_response_for_unrelated_request("画一条 3000×2500 的线").is_none());
+        assert!(scoped_response_for_unrelated_request("你好，帮我画条线").is_none());
+    }
+
+    #[test]
+    fn scope_guard_allows_construction_slang() {
+        assert!(scoped_response_for_unrelated_request("画一个电梯洞").is_none());
+        assert!(scoped_response_for_unrelated_request("这个洞口的防护怎么做").is_none());
+        assert!(scoped_response_for_unrelated_request("预留孔怎么标注").is_none());
     }
 
     #[test]
