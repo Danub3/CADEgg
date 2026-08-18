@@ -21,6 +21,7 @@ import type {
   DemoLogEntry,
   ElevatorValidation,
   Message,
+  ModelRouteTelemetry,
   ObjectUpdate,
   Provider,
   ProviderTokenUsage,
@@ -309,6 +310,16 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   reasoningTokens: { "zh-CN": "推理 Token", "en-US": "Reasoning Tokens" },
   providerCalls: { "zh-CN": "模型调用", "en-US": "Provider Calls" },
   estimatedContextTokens: { "zh-CN": "上下文估算", "en-US": "Context Estimate" },
+  totalModelDuration: { "zh-CN": "总耗时", "en-US": "Total Duration" },
+  outputThroughput: { "zh-CN": "输出速率", "en-US": "Output Rate" },
+  modelRouteTitle: { "zh-CN": "模型路由", "en-US": "Model Route" },
+  routeSelected: { "zh-CN": "选择", "en-US": "Selected" },
+  routeFinal: { "zh-CN": "命中", "en-US": "Final" },
+  routeFallbackCount: { "zh-CN": "回退 {count} 次", "en-US": "{count} fallback(s)" },
+  routeNoFallback: { "zh-CN": "无回退", "en-US": "No fallback" },
+  routeWaiting: { "zh-CN": "等待路由", "en-US": "Waiting route" },
+  routeNone: { "zh-CN": "尚无路由", "en-US": "No route yet" },
+  routeProcessing: { "zh-CN": "处理中", "en-US": "Processing" },
   settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
   minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
   maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
@@ -629,6 +640,28 @@ function formatLatency(ms: number | null | undefined) {
 function formatTokenCount(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
   return Math.round(value).toLocaleString();
+}
+
+function formatTokensPerSecond(value: number | null | undefined, estimated = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "n/a";
+  const digits = value < 10 ? 1 : 0;
+  return `${estimated ? "~" : ""}${value.toFixed(digits)} tok/s`;
+}
+
+/** UI 用 token 显示：区分「未返回」与「本地估算」。 */
+function formatTokenCountUi(
+  value: number | null | undefined,
+  estimated: boolean | undefined,
+  lang: "zh-CN" | "en-US"
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return lang === "zh-CN" ? "未返回" : "Not returned";
+  }
+  const text = Math.round(value).toLocaleString();
+  if (estimated) {
+    return lang === "zh-CN" ? `本地估算 ${text}` : `Est. ${text}`;
+  }
+  return text;
 }
 
 function estimateTextTokens(value: unknown) {
@@ -1295,9 +1328,17 @@ export default function App() {
     cache_read_tokens: 0,
     cache_write_tokens: 0,
     reasoning_tokens: 0,
+    input_tokens_known: false,
+    output_tokens_known: false,
+    cache_read_tokens_known: false,
+    cache_write_tokens_known: false,
+    reasoning_tokens_known: false,
     calls: 0,
     models: new Set<string>(),
+    hasUsage: false,
   });
+  const [lastModelRoute, setLastModelRoute] = useState<ModelRouteTelemetry | null>(null);
+  const lastModelRouteRef = useRef<ModelRouteTelemetry | null>(null);
   const [completedToolIds, setCompletedToolIds] = useState<Set<string>>(new Set());
   const lastUserInputRef = useRef("");
   const pendingLogRef = useRef<{
@@ -1360,6 +1401,11 @@ export default function App() {
     setLastTokenTelemetry(next);
   }
 
+  function setLastModelRouteNow(next: ModelRouteTelemetry | null) {
+    lastModelRouteRef.current = next;
+    setLastModelRoute(next);
+  }
+
   function tryParseValidation(content: string): ElevatorValidation | null {
     return parseValidationPayload(content);
   }
@@ -1415,10 +1461,17 @@ export default function App() {
       cache_read_tokens: 0,
       cache_write_tokens: 0,
       reasoning_tokens: 0,
+      input_tokens_known: false,
+      output_tokens_known: false,
+      cache_read_tokens_known: false,
+      cache_write_tokens_known: false,
+      reasoning_tokens_known: false,
       calls: 0,
       models: new Set<string>(),
+      hasUsage: false,
     };
     setLastTokenTelemetryNow(null);
+    setLastModelRouteNow(null);
   }
 
   function recordModelResponseEvent(countChunk: boolean) {
@@ -1440,19 +1493,37 @@ export default function App() {
 
   function recordProviderUsage(usage: ProviderTokenUsage) {
     const current = providerUsageRef.current;
-    current.input_tokens += usage.input_tokens;
-    current.output_tokens += usage.output_tokens;
-    current.cache_read_tokens += usage.cache_read_tokens ?? 0;
-    current.cache_write_tokens += usage.cache_write_tokens ?? 0;
-    current.reasoning_tokens += usage.reasoning_tokens ?? 0;
+    current.hasUsage = true;
     current.calls += 1;
+    if (typeof usage.input_tokens === "number") {
+      current.input_tokens += usage.input_tokens;
+      current.input_tokens_known = true;
+    }
+    if (typeof usage.output_tokens === "number") {
+      current.output_tokens += usage.output_tokens;
+      current.output_tokens_known = true;
+    }
+    if (typeof usage.cache_read_tokens === "number") {
+      current.cache_read_tokens += usage.cache_read_tokens;
+      current.cache_read_tokens_known = true;
+    }
+    if (typeof usage.cache_write_tokens === "number") {
+      current.cache_write_tokens += usage.cache_write_tokens;
+      current.cache_write_tokens_known = true;
+    }
+    if (typeof usage.reasoning_tokens === "number") {
+      current.reasoning_tokens += usage.reasoning_tokens;
+      current.reasoning_tokens_known = true;
+    }
     current.models.add(`${usage.provider} / ${usage.model}`);
   }
 
-  function finishModelTelemetry() {
+  function finishModelTelemetry(finalText: string | null) {
     const startedAt = modelRequestStartedAtRef.current;
     if (!startedAt) return null;
 
+    const now = Date.now();
+    const durationMs = Math.max(0, now - startedAt);
     const intervals = streamChunkIntervalsRef.current;
     const firstResponseMs = firstResponseAtRef.current
       ? Math.max(0, firstResponseAtRef.current - startedAt)
@@ -1462,39 +1533,41 @@ export default function App() {
         ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length
         : undefined;
     const maxChunkGapMs = intervals.length > 0 ? Math.max(...intervals) : undefined;
+    const usage = providerUsageRef.current;
+    const hasUsage = usage.hasUsage;
+    const estimatedContextTokens = estimateSessionContextTokens(
+      messagesRef.current,
+      sessionObjectsRef.current,
+      demoLogRef.current
+    );
+    const estimatedOutputTokens = finalText ? estimateTextTokens(finalText) : undefined;
+    const inputTokens = usage.input_tokens_known ? usage.input_tokens : estimatedContextTokens;
+    const outputTokens = usage.output_tokens_known ? usage.output_tokens : estimatedOutputTokens;
     const telemetry: TokenTelemetry = {
       started_at: startedAt,
+      total_duration_ms: durationMs,
       first_response_ms: firstResponseMs,
       avg_chunk_gap_ms: avgChunkGapMs,
       max_chunk_gap_ms: maxChunkGapMs,
       chunk_count: streamChunkCountRef.current,
-      input_tokens:
-        providerUsageRef.current.calls > 0 ? providerUsageRef.current.input_tokens : undefined,
-      output_tokens:
-        providerUsageRef.current.calls > 0 ? providerUsageRef.current.output_tokens : undefined,
-      cache_read_tokens:
-        providerUsageRef.current.calls > 0
-          ? providerUsageRef.current.cache_read_tokens
+      input_tokens: inputTokens,
+      input_tokens_estimated:
+        !usage.input_tokens_known && typeof estimatedContextTokens === "number",
+      output_tokens: outputTokens,
+      output_tokens_estimated:
+        !usage.output_tokens_known && typeof estimatedOutputTokens === "number",
+      cache_read_tokens: usage.cache_read_tokens_known ? usage.cache_read_tokens : undefined,
+      cache_write_tokens: usage.cache_write_tokens_known ? usage.cache_write_tokens : undefined,
+      reasoning_tokens: usage.reasoning_tokens_known ? usage.reasoning_tokens : undefined,
+      provider_calls: hasUsage ? usage.calls : undefined,
+      provider_models: hasUsage && usage.models.size > 0 ? Array.from(usage.models) : undefined,
+      output_tokens_per_second:
+        typeof outputTokens === "number" && durationMs > 0
+          ? outputTokens / (durationMs / 1000)
           : undefined,
-      cache_write_tokens:
-        providerUsageRef.current.calls > 0
-          ? providerUsageRef.current.cache_write_tokens
-          : undefined,
-      reasoning_tokens:
-        providerUsageRef.current.calls > 0
-          ? providerUsageRef.current.reasoning_tokens
-          : undefined,
-      provider_calls:
-        providerUsageRef.current.calls > 0 ? providerUsageRef.current.calls : undefined,
-      provider_models:
-        providerUsageRef.current.calls > 0
-          ? Array.from(providerUsageRef.current.models)
-          : undefined,
-      estimated_context_tokens: estimateSessionContextTokens(
-        messagesRef.current,
-        sessionObjectsRef.current,
-        demoLogRef.current
-      ),
+      throughput_estimated:
+        !usage.output_tokens_known && typeof estimatedOutputTokens === "number",
+      estimated_context_tokens: estimatedContextTokens,
     };
 
     modelRequestStartedAtRef.current = null;
@@ -1695,6 +1768,8 @@ export default function App() {
         setAssistantDraft(assistantDraftRef.current);
       } else if (e.kind === "usage") {
         recordProviderUsage(e.usage);
+      } else if (e.kind === "model_route") {
+        setLastModelRouteNow(e.route);
       } else if (e.kind === "assistant") {
         recordModelResponseEvent(Boolean(e.text || e.tool_calls.length > 0));
         for (const call of e.tool_calls) {
@@ -1761,7 +1836,7 @@ export default function App() {
           setAssistantDraft("");
         }
         const taskDuration = stopTaskTimer();
-        const tokenTelemetry = finishModelTelemetry();
+        const tokenTelemetry = finishModelTelemetry(e.text || null);
         commitUndoSnapshotIfNeeded();
         const pending = pendingLogRef.current;
         pendingLogRef.current = null;
@@ -1817,7 +1892,7 @@ export default function App() {
         pendingPostRunSyncRef.current = false;
         setErrorMsg(e.message);
         stopTaskTimer();
-        finishModelTelemetry();
+        finishModelTelemetry(null);
         setSending(false);
         if (e.message.includes("API Key")) {
           const session = sessionsRef.current.find((item) => item.id === activeSessionIdRef.current);
@@ -1920,7 +1995,7 @@ export default function App() {
       pendingPostRunSyncRef.current = false;
       setErrorMsg(String(e));
       stopTaskTimer();
-      finishModelTelemetry();
+      finishModelTelemetry(null);
       setSending(false);
     }
   }
@@ -2138,6 +2213,7 @@ export default function App() {
     setTaskElapsedMs(0);
     setLastTaskDurationMsNow(session.lastTaskDurationMs);
     setLastTokenTelemetryNow(session.lastTokenTelemetry);
+    setLastModelRouteNow(null);
     sessionObjectsRef.current = session.sessionObjects;
     setActiveSessionIdNow(session.id);
     setMessagesNow(session.messages);
@@ -2530,6 +2606,7 @@ export default function App() {
             taskStartedAt={taskStartedAt}
             lastTaskDurationMs={lastTaskDurationMs}
             lastTokenTelemetry={lastTokenTelemetry}
+            lastModelRoute={lastModelRoute}
             language={appPreferences.language}
           />
           <DrawResultCard lastDrawParams={lastDrawParams} language={appPreferences.language} />
@@ -2796,6 +2873,36 @@ function WelcomeStage({
   );
 }
 
+const ROUTE_PROVIDER_IDS = ["glm", "deepseek", "qwen", "kimi"] as const;
+
+function routeProviderDisplay(provider: string, lang: "zh-CN" | "en-US") {
+  if ((ROUTE_PROVIDER_IDS as readonly string[]).includes(provider)) {
+    return providerDisplay(provider as Provider, lang, "short");
+  }
+  return provider;
+}
+
+function routeStatusLabel(status: string, lang: "zh-CN" | "en-US") {
+  const labels: Record<string, string> = {
+    selected: lang === "zh-CN" ? "选中" : "Selected",
+    fallback: lang === "zh-CN" ? "回退" : "Fallback",
+    skipped: lang === "zh-CN" ? "跳过" : "Skipped",
+    failed: lang === "zh-CN" ? "失败" : "Failed",
+    attempting: lang === "zh-CN" ? "尝试" : "Trying",
+    planned: lang === "zh-CN" ? "计划" : "Planned",
+  };
+  return labels[status] ?? status;
+}
+
+function routeStatusClass(status: string) {
+  if (status === "selected") return "route-chip selected";
+  if (status === "fallback") return "route-chip fallback";
+  if (status === "skipped") return "route-chip skipped";
+  if (status === "failed") return "route-chip failed";
+  if (status === "attempting") return "route-chip attempting";
+  return "route-chip planned";
+}
+
 function GenerationActionsCard({
   undoing,
   sending,
@@ -2804,6 +2911,7 @@ function GenerationActionsCard({
   taskStartedAt,
   lastTaskDurationMs,
   lastTokenTelemetry,
+  lastModelRoute,
   handleUndoLastGeneration,
   language,
 }: {
@@ -2814,10 +2922,21 @@ function GenerationActionsCard({
   taskStartedAt: number | null;
   lastTaskDurationMs: number | null;
   lastTokenTelemetry: TokenTelemetry | null;
+  lastModelRoute: ModelRouteTelemetry | null;
   handleUndoLastGeneration: () => Promise<void>;
   language: "zh-CN" | "en-US";
 }) {
   const visibleDuration = taskStartedAt ? taskElapsedMs : lastTaskDurationMs;
+  const routeSelectedLabel = lastModelRoute
+    ? `${routeProviderDisplay(lastModelRoute.selected_provider, language)} / ${lastModelRoute.selected_model}`
+    : sending
+      ? t("routeWaiting", language)
+      : t("routeNone", language);
+  const routeFinalLabel = lastModelRoute?.final_provider
+    ? `${routeProviderDisplay(lastModelRoute.final_provider, language)} / ${lastModelRoute.final_model ?? lastModelRoute.selected_model}`
+    : lastModelRoute
+      ? t("routeProcessing", language)
+      : "n/a";
   return (
     <section className="rail-card action-card">
       <PanelHeader title={t("actionCardTitle", language)} />
@@ -2832,23 +2951,63 @@ function GenerationActionsCard({
       <b>{formatLatency(lastTokenTelemetry?.first_response_ms)}</b>
       <span>{t("avgTokenGap", language)}</span>
       <b>{formatLatency(lastTokenTelemetry?.avg_chunk_gap_ms)}</b>
+      <span>{t("totalModelDuration", language)}</span>
+      <b>{formatDuration(lastTokenTelemetry?.total_duration_ms)}</b>
+      <span>{t("outputThroughput", language)}</span>
+      <b>{formatTokensPerSecond(lastTokenTelemetry?.output_tokens_per_second, lastTokenTelemetry?.throughput_estimated)}</b>
       <span>{t("streamChunks", language)}</span>
       <b>{lastTokenTelemetry?.chunk_count ?? "n/a"}</b>
       <span>{t("inputTokens", language)}</span>
-      <b>{formatTokenCount(lastTokenTelemetry?.input_tokens)}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.input_tokens, lastTokenTelemetry?.input_tokens_estimated, language)}</b>
       <span>{t("outputTokens", language)}</span>
-      <b>{formatTokenCount(lastTokenTelemetry?.output_tokens)}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.output_tokens, lastTokenTelemetry?.output_tokens_estimated, language)}</b>
       <span>{t("cacheReadTokens", language)}</span>
-      <b>{formatTokenCount(lastTokenTelemetry?.cache_read_tokens)}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.cache_read_tokens, false, language)}</b>
       <span>{t("cacheWriteTokens", language)}</span>
-      <b>{formatTokenCount(lastTokenTelemetry?.cache_write_tokens)}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.cache_write_tokens, false, language)}</b>
       <span>{t("reasoningTokens", language)}</span>
-      <b>{formatTokenCount(lastTokenTelemetry?.reasoning_tokens)}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.reasoning_tokens, false, language)}</b>
       <span>{t("providerCalls", language)}</span>
-      <b>{lastTokenTelemetry?.provider_calls ?? "n/a"}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.provider_calls, false, language)}</b>
       <span>{t("estimatedContextTokens", language)}</span>
-      <b>{formatTokenCount(lastTokenTelemetry?.estimated_context_tokens)}</b>
+      <b>{formatTokenCountUi(lastTokenTelemetry?.estimated_context_tokens, true, language)}</b>
     </div>
+    {(lastModelRoute || sending) && (
+      <div className="route-telemetry">
+        <div className="route-telemetry-header">
+          <span>{t("modelRouteTitle", language)}</span>
+          <b>
+            {lastModelRoute
+              ? lastModelRoute.fallback_count > 0
+                ? t("routeFallbackCount", language, { count: String(lastModelRoute.fallback_count) })
+                : t("routeNoFallback", language)
+              : ""}
+          </b>
+        </div>
+        <div className="route-line">
+          <span>{t("routeSelected", language)}</span>
+          <b>{routeSelectedLabel}</b>
+        </div>
+        <div className="route-line">
+          <span>{t("routeFinal", language)}</span>
+          <b>{routeFinalLabel}</b>
+        </div>
+        {lastModelRoute && lastModelRoute.attempts.length > 0 && (
+          <div className="route-chips">
+            {lastModelRoute.attempts.map((attempt, index) => (
+              <span
+                key={`${attempt.provider}-${attempt.model}-${index}`}
+                className={routeStatusClass(attempt.status)}
+                title={attempt.reason}
+              >
+                {routeStatusLabel(attempt.status, language)} {routeProviderDisplay(attempt.provider, language)} / {attempt.model}
+              </span>
+            ))}
+          </div>
+        )}
+        {lastModelRoute?.note && <p className="route-note">{lastModelRoute.note}</p>}
+      </div>
+    )}
       <button
         type="button"
         className="dark-action"

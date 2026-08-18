@@ -168,14 +168,52 @@ pub struct ModelSelection {
 pub struct ProviderTokenUsage {
     pub provider: String,
     pub model: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
+    /// 缺失（None）与真实 0 必须区分：前端据此显示「未返回」而不是 0。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u64>,
+}
+
+/// 模型路由链路中的单次候选（provider + model + 状态 + 原因）。
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct ModelRouteAttempt {
+    pub provider: String,
+    pub model: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// 一次任务内的完整模型路由遥测：候选池、跳过原因、回退次数、最终命中。
+#[derive(Serialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct ModelRouteTelemetry {
+    pub selected_provider: String,
+    pub selected_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_model: Option<String>,
+    pub fallback_count: usize,
+    pub attempts: Vec<ModelRouteAttempt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// failover 候选：provider 实例 + 跳过原因（未配 key 等）。
+/// 未配置的候选保留在链里用于路由遥测展示「跳过」，实际请求时被跳过。
+#[derive(Clone, Debug)]
+struct ProviderPlan {
+    provider: Provider,
+    skip_reason: Option<String>,
 }
 
 // ---------------- Provider trait via enum (no async_trait dep) ----------------
@@ -213,10 +251,10 @@ impl Provider {
         }
     }
 
-    /// 是否已配置（有 key、可用）。用于 failover 链里跳过未配置的 provider。
-    fn is_configured(&self) -> bool {
+    /// 路由身份：(provider_id, model)。用于遥测 attempt 匹配与候选去重。
+    fn identity(&self) -> (String, String) {
         match self {
-            Provider::Glm(g) => !g.api_key.trim().is_empty(),
+            Provider::Glm(g) => (g.provider_id.clone(), g.model.clone()),
         }
     }
 
@@ -227,19 +265,22 @@ impl Provider {
     }
 }
 
-/// 构建 provider 链（主模型 + 备用模型），供 failover 依次尝试。
+/// 构建 provider 候选链（主模型 + 备用模型），供 failover 依次尝试。
 ///
 /// 顺序：
 ///   1) 主 provider 的指定档位模型；
 ///   2) 同 provider 的另一档位（strong↔cheap 降级/升级，覆盖"强模型临时不可用"场景）；
 ///   3) 另一个 provider（若已配 key，覆盖"整个 provider 断连"场景）。
+///
+/// 未配 key 的候选会保留在链里并标记 skip_reason，供模型路由遥测展示「跳过」，
+/// 实际请求时由 step_with_failover 跳过。
 fn build_provider_chain(
     settings: &crate::settings::Settings,
     tool_names: &[String],
     tier: TaskTier,
     auto_failover: bool,
-) -> Vec<Provider> {
-    let mut chain = Vec::new();
+) -> Vec<ProviderPlan> {
+    let mut chain: Vec<ProviderPlan> = Vec::new();
     let selected = match settings.provider.as_str() {
         "deepseek" | "qwen" | "kimi" | "glm" => settings.provider.as_str(),
         _ => "glm",
@@ -263,24 +304,16 @@ fn build_provider_chain(
         }
     }
 
-    // 去重：保留顺序，过滤掉未配置（无 key）的 provider。
+    // 去重：保留顺序，(provider_id, model) 相同的只保留第一个。
     let mut seen = std::collections::HashSet::new();
     chain
         .into_iter()
-        .filter(|p| {
-            let key = format!("{:?}", p);
-            if !p.is_configured() || seen.contains(&key) {
-                false
-            } else {
-                seen.insert(key);
-                true
-            }
-        })
+        .filter(|p| seen.insert(p.provider.identity()))
         .collect()
 }
 
 fn append_openai_compatible_provider(
-    chain: &mut Vec<Provider>,
+    chain: &mut Vec<ProviderPlan>,
     provider: &str,
     settings: &crate::settings::Settings,
     tool_names: &[String],
@@ -321,22 +354,35 @@ fn append_openai_compatible_provider(
         TaskTier::Strong => (strong_model, cheap_model),
         TaskTier::Cheap => (cheap_model, strong_model),
     };
+    let skip_reason = if api_key.trim().is_empty() {
+        Some(format!("{} API Key 未配置", label))
+    } else {
+        None
+    };
 
-    chain.push(Provider::Glm(GlmProvider {
-        label: label.to_string(),
-        api_key: api_key.clone(),
-        model: primary_model,
-        base_url: base_url.clone(),
-        selected_tools: tool_names.to_vec(),
-    }));
-    if include_fallback {
-        chain.push(Provider::Glm(GlmProvider {
+    chain.push(ProviderPlan {
+        provider: Provider::Glm(GlmProvider {
+            provider_id: provider.to_string(),
             label: label.to_string(),
-            api_key,
-            model: fallback_model,
-            base_url,
+            api_key: api_key.clone(),
+            model: primary_model,
+            base_url: base_url.clone(),
             selected_tools: tool_names.to_vec(),
-        }));
+        }),
+        skip_reason: skip_reason.clone(),
+    });
+    if include_fallback {
+        chain.push(ProviderPlan {
+            provider: Provider::Glm(GlmProvider {
+                provider_id: provider.to_string(),
+                label: label.to_string(),
+                api_key,
+                model: fallback_model,
+                base_url,
+                selected_tools: tool_names.to_vec(),
+            }),
+            skip_reason,
+        });
     }
 }
 
@@ -391,35 +437,171 @@ fn provider_label(provider: &str) -> &'static str {
     }
 }
 
-/// 依次尝试 provider 链，第一个成功的返回；全部失败返回最后一个错误（带 failover 提示）。
+/// 构建任务开始时的初始路由遥测：候选池按计划/跳过标注。
+fn build_route_telemetry(
+    selected_provider: &str,
+    selected_model: &str,
+    plans: &[ProviderPlan],
+) -> ModelRouteTelemetry {
+    let attempts = plans
+        .iter()
+        .map(|plan| {
+            let (provider, model) = plan.provider.identity();
+            ModelRouteAttempt {
+                provider,
+                model,
+                status: if plan.skip_reason.is_some() {
+                    "skipped".to_string()
+                } else {
+                    "planned".to_string()
+                },
+                reason: plan.skip_reason.clone(),
+            }
+        })
+        .collect();
+    ModelRouteTelemetry {
+        selected_provider: selected_provider.to_string(),
+        selected_model: selected_model.to_string(),
+        final_provider: None,
+        final_model: None,
+        fallback_count: 0,
+        attempts,
+        note: Some("当前选择优先，其他已配置 provider 作为回退候选".to_string()),
+    }
+}
+
+fn emit_model_route(app: &AppHandle, route: &ModelRouteTelemetry) {
+    let _ = app.emit(
+        "agent:event",
+        AgentEvent::ModelRoute {
+            route: route.clone(),
+        },
+    );
+}
+
+fn update_route_attempt(
+    route: &mut ModelRouteTelemetry,
+    provider: &str,
+    model: &str,
+    status: &str,
+    reason: Option<String>,
+) {
+    if let Some(attempt) = route
+        .attempts
+        .iter_mut()
+        .find(|attempt| attempt.provider == provider && attempt.model == model)
+    {
+        attempt.status = status.to_string();
+        attempt.reason = reason;
+    }
+}
+
+/// 每轮开始时把上一次成功的 provider/model 移到链首，避免每轮都重复打失败的主模型。
+fn ordered_provider_chain(
+    plans: &[ProviderPlan],
+    preferred_provider: Option<&str>,
+    preferred_model: Option<&str>,
+) -> Vec<ProviderPlan> {
+    let (Some(preferred_provider), Some(preferred_model)) = (preferred_provider, preferred_model)
+    else {
+        return plans.to_vec();
+    };
+    if let Some(index) = plans.iter().position(|plan| {
+        let (provider, model) = plan.provider.identity();
+        provider == preferred_provider && model == preferred_model
+    }) {
+        let mut ordered = Vec::with_capacity(plans.len());
+        ordered.push(plans[index].clone());
+        ordered.extend(
+            plans
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != index)
+                .map(|(_, plan)| plan.clone()),
+        );
+        ordered
+    } else {
+        plans.to_vec()
+    }
+}
+
+/// 依次尝试 provider 候选链，第一个成功的返回；全部失败返回最后一个错误（带 failover 提示）。
+/// 每次状态变化（跳过/尝试/回退/失败/选中）都更新并发出 model_route 事件。
 async fn step_with_failover(
-    providers: &[Provider],
+    plans: &[ProviderPlan],
+    route: &mut ModelRouteTelemetry,
     history: &[MessageView],
     app: &AppHandle,
 ) -> Result<StepOutput, String> {
     let mut last_err = String::new();
-    let total = providers.len();
-    for (i, p) in providers.iter().enumerate() {
-        match p.step(history, app).await {
-            Ok(out) => return Ok(out),
+    let mut attempted = 0usize;
+    for (i, plan) in plans.iter().enumerate() {
+        let (provider_id, model) = plan.provider.identity();
+        if let Some(reason) = &plan.skip_reason {
+            update_route_attempt(route, &provider_id, &model, "skipped", Some(reason.clone()));
+            emit_model_route(app, route);
+            continue;
+        }
+        attempted += 1;
+        update_route_attempt(route, &provider_id, &model, "attempting", None);
+        emit_model_route(app, route);
+
+        match plan.provider.step(history, app).await {
+            Ok(out) => {
+                update_route_attempt(route, &provider_id, &model, "selected", None);
+                route.final_provider = Some(provider_id);
+                route.final_model = Some(model);
+                emit_model_route(app, route);
+                return Ok(out);
+            }
             Err(e) => {
                 last_err = e;
-                if i + 1 < total {
+                let remaining_usable = plans
+                    .iter()
+                    .skip(i + 1)
+                    .filter(|p| p.skip_reason.is_none())
+                    .count();
+                if remaining_usable > 0 {
+                    route.fallback_count += 1;
+                    update_route_attempt(
+                        route,
+                        &provider_id,
+                        &model,
+                        "fallback",
+                        Some(last_err.clone()),
+                    );
                     // 通知前端：主模型失败，正在切换备用模型（比赛"自动切换"亮点）。
-                    let next = providers[i + 1].display_name();
+                    let next = plans
+                        .iter()
+                        .skip(i + 1)
+                        .find(|p| p.skip_reason.is_none())
+                        .map(|p| p.provider.display_name())
+                        .unwrap_or_default();
                     let _ = app.emit(
                         "agent:event",
                         AgentEvent::AssistantTrace {
                             delta: &format!("\n[模型切换] 当前模型不可用，正在切换到 {}…\n", next),
                         },
                     );
+                } else {
+                    update_route_attempt(
+                        route,
+                        &provider_id,
+                        &model,
+                        "failed",
+                        Some(last_err.clone()),
+                    );
                 }
+                emit_model_route(app, route);
             }
         }
     }
+    if attempted == 0 {
+        return Err("没有已配置的模型 provider".to_string());
+    }
     Err(format!(
         "所有模型均不可用（已尝试 {} 个）：{}",
-        total, last_err
+        attempted, last_err
     ))
 }
 
@@ -615,6 +797,7 @@ fn history_to_gemini_contents(history: &[MessageView]) -> Vec<Value> {
 
 #[derive(Clone, Debug)]
 struct GlmProvider {
+    provider_id: String,
     label: String,
     api_key: String,
     model: String,
@@ -960,22 +1143,35 @@ fn parse_openai_usage(
     model: &str,
 ) -> Option<ProviderTokenUsage> {
     let usage = value?.as_object()?;
-    let prompt_tokens = json_u64(usage.get("prompt_tokens"))?;
-    let output_tokens = json_u64(usage.get("completion_tokens"))?;
+    let prompt_tokens = json_u64(usage.get("prompt_tokens"));
+    let output_tokens = json_u64(usage.get("completion_tokens"));
     let details = usage.get("prompt_tokens_details");
     let cache_read_tokens = json_u64(details.and_then(|v| v.get("cached_tokens")))
         .or_else(|| json_u64(usage.get("prompt_cache_hit_tokens")));
-    let uncached_input_tokens = json_u64(details.and_then(|v| v.get("prompt_cache_miss_tokens")))
-        .unwrap_or_else(|| prompt_tokens.saturating_sub(cache_read_tokens.unwrap_or(0)));
+    let input_tokens = json_u64(details.and_then(|v| v.get("prompt_cache_miss_tokens")))
+        .or_else(|| {
+            prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens.unwrap_or(0)))
+        })
+        .or(prompt_tokens);
     let cache_write_tokens = json_u64(details.and_then(|v| v.get("cache_write_tokens")))
         .or_else(|| json_u64(usage.get("prompt_cache_creation_tokens")));
     let reasoning_tokens =
         json_u64(usage.get("completion_tokens_details").and_then(|v| v.get("reasoning_tokens")));
 
+    // 所有字段都缺失时才返回 None；部分字段存在时保留可解析的部分。
+    if input_tokens.is_none()
+        && output_tokens.is_none()
+        && cache_read_tokens.is_none()
+        && cache_write_tokens.is_none()
+        && reasoning_tokens.is_none()
+    {
+        return None;
+    }
+
     Some(ProviderTokenUsage {
         provider: provider.to_string(),
         model: model.to_string(),
-        input_tokens: uncached_input_tokens,
+        input_tokens,
         output_tokens,
         cache_read_tokens,
         cache_write_tokens,
@@ -989,10 +1185,19 @@ fn parse_gemini_usage(
     model: &str,
 ) -> Option<ProviderTokenUsage> {
     let usage = value?.as_object()?;
-    let input_tokens = json_u64(usage.get("promptTokenCount"))?;
-    let output_tokens = json_u64(usage.get("candidatesTokenCount"))?;
+    let input_tokens = json_u64(usage.get("promptTokenCount"));
+    let output_tokens = json_u64(usage.get("candidatesTokenCount"));
     let cache_read_tokens = json_u64(usage.get("cachedContentTokenCount"));
     let reasoning_tokens = json_u64(usage.get("thoughtsTokenCount"));
+
+    // 所有字段都缺失时才返回 None。
+    if input_tokens.is_none()
+        && output_tokens.is_none()
+        && cache_read_tokens.is_none()
+        && reasoning_tokens.is_none()
+    {
+        return None;
+    }
 
     Some(ProviderTokenUsage {
         provider: provider.to_string(),
@@ -1053,6 +1258,9 @@ enum AgentEvent<'a> {
     },
     Usage {
         usage: &'a ProviderTokenUsage,
+    },
+    ModelRoute {
+        route: ModelRouteTelemetry,
     },
     Assistant {
         text: Option<&'a str>,
@@ -1530,17 +1738,28 @@ pub async fn run_agent(
     //   2) 同 provider 降级到另一档位（strong 失败降 cheap，或 cheap 失败升 strong）；
     //   3) 另一个 provider（若已配 key）。
     // 每步失败后自动切下一个，避免单点断连导致整个请求失败。
-    let providers =
+    let provider_plans =
         build_provider_chain(&settings, &tooling.tool_names, tier, settings.auto_failover);
+    // 初始模型路由遥测：把候选池、跳过原因先发给前端，后续每步更新状态。
+    let selected_provider = match settings.provider.as_str() {
+        "deepseek" | "qwen" | "kimi" | "glm" => settings.provider.clone(),
+        _ => "glm".to_string(),
+    };
+    let selected_model = provider_plans
+        .first()
+        .map(|plan| plan.provider.identity().1)
+        .unwrap_or_default();
+    let mut route = build_route_telemetry(&selected_provider, &selected_model, &provider_plans);
+    emit_model_route(&app, &route);
     if !provider_key_configured(&settings, &settings.provider) {
-        if let Some(first) = providers.first() {
+        if let Some(first) = provider_plans.first() {
             let _ = app.emit(
                 "agent:event",
                 AgentEvent::AssistantTrace {
                     delta: &format!(
                         "\n[模型切换] {} 未配置 API Key，正在使用 {}…\n",
                         provider_label(&settings.provider),
-                        first.display_name()
+                        first.provider.display_name()
                     ),
                 },
             );
@@ -1600,7 +1819,13 @@ pub async fn run_agent(
     let mut last_executed_batch: Option<ExecutedBatch> = None;
     for _turn in 0..MAX_TURNS {
         // failover：主模型失败时依次尝试备用模型，全部失败才报错。
-        let step = step_with_failover(&providers, &msgs, &app).await;
+        // 上一轮成功的 provider 移到链首，避免每轮重复打失败的主模型。
+        let turn_plans = ordered_provider_chain(
+            &provider_plans,
+            route.final_provider.as_deref(),
+            route.final_model.as_deref(),
+        );
+        let step = step_with_failover(&turn_plans, &mut route, &msgs, &app).await;
         let step = match step {
             Ok(s) => s,
             Err(e) => {
@@ -1802,8 +2027,8 @@ mod tests {
         let usage = parse_openai_usage(Some(&parsed), "DeepSeek", "deepseek-v4-flash")
             .expect("usage should parse");
 
-        assert_eq!(usage.input_tokens, 500);
-        assert_eq!(usage.output_tokens, 340);
+        assert_eq!(usage.input_tokens, Some(500));
+        assert_eq!(usage.output_tokens, Some(340));
         assert_eq!(usage.cache_read_tokens, Some(700));
         assert_eq!(usage.reasoning_tokens, Some(90));
     }
@@ -1820,8 +2045,8 @@ mod tests {
         let usage =
             parse_gemini_usage(Some(&parsed), "Gemini", "gemini-2.5-pro").expect("usage should parse");
 
-        assert_eq!(usage.input_tokens, 800);
-        assert_eq!(usage.output_tokens, 160);
+        assert_eq!(usage.input_tokens, Some(800));
+        assert_eq!(usage.output_tokens, Some(160));
         assert_eq!(usage.cache_read_tokens, Some(200));
         assert_eq!(usage.reasoning_tokens, Some(40));
     }
@@ -1838,10 +2063,12 @@ mod tests {
             ..Default::default()
         };
         let chain = build_provider_chain(&settings, &[], TaskTier::Strong, true);
-        // 只应包含 GLM 的 strong + 降级 cheap，Gemini 因无 key 被过滤。
-        assert_eq!(chain.len(), 2);
-        assert!(matches!(chain[0], Provider::Glm(_)));
-        assert!(matches!(chain[1], Provider::Glm(_)));
+        // 已配置的只有 GLM 的 strong + 降级 cheap；其余未配 key 的候选保留并标记 skipped。
+        let configured: Vec<_> = chain.iter().filter(|p| p.skip_reason.is_none()).collect();
+        assert_eq!(configured.len(), 2);
+        assert!(matches!(configured[0].provider, Provider::Glm(_)));
+        assert!(matches!(configured[1].provider, Provider::Glm(_)));
+        assert!(chain.iter().any(|p| p.skip_reason.is_some()));
     }
 
     #[test]
@@ -1855,9 +2082,9 @@ mod tests {
         };
         let chain = build_provider_chain(&settings, &[], TaskTier::Strong, true);
         // 主模型是 strong（glm-4.5），备用是 cheap（glm-4-flash）。
-        let Provider::Glm(primary) = &chain[0];
+        let Provider::Glm(primary) = &chain[0].provider;
         assert_eq!(primary.model, "glm-4.5");
-        let Provider::Glm(fallback) = &chain[1];
+        let Provider::Glm(fallback) = &chain[1].provider;
         assert_eq!(fallback.model, "glm-4-flash");
     }
 
@@ -1880,8 +2107,9 @@ mod tests {
         );
         let chain = build_provider_chain(&settings, &[], TaskTier::Cheap, true);
 
-        assert_eq!(chain.len(), 1);
-        let Provider::Glm(primary) = &chain[0];
+        let configured: Vec<_> = chain.iter().filter(|p| p.skip_reason.is_none()).collect();
+        assert_eq!(configured.len(), 1);
+        let Provider::Glm(primary) = &configured[0].provider;
         assert_eq!(primary.model, "glm-4.5-flash");
     }
 
@@ -1901,14 +2129,61 @@ mod tests {
         let chain = build_provider_chain(&settings, &[], TaskTier::Strong, false);
 
         assert_eq!(chain.len(), 1);
-        let Provider::Glm(primary) = &chain[0];
+        let Provider::Glm(primary) = &chain[0].provider;
         assert_eq!(primary.model, "glm-4.5");
     }
 
     #[test]
-    fn provider_chain_no_key_returns_empty() {
+    fn provider_chain_no_key_marks_all_skipped() {
         let settings = crate::settings::Settings::default(); // 全空 key
         let chain = build_provider_chain(&settings, &[], TaskTier::Cheap, true);
-        assert!(chain.is_empty());
+        assert!(!chain.is_empty());
+        assert!(chain.iter().all(|p| p.skip_reason.is_some()));
+    }
+
+    #[test]
+    fn route_telemetry_marks_unconfigured_as_skipped() {
+        let settings = crate::settings::Settings {
+            provider: "glm".to_string(),
+            glm_api_key: "glm-key-12345678".to_string(),
+            glm_model: "glm-4-flash".to_string(),
+            glm_strong_model: "glm-4.5".to_string(),
+            ..Default::default()
+        };
+        let chain = build_provider_chain(&settings, &[], TaskTier::Strong, true);
+        let route = build_route_telemetry("glm", "glm-4.5", &chain);
+
+        assert_eq!(route.selected_provider, "glm");
+        assert_eq!(route.selected_model, "glm-4.5");
+        assert_eq!(route.fallback_count, 0);
+        let glm_planned = route
+            .attempts
+            .iter()
+            .filter(|a| a.status == "planned")
+            .count();
+        assert_eq!(glm_planned, 2);
+        assert!(route.attempts.iter().any(|a| a.status == "skipped"));
+        assert!(route
+            .attempts
+            .iter()
+            .filter(|a| a.status == "skipped")
+            .all(|a| a.reason.as_deref().unwrap_or("").contains("API Key")));
+    }
+
+    #[test]
+    fn openai_usage_allows_partial_fields() {
+        // provider 只回输出 token 时也应解析成功，缺失字段保持 None（前端显示「未返回」）。
+        let parsed = json!({ "completion_tokens": 120 });
+        let usage = parse_openai_usage(Some(&parsed), "GLM", "glm-4.5")
+            .expect("partial usage should parse");
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.output_tokens, Some(120));
+        assert_eq!(usage.cache_read_tokens, None);
+    }
+
+    #[test]
+    fn openai_usage_all_missing_returns_none() {
+        let parsed = json!({ "unknown_field": 1 });
+        assert!(parse_openai_usage(Some(&parsed), "GLM", "glm-4.5").is_none());
     }
 }

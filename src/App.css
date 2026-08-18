@@ -1221,6 +1221,122 @@ button:disabled {
   white-space: nowrap;
 }
 
+.route-telemetry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 2px solid rgb(30 22 51 / 0.18);
+  background: rgb(14 165 233 / 0.10);
+}
+
+.route-telemetry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.route-telemetry-header span {
+  color: rgb(30 22 51 / 0.62);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+}
+
+.route-telemetry-header b {
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.route-line {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 5px 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.route-line span {
+  color: rgb(30 22 51 / 0.62);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.route-line b {
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 900;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.route-chip {
+  max-width: 100%;
+  border: 1.5px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.route-chip.planned {
+  border-color: rgb(139 92 246 / 0.30);
+  background: rgb(139 92 246 / 0.12);
+  color: rgb(88 28 135);
+}
+
+.route-chip.attempting {
+  border-color: rgb(14 165 233 / 0.40);
+  background: rgb(14 165 233 / 0.14);
+  color: rgb(12 74 110);
+}
+
+.route-chip.selected {
+  border-color: rgb(22 163 74 / 0.40);
+  background: rgb(22 163 74 / 0.14);
+  color: rgb(20 83 45);
+}
+
+.route-chip.fallback {
+  border-color: rgb(217 119 6 / 0.40);
+  background: rgb(245 158 11 / 0.14);
+  color: rgb(120 53 15);
+}
+
+.route-chip.skipped {
+  border-color: rgb(100 116 139 / 0.35);
+  background: rgb(100 116 139 / 0.10);
+  color: rgb(51 65 85);
+}
+
+.route-chip.failed {
+  border-color: rgb(225 29 72 / 0.40);
+  background: rgb(244 63 94 / 0.12);
+  color: rgb(136 19 55);
+}
+
+.route-note {
+  margin: 0;
+  color: rgb(30 22 51 / 0.55);
+  font-size: var(--tiny-font-size, 11px);
+  line-height: 1.4;
+}
+
 .typing-indicator {
   display: inline-flex;
   align-self: flex-start;

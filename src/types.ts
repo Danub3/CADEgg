@@ -46,6 +46,7 @@ export type AgentEvent =
   | { kind: "assistant_trace"; delta: string }
   | { kind: "assistant_delta"; delta: string }
   | { kind: "usage"; usage: ProviderTokenUsage }
+  | { kind: "model_route"; route: ModelRouteTelemetry }
   | { kind: "assistant"; text: string | null; tool_calls: ToolCall[] }
   | {
       kind: "tool_result";
@@ -92,28 +93,50 @@ export interface DemoLogEntry {
 
 export interface TokenTelemetry {
   started_at: number;
+  total_duration_ms?: number;
   first_response_ms?: number;
   avg_chunk_gap_ms?: number;
   max_chunk_gap_ms?: number;
   chunk_count: number;
   input_tokens?: number;
+  input_tokens_estimated?: boolean;
   output_tokens?: number;
+  output_tokens_estimated?: boolean;
   cache_read_tokens?: number;
   cache_write_tokens?: number;
   reasoning_tokens?: number;
   provider_calls?: number;
   provider_models?: string[];
+  output_tokens_per_second?: number;
+  throughput_estimated?: boolean;
   estimated_context_tokens?: number;
 }
 
 export interface ProviderTokenUsage {
   provider: string;
   model: string;
-  input_tokens: number;
-  output_tokens: number;
+  input_tokens?: number;
+  output_tokens?: number;
   cache_read_tokens?: number;
   cache_write_tokens?: number;
   reasoning_tokens?: number;
+}
+
+export interface ModelRouteAttempt {
+  provider: string;
+  model: string;
+  status: "planned" | "attempting" | "selected" | "fallback" | "skipped" | "failed";
+  reason?: string;
+}
+
+export interface ModelRouteTelemetry {
+  selected_provider: string;
+  selected_model: string;
+  final_provider?: string;
+  final_model?: string;
+  fallback_count: number;
+  attempts: ModelRouteAttempt[];
+  note?: string;
 }
 
 export interface SettingsView {
