@@ -3355,6 +3355,11 @@ function MemoryCard({
           {t("memoryRefresh", language)}
         </button>
       </div>
+      {bundle && (
+        <p className="memory-dir" title={bundle.dir}>
+          {bundle.dir}
+        </p>
+      )}
       {openError && (
         <p className="inline-error">{t("memoryDirFailed", language, { error: openError })}</p>
       )}

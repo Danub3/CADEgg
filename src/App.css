@@ -1377,6 +1377,15 @@ button:disabled {
   white-space: nowrap;
 }
 
+.memory-dir {
+  margin: 0;
+  color: rgb(30 22 51 / 0.5);
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: calc(var(--tiny-font-size, 11px) - 1px);
+  line-height: 1.4;
+  word-break: break-all;
+}
+
 .memory-global {
   display: flex;
   flex-direction: column;
