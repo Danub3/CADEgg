@@ -25,6 +25,32 @@ pub const MAX_BENCHMARK_REQUESTS: u32 = 64;
 const REQUESTS_PER_MODEL: usize = 6;
 /// 单请求超时。
 const REQUEST_TIMEOUT_SECS: u64 = 60;
+/// 429 限流重试上限（含首次尝试）。
+const MAX_ATTEMPTS_PER_CASE: usize = 3;
+
+/// 按供应商的请求间隔，避免触发 RPM 限流（Kimi 实测 org RPM=3，需 ≥20s/次）。
+fn provider_pause_ms(provider: &str) -> u64 {
+    if provider == "kimi" {
+        21_000
+    } else {
+        2_500
+    }
+}
+
+/// 判断是否为限流类错误。
+fn is_rate_limit_error(message: &str) -> bool {
+    message.contains("429") || message.to_ascii_lowercase().contains("rate_limit")
+}
+
+/// 从错误信息解析「try again after X seconds」，夹在 [5, 90] 秒。
+fn parse_retry_after_secs(message: &str) -> Option<u64> {
+    let lower = message.to_ascii_lowercase();
+    let marker = "after ";
+    let pos = lower.find(marker)?;
+    let tail = &lower[pos + marker.len()..];
+    let num: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+    num.parse::<u64>().ok().map(|s| s.clamp(5, 90))
+}
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
@@ -451,21 +477,72 @@ async fn run_case(
             note: "已取消".to_string(),
         };
     }
-    if REQUEST_COUNT.load(Ordering::SeqCst) >= budget as u64 {
-        return BenchmarkCaseResult {
-            id: case_id.to_string(),
-            label: case_label.to_string(),
-            score: 0.0,
-            note: "超出请求预算，跳过".to_string(),
-        };
-    }
-    REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
     metrics.requests += 1;
     let (_, key, base_url) = provider_creds(settings, &cand.provider);
-    let started = std::time::Instant::now();
-    let result = chat_once(client, &base_url, &key, &cand.model, messages, with_tools).await;
-    let elapsed = started.elapsed().as_millis() as u64;
-    metrics.durations.push(elapsed);
+    let pause_ms = provider_pause_ms(&cand.provider);
+
+    // 请求循环：带供应商限流间隔与 429 自动重试（解析 Retry-After）。
+    let mut attempt = 0usize;
+    let mut last_elapsed: u64 = 0;
+    let mut retried = false;
+    let result: Result<ChatResponse, String> = loop {
+        attempt += 1;
+        if CANCELLED.load(Ordering::SeqCst) {
+            return BenchmarkCaseResult {
+                id: case_id.to_string(),
+                label: case_label.to_string(),
+                score: 0.0,
+                note: "已取消".to_string(),
+            };
+        }
+        if REQUEST_COUNT.load(Ordering::SeqCst) >= budget as u64 {
+            return BenchmarkCaseResult {
+                id: case_id.to_string(),
+                label: case_label.to_string(),
+                score: 0.0,
+                note: "超出请求预算，跳过".to_string(),
+            };
+        }
+        REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
+        // 供应商限流间隔：同一套件内从第二次请求开始等待（Kimi 21s，其他 2.5s）。
+        if attempt > 1 || metrics.requests > 1 {
+            tokio::time::sleep(Duration::from_millis(pause_ms)).await;
+        }
+        let started = std::time::Instant::now();
+        let r = chat_once(client, &base_url, &key, &cand.model, messages, with_tools).await;
+        last_elapsed = started.elapsed().as_millis() as u64;
+        match r {
+            Ok(resp) => break Ok(resp),
+            Err(e) => {
+                if is_rate_limit_error(&e) && attempt < MAX_ATTEMPTS_PER_CASE {
+                    retried = true;
+                    let wait_ms = parse_retry_after_secs(&e).unwrap_or(pause_ms).max(pause_ms);
+                    let _ = app.emit(
+                        "benchmark:event",
+                        BenchmarkEvent {
+                            kind: "case".to_string(),
+                            current,
+                            total,
+                            provider: Some(cand.provider.clone()),
+                            model: Some(cand.model.clone()),
+                            message: format!(
+                                "{} / {} · {} 触发限流，{}s 后重试（第 {} 次）",
+                                cand.provider_label,
+                                cand.model,
+                                case_label,
+                                wait_ms / 1000,
+                                attempt
+                            ),
+                        },
+                    );
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                    continue;
+                }
+                break Err(e);
+            }
+        }
+    };
+    metrics.durations.push(last_elapsed);
     let _ = app.emit(
         "benchmark:event",
         BenchmarkEvent {
@@ -474,7 +551,7 @@ async fn run_case(
             total,
             provider: Some(cand.provider.clone()),
             model: Some(cand.model.clone()),
-            message: format!("{} / {} · {} · {}ms", cand.provider_label, cand.model, case_label, elapsed),
+            message: format!("{} / {} · {} · {}ms", cand.provider_label, cand.model, case_label, last_elapsed),
         },
     );
     match result {
@@ -490,7 +567,11 @@ async fn run_case(
                 id: case_id.to_string(),
                 label: case_label.to_string(),
                 score,
-                note,
+                note: if retried {
+                    format!("{note}（限流后重试成功）")
+                } else {
+                    note
+                },
             }
         }
         Err(e) => {
@@ -929,6 +1010,23 @@ mod tests {
         let runnable: Vec<_> = candidates.iter().filter(|c| c.skip_reason.is_none()).collect();
         assert_eq!(runnable.len(), 1, "glm 双档位相同模型应去重");
         assert_eq!(runnable[0].model, "glm-4.5");
+    }
+
+    #[test]
+    fn parse_retry_after_handles_kimi_429_message() {
+        let msg = r#"API 429 Too Many Requests: {"error":{"message":"... please try again after 1 seconds","type":"rate_limit_reached_error"}}"#;
+        assert_eq!(parse_retry_after_secs(msg), Some(5), "至少等待 5s");
+        let msg2 = "please try again after 12 seconds";
+        assert_eq!(parse_retry_after_secs(msg2), Some(12));
+        assert_eq!(parse_retry_after_secs("没有重试信息"), None);
+        assert!(is_rate_limit_error(msg));
+        assert!(!is_rate_limit_error("网络请求失败: timeout"));
+    }
+
+    #[test]
+    fn provider_pause_respects_kimi_rpm() {
+        assert_eq!(provider_pause_ms("kimi"), 21_000);
+        assert_eq!(provider_pause_ms("glm"), 2_500);
     }
 
     #[test]
