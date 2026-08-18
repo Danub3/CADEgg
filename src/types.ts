@@ -139,6 +139,19 @@ export interface ModelRouteTelemetry {
   note?: string;
 }
 
+export interface MemoryFileInfo {
+  name: string;
+  size_bytes: number;
+  updated_at_ms: number;
+}
+
+export interface MemoryBundleInfo {
+  dir: string;
+  files: MemoryFileInfo[];
+  global_memory: string;
+  global_memory_exists: boolean;
+}
+
 export interface SettingsView {
   provider: Provider;
   work_mode: WorkMode;

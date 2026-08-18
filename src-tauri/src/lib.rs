@@ -24,6 +24,7 @@ pub fn run() {
         settings::save_settings,
         session_export::save_session_markdown,
         session_export::save_session_memory_bundle,
+        session_export::read_memory_bundle,
         llm::run_agent,
         llm::confirm_tool_call,
     ]);
@@ -34,6 +35,7 @@ pub fn run() {
         settings::save_settings,
         session_export::save_session_markdown,
         session_export::save_session_memory_bundle,
+        session_export::read_memory_bundle,
         llm::run_agent,
         llm::confirm_tool_call,
     ]);

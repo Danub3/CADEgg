@@ -21,6 +21,91 @@ pub struct SessionMemorySaveResult {
     pub global_memory_path: String,
 }
 
+/// 记忆包里的单个文件信息（用于「查看记忆包」入口）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryFileInfo {
+    pub name: String,
+    pub size_bytes: u64,
+    pub updated_at_ms: u64,
+}
+
+/// 记忆包只读快照：目录路径、文件清单、全局记忆内容。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryBundleInfo {
+    pub dir: String,
+    pub files: Vec<MemoryFileInfo>,
+    pub global_memory: String,
+    pub global_memory_exists: bool,
+}
+
+/// 递归收集记忆目录下的文件信息（相对路径、大小、修改时间），最多 limit 个。
+fn collect_memory_files(dir: &Path, base: &Path, out: &mut Vec<MemoryFileInfo>, limit: usize) {
+    if out.len() >= limit {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut items: Vec<_> = entries.flatten().collect();
+    items.sort_by_key(|entry| entry.file_name());
+    for entry in items {
+        if out.len() >= limit {
+            break;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_memory_files(&path, base, out, limit);
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let metadata = fs::metadata(&path).ok();
+            out.push(MemoryFileInfo {
+                name: rel,
+                size_bytes: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+                updated_at_ms: metadata
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            });
+        }
+    }
+}
+
+/// 读取记忆包只读信息：目录、文件清单、global-memory.md 内容。
+/// 只读命令，不修改任何文件，也不注入模型上下文。
+#[tauri::command]
+pub fn read_memory_bundle(
+    app: tauri::AppHandle,
+    location: SessionStorageLocation,
+) -> Result<MemoryBundleInfo, String> {
+    let root = session_dir(&app, location)?;
+    let memory_dir = root.join("memory");
+    fs::create_dir_all(&memory_dir).map_err(|e| format!("创建记忆目录失败: {e}"))?;
+
+    let mut files = Vec::new();
+    collect_memory_files(&memory_dir, &memory_dir, &mut files, 100);
+
+    let global_memory_path = memory_dir.join("global-memory.md");
+    let (global_memory, global_memory_exists) = if global_memory_path.is_file() {
+        (fs::read_to_string(&global_memory_path).unwrap_or_default(), true)
+    } else {
+        (String::new(), false)
+    };
+
+    Ok(MemoryBundleInfo {
+        dir: memory_dir.display().to_string(),
+        files,
+        global_memory,
+        global_memory_exists,
+    })
+}
+
 fn safe_filename(name: &str) -> String {
     let mut out = String::new();
     for ch in name.chars().take(96) {
@@ -193,4 +278,28 @@ pub fn save_session_memory_bundle(
         index_path: index_path.display().to_string(),
         global_memory_path: global_memory_path.display().to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_memory_files_lists_nested_files_sorted() {
+        let base = std::env::temp_dir().join(format!("cadegg-memory-test-{}", std::process::id()));
+        let sub = base.join("sessions").join("abc123");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(base.join("global-memory.md"), "# 全局记忆").unwrap();
+        fs::write(sub.join("latest.md"), "# latest").unwrap();
+
+        let mut out = Vec::new();
+        collect_memory_files(&base, &base, &mut out, 100);
+
+        let names: Vec<&str> = out.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"global-memory.md"));
+        assert!(names.contains(&"sessions/abc123/latest.md"));
+        assert!(out.iter().all(|f| f.size_bytes > 0));
+
+        let _ = fs::remove_dir_all(&base);
+    }
 }

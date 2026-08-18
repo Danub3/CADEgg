@@ -14,12 +14,15 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openPath } from "@tauri-apps/plugin-opener";
 
 import "./App.css";
 import type {
   AgentEvent,
   DemoLogEntry,
   ElevatorValidation,
+  MemoryBundleInfo,
+  MemoryFileInfo,
   Message,
   ModelRouteTelemetry,
   ObjectUpdate,
@@ -77,6 +80,9 @@ interface AppPreferences {
   reduceMotion: boolean;
   densePanels: boolean;
 }
+
+/// 携带记忆的 token 预算：超过部分截断，避免隐性成本膨胀。
+const MEMORY_CARRY_TOKEN_BUDGET = 1200;
 
 const DEFAULT_APP_PREFERENCES: AppPreferences = {
   language: "zh-CN",
@@ -320,6 +326,32 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   routeWaiting: { "zh-CN": "等待路由", "en-US": "Waiting route" },
   routeNone: { "zh-CN": "尚无路由", "en-US": "No route yet" },
   routeProcessing: { "zh-CN": "处理中", "en-US": "Processing" },
+  memoryTitle: { "zh-CN": "会话记忆", "en-US": "Session Memory" },
+  memoryLoading: { "zh-CN": "读取中…", "en-US": "Loading…" },
+  memoryEmpty: {
+    "zh-CN": "还没有记忆包。完成一次任务后会自动生成（取决于「自动导出」开关）。",
+    "en-US": "No memory bundle yet. It is created after a task completes (when auto-export is on).",
+  },
+  memoryFileCount: { "zh-CN": "共 {count} 个文件", "en-US": "{count} files" },
+  memoryOpenDir: { "zh-CN": "打开目录", "en-US": "Open Folder" },
+  memoryRefresh: { "zh-CN": "刷新", "en-US": "Refresh" },
+  memoryDirFailed: { "zh-CN": "打开目录失败：{error}", "en-US": "Failed to open folder: {error}" },
+  memoryGlobalTitle: { "zh-CN": "全局记忆", "en-US": "Global Memory" },
+  memoryGlobalMissing: {
+    "zh-CN": "还没有 global-memory.md。完成一次任务后会自动创建，可在目录里手动编辑。",
+    "en-US": "No global-memory.md yet. It is created after a task; you can edit it manually in the folder.",
+  },
+  memoryCarryLabel: { "zh-CN": "本次发送携带全局记忆", "en-US": "Carry global memory with next send" },
+  memoryCarryHint: {
+    "zh-CN": "默认关闭，不自动注入；开启后仅下一条消息携带，发送后自动复位。",
+    "en-US": "Off by default; when on, only the next message carries it, then it resets.",
+  },
+  memoryTokensFull: { "zh-CN": "全文约 {tokens} tokens", "en-US": "Full text ≈ {tokens} tokens" },
+  memoryBudget: { "zh-CN": "携带预算 {budget} tokens，超出截断", "en-US": "Carry budget {budget} tokens, truncated if exceeded" },
+  memoryPreviewShow: { "zh-CN": "展开预览", "en-US": "Expand" },
+  memoryPreviewHide: { "zh-CN": "收起预览", "en-US": "Collapse" },
+  memoryCarriedBadge: { "zh-CN": "将携带全局记忆 · 约 {tokens} tokens", "en-US": "Carrying global memory · ≈{tokens} tokens" },
+  memoryTruncated: { "zh-CN": "已截断", "en-US": "truncated" },
   settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
   minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
   maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
@@ -1339,6 +1371,13 @@ export default function App() {
   });
   const [lastModelRoute, setLastModelRoute] = useState<ModelRouteTelemetry | null>(null);
   const lastModelRouteRef = useRef<ModelRouteTelemetry | null>(null);
+  const [memoryBundle, setMemoryBundle] = useState<MemoryBundleInfo | null>(null);
+  const memoryBundleRef = useRef<MemoryBundleInfo | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [carryMemory, setCarryMemory] = useState(false);
+  const carryMemoryRef = useRef(false);
+  const [memoryPreviewOpen, setMemoryPreviewOpen] = useState(false);
+  const [memoryDirError, setMemoryDirError] = useState<string | null>(null);
   const [completedToolIds, setCompletedToolIds] = useState<Set<string>>(new Set());
   const lastUserInputRef = useRef("");
   const pendingLogRef = useRef<{
@@ -1404,6 +1443,39 @@ export default function App() {
   function setLastModelRouteNow(next: ModelRouteTelemetry | null) {
     lastModelRouteRef.current = next;
     setLastModelRoute(next);
+  }
+
+  function setCarryMemoryNow(next: boolean) {
+    carryMemoryRef.current = next;
+    setCarryMemory(next);
+  }
+
+  async function refreshMemoryBundle() {
+    setMemoryLoading(true);
+    try {
+      const info = await invoke<MemoryBundleInfo>("read_memory_bundle", {
+        location: appPreferencesRef.current.storageLocation,
+      });
+      memoryBundleRef.current = info;
+      setMemoryBundle(info);
+    } catch (e) {
+      memoryBundleRef.current = null;
+      setMemoryBundle(null);
+      console.error("read memory bundle:", e);
+    } finally {
+      setMemoryLoading(false);
+    }
+  }
+
+  async function openMemoryDir() {
+    const dir = memoryBundleRef.current?.dir;
+    if (!dir) return;
+    try {
+      await openPath(dir);
+      setMemoryDirError(null);
+    } catch (e) {
+      setMemoryDirError(String(e));
+    }
   }
 
   function tryParseValidation(content: string): ElevatorValidation | null {
@@ -1632,6 +1704,7 @@ export default function App() {
         indexEntry: buildSessionMemoryIndexEntry(snapshot),
         location: preferences.storageLocation,
       });
+      void refreshMemoryBundle();
     } catch (e) {
       console.error("auto save session memory:", e);
       setErrorMsg(t("exportSessionFailed", preferences.language, { error: String(e) }));
@@ -1654,6 +1727,14 @@ export default function App() {
   useEffect(() => {
     refreshSettings();
   }, []);
+
+  useEffect(() => {
+    void refreshMemoryBundle();
+  }, []);
+
+  useEffect(() => {
+    void refreshMemoryBundle();
+  }, [appPreferences.storageLocation]);
 
   useEffect(() => {
     if (!taskStartedAt) return;
@@ -1978,11 +2059,25 @@ export default function App() {
         startedAt: taskStartedAtRef.current,
       };
 
+      // 会话记忆：默认不注入；仅当用户显式打开「本次发送携带全局记忆」开关时才携带，
+      // 且只注入 payload，不污染聊天显示；发送后开关自动复位。
+      const memoryInjection =
+        carryMemoryRef.current && memoryBundleRef.current?.global_memory.trim()
+          ? buildMemoryInjection(
+              memoryBundleRef.current.global_memory,
+              MEMORY_CARRY_TOKEN_BUDGET
+            )
+          : null;
+      setCarryMemoryNow(false);
+      const payloadHistory = memoryInjection?.text
+        ? [{ role: "user" as const, content: memoryInjection.text }, ...buildHistoryPayload(previousMessages)]
+        : buildHistoryPayload(previousMessages);
+
       // run_agent emits agent:event for each step; resolve only means the backend loop ended.
       startModelTelemetry();
       await invoke("run_agent", {
         userInput: text,
-        history: buildHistoryPayload(previousMessages),
+        history: payloadHistory,
         sessionObjects: syncedObjects,
         modelSelection: {
           provider: activeProvider,
@@ -2214,6 +2309,7 @@ export default function App() {
     setLastTaskDurationMsNow(session.lastTaskDurationMs);
     setLastTokenTelemetryNow(session.lastTokenTelemetry);
     setLastModelRouteNow(null);
+    setCarryMemoryNow(false);
     sessionObjectsRef.current = session.sessionObjects;
     setActiveSessionIdNow(session.id);
     setMessagesNow(session.messages);
@@ -2566,6 +2662,24 @@ export default function App() {
               language={appPreferences.language}
             />
             <div className="composer-hint">{t("composerHint", appPreferences.language)}</div>
+            {carryMemory &&
+              memoryBundle?.global_memory.trim() &&
+              (() => {
+                const injection = buildMemoryInjection(
+                  memoryBundle.global_memory,
+                  MEMORY_CARRY_TOKEN_BUDGET
+                );
+                return (
+                  <div className="memory-carry-badge">
+                    {t("memoryCarriedBadge", appPreferences.language, {
+                      tokens: String(injection.tokens),
+                    })}
+                    {injection.truncated
+                      ? ` · ${t("memoryTruncated", appPreferences.language)}`
+                      : ""}
+                  </div>
+                );
+              })()}
             <textarea
               rows={2}
               placeholder={
@@ -2611,6 +2725,18 @@ export default function App() {
           />
           <DrawResultCard lastDrawParams={lastDrawParams} language={appPreferences.language} />
           <ValidationCard lastValidation={lastValidation} language={appPreferences.language} />
+          <MemoryCard
+            bundle={memoryBundle}
+            loading={memoryLoading}
+            carry={carryMemory}
+            onCarryChange={setCarryMemoryNow}
+            previewOpen={memoryPreviewOpen}
+            onPreviewToggle={() => setMemoryPreviewOpen((v) => !v)}
+            onRefresh={() => void refreshMemoryBundle()}
+            onOpenDir={() => void openMemoryDir()}
+            openError={memoryDirError}
+            language={appPreferences.language}
+          />
         </aside>
       </div>
 
@@ -2903,6 +3029,39 @@ function routeStatusClass(status: string) {
   return "route-chip planned";
 }
 
+function formatFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "n/a";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatRelativeTime(updatedAtMs: number, lang: "zh-CN" | "en-US") {
+  if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) return "n/a";
+  const deltaMs = Math.max(0, Date.now() - updatedAtMs);
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 1) return lang === "zh-CN" ? "刚刚" : "just now";
+  if (minutes < 60) return lang === "zh-CN" ? `${minutes} 分钟前` : `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return lang === "zh-CN" ? `${hours} 小时前` : `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return lang === "zh-CN" ? `${days} 天前` : `${days}d ago`;
+}
+
+/** 构建本次发送要携带的全局记忆文本：带系统提醒包装与 token 预算截断。 */
+function buildMemoryInjection(content: string, budgetTokens: number) {
+  const trimmed = content.trim();
+  if (!trimmed) return { text: "", tokens: 0, truncated: false };
+  const budgetChars = Math.max(200, budgetTokens * 4);
+  const full = `系统提醒（项目记忆，本次手动携带，仅供参考；若与当前任务无关请忽略）：\n${trimmed}`;
+  if (full.length <= budgetChars) {
+    return { text: full, tokens: estimateTextTokens(full), truncated: false };
+  }
+  const head = trimmed.slice(0, Math.max(120, budgetChars - 120));
+  const text = `系统提醒（项目记忆，本次手动携带，已截断到约 ${budgetTokens} tokens，仅供参考）：\n${head}`;
+  return { text, tokens: estimateTextTokens(text), truncated: true };
+}
+
 function GenerationActionsCard({
   undoing,
   sending,
@@ -3134,6 +3293,100 @@ function ValidationCard({
             : t("notIncluded", language),
         })}
       </p>
+    </section>
+  );
+}
+
+function MemoryCard({
+  bundle,
+  loading,
+  carry,
+  onCarryChange,
+  previewOpen,
+  onPreviewToggle,
+  onRefresh,
+  onOpenDir,
+  openError,
+  language,
+}: {
+  bundle: MemoryBundleInfo | null;
+  loading: boolean;
+  carry: boolean;
+  onCarryChange: (checked: boolean) => void;
+  previewOpen: boolean;
+  onPreviewToggle: () => void;
+  onRefresh: () => void;
+  onOpenDir: () => void;
+  openError: string | null;
+  language: "zh-CN" | "en-US";
+}) {
+  const fileList = bundle?.files ?? [];
+  const shownFiles = fileList.slice(0, 8);
+  const globalMemory = bundle?.global_memory ?? "";
+  const globalExists = bundle?.global_memory_exists ?? false;
+  const fullTokens = globalMemory.trim() ? estimateTextTokens(globalMemory.trim()) : 0;
+  return (
+    <section className="rail-card memory-card">
+      <PanelHeader title={t("memoryTitle", language)} status={bundle ? "online" : "idle"} />
+      {loading && <p>{t("memoryLoading", language)}</p>}
+      {!loading && fileList.length === 0 && <p>{t("memoryEmpty", language)}</p>}
+      {!loading && fileList.length > 0 && (
+        <>
+          <p className="memory-count">
+            {t("memoryFileCount", language, { count: String(fileList.length) })}
+          </p>
+          <div className="memory-file-list">
+            {shownFiles.map((file: MemoryFileInfo) => (
+              <div key={file.name} className="memory-file-row" title={file.name}>
+                <span className="memory-file-name">{file.name}</span>
+                <span className="memory-file-meta">
+                  {formatFileSize(file.size_bytes)} · {formatRelativeTime(file.updated_at_ms, language)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="button-row">
+        <button type="button" onClick={onOpenDir} disabled={!bundle}>
+          {t("memoryOpenDir", language)}
+        </button>
+        <button type="button" onClick={onRefresh} disabled={loading}>
+          {t("memoryRefresh", language)}
+        </button>
+      </div>
+      {openError && (
+        <p className="inline-error">{t("memoryDirFailed", language, { error: openError })}</p>
+      )}
+      {bundle && (
+        <div className="memory-global">
+          <div className="memory-global-head">
+            <strong>{t("memoryGlobalTitle", language)}</strong>
+            {globalExists && (
+              <button type="button" className="link-button" onClick={onPreviewToggle}>
+                {previewOpen ? t("memoryPreviewHide", language) : t("memoryPreviewShow", language)}
+              </button>
+            )}
+          </div>
+          {!globalExists ? (
+            <p>{t("memoryGlobalMissing", language)}</p>
+          ) : (
+            <>
+              <SwitchField
+                label={t("memoryCarryLabel", language)}
+                checked={carry}
+                onChange={onCarryChange}
+              />
+              <p className="memory-est">
+                {t("memoryTokensFull", language, { tokens: String(fullTokens) })} ·{" "}
+                {t("memoryBudget", language, { budget: String(MEMORY_CARRY_TOKEN_BUDGET) })}
+              </p>
+              {previewOpen && <pre className="memory-preview">{globalMemory}</pre>}
+              <p className="memory-hint">{t("memoryCarryHint", language)}</p>
+            </>
+          )}
+        </div>
+      )}
     </section>
   );
 }

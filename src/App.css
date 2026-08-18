@@ -1337,6 +1337,117 @@ button:disabled {
   line-height: 1.4;
 }
 
+.memory-card .memory-count {
+  margin: 0;
+  color: rgb(30 22 51 / 0.62);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+}
+
+.memory-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.memory-file-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 700;
+}
+
+.memory-file-meta {
+  flex-shrink: 0;
+  color: rgb(30 22 51 / 0.55);
+  font-size: var(--tiny-font-size, 11px);
+  white-space: nowrap;
+}
+
+.memory-global {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 2px solid rgb(30 22 51 / 0.12);
+}
+
+.memory-global-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.memory-global-head strong {
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 900;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: rgb(124 58 237);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.memory-preview {
+  margin: 0;
+  max-height: 130px;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 2px solid rgb(30 22 51 / 0.14);
+  background: rgb(255 253 245 / var(--control-alpha, 0.85));
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: var(--tiny-font-size, 11px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-est {
+  margin: 0;
+  color: rgb(30 22 51 / 0.62);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 700;
+}
+
+.memory-hint {
+  margin: 0;
+  color: rgb(30 22 51 / 0.52);
+  font-size: var(--tiny-font-size, 11px);
+  line-height: 1.4;
+}
+
+.memory-carry-badge {
+  align-self: flex-start;
+  border: 2px solid rgb(217 119 6 / 0.40);
+  border-radius: 8px;
+  background: rgb(245 158 11 / 0.12);
+  padding: 2px 8px;
+  color: rgb(120 53 15);
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 800;
+}
+
 .typing-indicator {
   display: inline-flex;
   align-self: flex-start;
