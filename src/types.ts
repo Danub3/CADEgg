@@ -45,6 +45,7 @@ export type HistoryMessage =
 export type AgentEvent =
   | { kind: "assistant_trace"; delta: string }
   | { kind: "assistant_delta"; delta: string }
+  | { kind: "usage"; usage: ProviderTokenUsage }
   | { kind: "assistant"; text: string | null; tool_calls: ToolCall[] }
   | {
       kind: "tool_result";
@@ -85,6 +86,34 @@ export interface DemoLogEntry {
   params: Record<string, unknown>;
   validation?: ElevatorValidation;
   summary: string;
+  duration_ms?: number;
+  token_telemetry?: TokenTelemetry;
+}
+
+export interface TokenTelemetry {
+  started_at: number;
+  first_response_ms?: number;
+  avg_chunk_gap_ms?: number;
+  max_chunk_gap_ms?: number;
+  chunk_count: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  reasoning_tokens?: number;
+  provider_calls?: number;
+  provider_models?: string[];
+  estimated_context_tokens?: number;
+}
+
+export interface ProviderTokenUsage {
+  provider: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 export interface SettingsView {

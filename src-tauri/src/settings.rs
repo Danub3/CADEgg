@@ -135,17 +135,16 @@ fn default_kimi_model() -> String {
     "kimi-k2.5".to_string()
 }
 fn default_kimi_strong_model() -> String {
-    "kimi-k3".to_string()
+    "kimi-k2.6".to_string()
 }
 fn default_kimi_base_url() -> String {
     "https://api.moonshot.cn/v1".to_string()
 }
 
 const GLM_MODELS: &[&str] = &[
-    "glm-5.3",
     "glm-5.2",
     "glm-5.1",
-    "glm-5-plus",
+    "glm-5",
     "glm-5-turbo",
     "glm-4.7",
     "glm-4.7-flashx",
@@ -155,17 +154,12 @@ const GLM_MODELS: &[&str] = &[
     "glm-4.5-air",
     "glm-4.5-airx",
     "glm-4.5-flash",
-    "glm-4-plus",
-    "glm-4-air-250414",
-    "glm-4-long",
     "glm-4-flash-250414",
     "glm-4-flashx-250414",
-    "glm-4-flash",
 ];
-const DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"];
+const DEEPSEEK_MODELS: &[&str] = &["deepseek-v4-pro", "deepseek-v4-flash"];
 const QWEN_MODELS: &[&str] = &[
     "qwen3.8-max",
-    "qwen3.8-max-preview",
     "qwen3.7-max",
     "qwen3.7-plus",
     "qwen3.7-flash",
@@ -184,7 +178,6 @@ const QWEN_MODELS: &[&str] = &[
 const KIMI_MODELS: &[&str] = &[
     "kimi-k3",
     "kimi-k2.7-code",
-    "kimi-k2.7-code-highspeed",
     "kimi-k2.6",
     "kimi-k2.5",
     "moonshot-v1-8k",
@@ -554,6 +547,25 @@ mod tests {
 
         assert_eq!(sanitized.provider, "deepseek");
         assert_eq!(sanitized.deepseek_strong_model, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn sanitize_removed_or_unconfirmed_provider_models() {
+        let settings = Settings {
+            provider: "qwen".to_string(),
+            glm_model: "glm-4-plus".to_string(),
+            deepseek_model: "deepseek-chat".to_string(),
+            qwen_strong_model: "qwen3.8-max-preview".to_string(),
+            kimi_strong_model: "kimi-k2.7-code-highspeed".to_string(),
+            ..Default::default()
+        };
+
+        let sanitized = sanitize_settings(settings);
+
+        assert_eq!(sanitized.glm_model, "glm-4.5-air");
+        assert_eq!(sanitized.deepseek_model, "deepseek-v4-flash");
+        assert_eq!(sanitized.qwen_strong_model, "qwen3.8-max");
+        assert_eq!(sanitized.kimi_strong_model, "kimi-k2.6");
     }
 
     #[test]

@@ -63,6 +63,80 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+fn is_domain_related_request(user_input: &str) -> bool {
+    let text = user_input.to_lowercase();
+    contains_any(
+        &text,
+        &[
+            "cad",
+            "autocad",
+            "图",
+            "图纸",
+            "出图",
+            "绘",
+            "画",
+            "线",
+            "圆",
+            "矩形",
+            "多段线",
+            "对象",
+            "handle",
+            "模型空间",
+            "图层",
+            "标注",
+            "尺寸",
+            "楼梯",
+            "电梯",
+            "井口",
+            "防护",
+            "施工",
+            "安全",
+            "临边",
+            "洞口",
+            "规范",
+            "jgj",
+            "gb",
+            "踢脚板",
+            "警示",
+            "材料表",
+            "门",
+            "立杆",
+            "横杆",
+            "draw",
+            "drawing",
+            "line",
+            "circle",
+            "rectangle",
+            "polyline",
+            "object",
+            "layer",
+            "dimension",
+            "stair",
+            "safety",
+            "construction",
+            "key",
+            "api",
+            "glm",
+            "deepseek",
+            "qwen",
+            "kimi",
+            "模型",
+            "设置",
+            "轮转",
+            "bridge",
+            "会话",
+            "字体",
+        ],
+    )
+}
+
+fn scoped_response_for_unrelated_request(user_input: &str) -> Option<&'static str> {
+    if user_input.trim().is_empty() || is_domain_related_request(user_input) {
+        return None;
+    }
+    Some("这个问题不属于 CADEgg 的 AutoCAD/施工安全绘图范围。我可以帮你处理 CAD 绘制、编辑、图面查询、施工安全防护规范、模型 Key 和应用设置相关任务。")
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum MessageView {
@@ -89,16 +163,35 @@ pub struct ModelSelection {
     model: String,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct ProviderTokenUsage {
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+}
+
 // ---------------- Provider trait via enum (no async_trait dep) ----------------
 
 #[derive(Clone, Debug)]
 pub enum StepOutput {
     /// Final natural-language answer with no further tool calls.
-    Text(String),
+    Text {
+        text: String,
+        usage: Option<ProviderTokenUsage>,
+    },
     /// Optional accompanying text + tool invocations to execute.
     ToolCalls {
         text: Option<String>,
         calls: Vec<ToolCall>,
+        usage: Option<ProviderTokenUsage>,
     },
 }
 
@@ -379,11 +472,17 @@ impl GeminiProvider {
         }
         let mut text_buf = String::new();
         let mut calls: Vec<ToolCall> = Vec::new();
+        let mut usage: Option<ProviderTokenUsage> = None;
         let mut saw_event = false;
         let stream_result = read_sse_events(resp, |data| {
             saw_event = true;
             let parsed: Value =
                 serde_json::from_str(data).map_err(|e| format!("解析流式响应失败: {e}"))?;
+            if let Some(next_usage) =
+                parse_gemini_usage(parsed.get("usageMetadata"), "Gemini", &self.model)
+            {
+                usage = Some(next_usage);
+            }
             let parts = parsed["candidates"]
                 .as_array()
                 .and_then(|a| a.first())
@@ -438,7 +537,7 @@ impl GeminiProvider {
                 }
                 let fallback_parsed: Value = serde_json::from_str(&fallback_text)
                     .map_err(|e| format!("解析响应失败: {e}"))?;
-                return parse_gemini_step_output(&fallback_parsed, &fallback_text);
+                return parse_gemini_step_output(&fallback_parsed, &fallback_text, &self.model);
             }
             return Err(error);
         }
@@ -452,9 +551,13 @@ impl GeminiProvider {
             Ok(StepOutput::ToolCalls {
                 text: final_text,
                 calls,
+                usage,
             })
         } else if !text_buf.trim().is_empty() {
-            Ok(StepOutput::Text(text_buf))
+            Ok(StepOutput::Text {
+                text: text_buf,
+                usage,
+            })
         } else {
             Err("Gemini 返回为空".to_string())
         }
@@ -537,6 +640,7 @@ impl GlmProvider {
             "tools": tools::openai_tools_for(&self.selected_tools),
             "tool_choice": "auto",
             "stream": true,
+            "stream_options": { "include_usage": true },
         });
 
         let base = self.base_url.trim_end_matches('/');
@@ -559,6 +663,7 @@ impl GlmProvider {
         }
         let mut text_buf = String::new();
         let mut calls: Vec<PendingOpenAiToolCall> = Vec::new();
+        let mut usage: Option<ProviderTokenUsage> = None;
         let mut saw_event = false;
         let stream_result = read_sse_events(resp, |data| {
             if data == "[DONE]" {
@@ -568,10 +673,19 @@ impl GlmProvider {
             saw_event = true;
             let parsed: Value =
                 serde_json::from_str(data).map_err(|e| format!("解析流式响应失败: {e}"))?;
-            let choice = parsed["choices"]
+            if let Some(next_usage) =
+                parse_openai_usage(parsed.get("usage"), &self.label, &self.model)
+            {
+                usage = Some(next_usage);
+            }
+            let Some(choice) = parsed["choices"]
                 .as_array()
                 .and_then(|a| a.first())
-                .ok_or_else(|| format!("流式响应缺少 choices[0]: {data}"))?;
+            else {
+                // OpenAI-compatible providers may send a final usage-only
+                // chunk with an empty choices array.
+                return Ok(());
+            };
             let delta = &choice["delta"];
             if let Some(reasoning) = delta["reasoning_content"].as_str() {
                 if !reasoning.is_empty() {
@@ -638,7 +752,12 @@ impl GlmProvider {
                 }
                 let fallback_parsed: Value = serde_json::from_str(&fallback_text)
                     .map_err(|e| format!("解析响应失败: {e}"))?;
-                return parse_glm_step_output(&fallback_parsed, &fallback_text);
+                return parse_glm_step_output(
+                    &fallback_parsed,
+                    &fallback_text,
+                    &self.label,
+                    &self.model,
+                );
             }
             return Err(error);
         }
@@ -667,9 +786,13 @@ impl GlmProvider {
             Ok(StepOutput::ToolCalls {
                 text: final_text,
                 calls,
+                usage,
             })
         } else if !text_buf.trim().is_empty() {
-            Ok(StepOutput::Text(text_buf))
+            Ok(StepOutput::Text {
+                text: text_buf,
+                usage,
+            })
         } else {
             Err(format!("{} 返回为空", self.label))
         }
@@ -731,7 +854,11 @@ struct PendingOpenAiToolCall {
 }
 
 #[allow(dead_code)]
-fn parse_gemini_step_output(parsed: &Value, raw_text: &str) -> Result<StepOutput, String> {
+fn parse_gemini_step_output(
+    parsed: &Value,
+    raw_text: &str,
+    model: &str,
+) -> Result<StepOutput, String> {
     let parts = parsed["candidates"]
         .as_array()
         .and_then(|a| a.first())
@@ -764,15 +891,24 @@ fn parse_gemini_step_output(parsed: &Value, raw_text: &str) -> Result<StepOutput
         Ok(StepOutput::ToolCalls {
             text: final_text,
             calls,
+            usage: parse_gemini_usage(parsed.get("usageMetadata"), "Gemini", model),
         })
     } else if !text_buf.trim().is_empty() {
-        Ok(StepOutput::Text(text_buf))
+        Ok(StepOutput::Text {
+            text: text_buf,
+            usage: parse_gemini_usage(parsed.get("usageMetadata"), "Gemini", model),
+        })
     } else {
         Err(format!("Gemini 返回为空: {raw_text}"))
     }
 }
 
-fn parse_glm_step_output(parsed: &Value, raw_text: &str) -> Result<StepOutput, String> {
+fn parse_glm_step_output(
+    parsed: &Value,
+    raw_text: &str,
+    provider: &str,
+    model: &str,
+) -> Result<StepOutput, String> {
     let msg = parsed["choices"]
         .as_array()
         .and_then(|a| a.first())
@@ -800,12 +936,73 @@ fn parse_glm_step_output(parsed: &Value, raw_text: &str) -> Result<StepOutput, S
         Ok(StepOutput::ToolCalls {
             text: final_text,
             calls,
+            usage: parse_openai_usage(parsed.get("usage"), provider, model),
         })
     } else if !content.is_empty() {
-        Ok(StepOutput::Text(content))
+        Ok(StepOutput::Text {
+            text: content,
+            usage: parse_openai_usage(parsed.get("usage"), provider, model),
+        })
     } else {
         Err(format!("GLM 返回为空: {raw_text}"))
     }
+}
+
+fn json_u64(value: Option<&Value>) -> Option<u64> {
+    value
+        .and_then(Value::as_u64)
+        .or_else(|| value.and_then(Value::as_i64).filter(|v| *v >= 0).map(|v| v as u64))
+}
+
+fn parse_openai_usage(
+    value: Option<&Value>,
+    provider: &str,
+    model: &str,
+) -> Option<ProviderTokenUsage> {
+    let usage = value?.as_object()?;
+    let prompt_tokens = json_u64(usage.get("prompt_tokens"))?;
+    let output_tokens = json_u64(usage.get("completion_tokens"))?;
+    let details = usage.get("prompt_tokens_details");
+    let cache_read_tokens = json_u64(details.and_then(|v| v.get("cached_tokens")))
+        .or_else(|| json_u64(usage.get("prompt_cache_hit_tokens")));
+    let uncached_input_tokens = json_u64(details.and_then(|v| v.get("prompt_cache_miss_tokens")))
+        .unwrap_or_else(|| prompt_tokens.saturating_sub(cache_read_tokens.unwrap_or(0)));
+    let cache_write_tokens = json_u64(details.and_then(|v| v.get("cache_write_tokens")))
+        .or_else(|| json_u64(usage.get("prompt_cache_creation_tokens")));
+    let reasoning_tokens =
+        json_u64(usage.get("completion_tokens_details").and_then(|v| v.get("reasoning_tokens")));
+
+    Some(ProviderTokenUsage {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        input_tokens: uncached_input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        reasoning_tokens,
+    })
+}
+
+fn parse_gemini_usage(
+    value: Option<&Value>,
+    provider: &str,
+    model: &str,
+) -> Option<ProviderTokenUsage> {
+    let usage = value?.as_object()?;
+    let input_tokens = json_u64(usage.get("promptTokenCount"))?;
+    let output_tokens = json_u64(usage.get("candidatesTokenCount"))?;
+    let cache_read_tokens = json_u64(usage.get("cachedContentTokenCount"));
+    let reasoning_tokens = json_u64(usage.get("thoughtsTokenCount"));
+
+    Some(ProviderTokenUsage {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens: None,
+        reasoning_tokens,
+    })
 }
 
 async fn read_sse_events<F>(mut resp: reqwest::Response, mut on_data: F) -> Result<(), String>
@@ -853,6 +1050,9 @@ fn extract_sse_data(raw_event: &str) -> Option<String> {
 enum AgentEvent<'a> {
     AssistantTrace {
         delta: &'a str,
+    },
+    Usage {
+        usage: &'a ProviderTokenUsage,
     },
     Assistant {
         text: Option<&'a str>,
@@ -1300,6 +1500,18 @@ pub async fn run_agent(
     let mut settings = crate::settings::load(&app)?;
     apply_model_selection(&mut settings, model_selection);
     let user_text = user_input.trim().to_string();
+    if let Some(response) = scoped_response_for_unrelated_request(&user_text) {
+        let _ = app.emit(
+            "agent:event",
+            AgentEvent::Assistant {
+                text: Some(response),
+                tool_calls: &[],
+            },
+        );
+        let _ = app.emit("agent:event", AgentEvent::Done { text: response });
+        return Ok(());
+    }
+
     let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
     let use_safety_context = settings.work_mode == crate::settings::WorkMode::SafetyDemoMode
         || tools::is_safety_request(&user_text);
@@ -1400,8 +1612,14 @@ pub async fn run_agent(
                 return Err(msg);
             }
         };
+        let usage = match &step {
+            StepOutput::Text { usage, .. } | StepOutput::ToolCalls { usage, .. } => usage.as_ref(),
+        };
+        if let Some(usage) = usage {
+            let _ = app.emit("agent:event", AgentEvent::Usage { usage });
+        }
         match step {
-            StepOutput::Text(text) => {
+            StepOutput::Text { text, .. } => {
                 if undo_group_open {
                     if let Err(e) = end_undo_group() {
                         let msg = redact(&e, &settings);
@@ -1419,7 +1637,7 @@ pub async fn run_agent(
                 let _ = app.emit("agent:event", AgentEvent::Done { text: &text });
                 return Ok(());
             }
-            StepOutput::ToolCalls { text, calls } => {
+            StepOutput::ToolCalls { text, calls, .. } => {
                 let signature = tool_call_batch_signature(&calls);
                 if let Some(previous) = &last_executed_batch {
                     if previous.signature == signature {
@@ -1556,6 +1774,59 @@ mod tests {
     }
 
     #[test]
+    fn scope_guard_rejects_unrelated_questions() {
+        assert!(scoped_response_for_unrelated_request("1+1等于几？").is_some());
+        assert!(scoped_response_for_unrelated_request("写一首诗").is_some());
+    }
+
+    #[test]
+    fn scope_guard_allows_cad_safety_and_app_questions() {
+        assert!(scoped_response_for_unrelated_request("画一条 7000mm 的直线").is_none());
+        assert!(scoped_response_for_unrelated_request("电梯井口防护要满足什么规范？").is_none());
+        assert!(scoped_response_for_unrelated_request("GLM Key 怎么配置？").is_none());
+    }
+
+    #[test]
+    fn openai_usage_splits_cache_hits_from_input_tokens() {
+        let parsed = json!({
+            "prompt_tokens": 1200,
+            "completion_tokens": 340,
+            "prompt_tokens_details": {
+                "cached_tokens": 700
+            },
+            "completion_tokens_details": {
+                "reasoning_tokens": 90
+            }
+        });
+
+        let usage = parse_openai_usage(Some(&parsed), "DeepSeek", "deepseek-v4-flash")
+            .expect("usage should parse");
+
+        assert_eq!(usage.input_tokens, 500);
+        assert_eq!(usage.output_tokens, 340);
+        assert_eq!(usage.cache_read_tokens, Some(700));
+        assert_eq!(usage.reasoning_tokens, Some(90));
+    }
+
+    #[test]
+    fn gemini_usage_maps_prompt_and_thought_tokens() {
+        let parsed = json!({
+            "promptTokenCount": 800,
+            "candidatesTokenCount": 160,
+            "cachedContentTokenCount": 200,
+            "thoughtsTokenCount": 40
+        });
+
+        let usage =
+            parse_gemini_usage(Some(&parsed), "Gemini", "gemini-2.5-pro").expect("usage should parse");
+
+        assert_eq!(usage.input_tokens, 800);
+        assert_eq!(usage.output_tokens, 160);
+        assert_eq!(usage.cache_read_tokens, Some(200));
+        assert_eq!(usage.reasoning_tokens, Some(40));
+    }
+
+    #[test]
     fn provider_chain_glm_primary_filters_unconfigured() {
         let settings = crate::settings::Settings {
             provider: "glm".to_string(),
@@ -1595,7 +1866,7 @@ mod tests {
         let mut settings = crate::settings::Settings {
             provider: "glm".to_string(),
             glm_api_key: "glm-key-12345678".to_string(),
-            glm_model: "glm-4-plus".to_string(),
+            glm_model: "glm-4.5-air".to_string(),
             glm_strong_model: "glm-4.5".to_string(),
             ..Default::default()
         };

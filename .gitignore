@@ -29,6 +29,13 @@ test/
 # 提取的结构化摘录在 data/sources/，知识卡在 data/atlas/，随代码提交
 resources/
 
+# Local-only planning and handoff notes. Keep these out of GitHub.
+session-log/
+/后续计划*.md
+/开发记录*.md
+/*会话记录*.md
+/*交接*.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

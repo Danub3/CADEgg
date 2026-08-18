@@ -5,6 +5,7 @@ mod cad;
 mod knowledge;
 mod llm;
 mod safety;
+mod session_export;
 mod settings;
 mod tools;
 
@@ -21,6 +22,8 @@ pub fn run() {
         cad::import_selected_objects,
         settings::get_settings,
         settings::save_settings,
+        session_export::save_session_markdown,
+        session_export::save_session_memory_bundle,
         llm::run_agent,
         llm::confirm_tool_call,
     ]);
@@ -29,6 +32,8 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         settings::get_settings,
         settings::save_settings,
+        session_export::save_session_markdown,
+        session_export::save_session_memory_bundle,
         llm::run_agent,
         llm::confirm_tool_call,
     ]);

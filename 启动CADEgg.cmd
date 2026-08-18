@@ -7,14 +7,25 @@ title CADEgg Launcher
 set "ROOT=%CD%"
 set "LOG=%ROOT%\cadegg-launch.log"
 set "MODE=app"
+set "CAD_PREFLIGHT=1"
+
+:PARSE_ARGS
+if "%~1"=="" goto ARGS_DONE
 if /I "%~1"=="--dev" set "MODE=dev"
 if /I "%~1"=="dev" set "MODE=dev"
+if /I "%~1"=="--no-cad" set "CAD_PREFLIGHT=0"
+if /I "%~1"=="--skip-cad" set "CAD_PREFLIGHT=0"
+shift
+goto PARSE_ARGS
+
+:ARGS_DONE
 
 > "%LOG%" (
   echo ==== CADEgg launcher %DATE% %TIME% ====
   echo Script: %~f0
   echo Working directory: %ROOT%
   echo Mode: %MODE%
+  echo AutoCAD preflight: %CAD_PREFLIGHT%
   echo User profile: %USERPROFILE%
   echo.
 )
@@ -24,17 +35,72 @@ echo  CADEgg Launcher
 echo ========================================
 echo Working directory: %ROOT%
 echo Mode: %MODE%
+echo AutoCAD preflight: %CAD_PREFLIGHT%
 echo Log file: %LOG%
 echo.
+
+call :ENSURE_AUTOCAD_READY
 
 if /I "%MODE%"=="dev" goto DEV_MODE
 goto APP_MODE
 
+:ENSURE_AUTOCAD_READY
+if "%CAD_PREFLIGHT%"=="0" (
+  echo [INFO] AutoCAD preflight skipped by command line.
+  echo [INFO] AutoCAD preflight skipped by command line. >> "%LOG%"
+  exit /b 0
+)
+
+tasklist /FI "IMAGENAME eq acad.exe" 2>nul | find /I "acad.exe" >nul
+if not errorlevel 1 (
+  echo [INFO] AutoCAD is already running.
+  echo [INFO] AutoCAD is already running. >> "%LOG%"
+  exit /b 0
+)
+
+echo [INFO] AutoCAD is not running. Trying to find and start it...
+echo [INFO] AutoCAD is not running. Trying to find and start it. >> "%LOG%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $progids=@('AutoCAD.Application'); for($m=30; $m -ge 20; $m--){ foreach($s in '.3','.2','.1',''){ $progids += ('AutoCAD.Application.' + $m + $s) } }; $found=$null; foreach($progid in $progids){ $clsidKey=Get-Item -LiteralPath ('Registry::HKEY_CLASSES_ROOT\' + $progid + '\CLSID') -ErrorAction SilentlyContinue; if(-not $clsidKey){ continue }; $clsid=[string]$clsidKey.GetValue(''); if(-not $clsid){ continue }; $serverKey=Get-Item -LiteralPath ('Registry::HKEY_CLASSES_ROOT\CLSID\' + $clsid + '\LocalServer32') -ErrorAction SilentlyContinue; if(-not $serverKey){ continue }; $cmd=[string]$serverKey.GetValue(''); if($cmd -match '\"([^\"]+\.exe)\"|([^\s]+\.exe)'){ $exe=$matches[1]; if(-not $exe){ $exe=$matches[2] }; $exe=[Environment]::ExpandEnvironmentVariables($exe); if(Test-Path -LiteralPath $exe){ $found=$exe; break } } }; if(-not $found){ $cmdPath=Get-Command acad.exe -ErrorAction SilentlyContinue; if($cmdPath){ $found=$cmdPath.Source } }; if(-not $found){ $roots=@(); foreach($drive in Get-PSDrive -PSProvider FileSystem){ foreach($rel in 'Program Files\Autodesk','Program Files (x86)\Autodesk','Autodesk'){ $p=Join-Path $drive.Root $rel; if(Test-Path -LiteralPath $p){ $roots += $p } } }; foreach($root in $roots){ $item=Get-ChildItem -LiteralPath $root -Filter acad.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if($item){ $found=$item.FullName; break } } }; if(-not $found){ Write-Host '[WARN] AutoCAD executable not found.'; exit 2 }; Write-Host ('[INFO] Starting AutoCAD: ' + $found); Start-Process -FilePath $found | Out-Null; for($i=0; $i -lt 45; $i++){ Start-Sleep -Seconds 1; if(Get-Process acad -ErrorAction SilentlyContinue){ Write-Host '[INFO] AutoCAD process detected.'; exit 0 } }; Write-Host '[WARN] AutoCAD was started, but acad.exe was not detected within 45s.'; exit 3" >> "%LOG%" 2>&1
+set "CAD_EXIT=%ERRORLEVEL%"
+if "%CAD_EXIT%"=="0" (
+  echo [INFO] AutoCAD started and detected.
+  echo [INFO] AutoCAD started and detected. >> "%LOG%"
+  exit /b 0
+)
+if "%CAD_EXIT%"=="2" (
+  echo [WARN] AutoCAD was not found in registry. CADEgg will still start, but Bridge stays unavailable until AutoCAD is opened.
+  echo [WARN] AutoCAD was not found in registry. >> "%LOG%"
+  exit /b 0
+)
+if "%CAD_EXIT%"=="3" (
+  echo [WARN] AutoCAD start was requested but not detected within timeout. CADEgg will continue starting.
+  echo [WARN] AutoCAD start was requested but not detected within timeout. >> "%LOG%"
+  exit /b 0
+)
+
+echo [WARN] AutoCAD preflight failed with code %CAD_EXIT%. CADEgg will continue starting.
+echo [WARN] AutoCAD preflight failed with code %CAD_EXIT%. >> "%LOG%"
+exit /b 0
+
 :APP_MODE
-call :TRY_RESTORE_EXISTING_APP
-set "RESTORE_CODE=%ERRORLEVEL%"
-if "%RESTORE_CODE%"=="0" exit /b 0
-if "%RESTORE_CODE%"=="1" goto FAIL
+call :APP_REBUILD_NEEDED
+set "REBUILD_NEEDED=%ERRORLEVEL%"
+if "%REBUILD_NEEDED%"=="1" (
+  tasklist /FI "IMAGENAME eq cadegg.exe" 2>nul | find /I "cadegg.exe" >nul
+  if not errorlevel 1 (
+    echo [ERROR] CADEgg debug app is stale, but cadegg.exe is already running.
+    echo Close the existing CADEgg window/process, then run this launcher again so it can rebuild.
+    echo [ERROR] CADEgg debug app is stale while cadegg.exe is running. >> "%LOG%"
+    tasklist /FI "IMAGENAME eq cadegg.exe"
+    tasklist /FI "IMAGENAME eq cadegg.exe" >> "%LOG%"
+    goto FAIL
+  )
+) else (
+  call :TRY_RESTORE_EXISTING_APP
+  set "RESTORE_CODE=%ERRORLEVEL%"
+  if "%RESTORE_CODE%"=="0" exit /b 0
+  if "%RESTORE_CODE%"=="1" goto FAIL
+)
 
 call :ENSURE_BUILT_APP
 if errorlevel 1 goto FAIL
@@ -99,10 +165,16 @@ tasklist /FI "IMAGENAME eq cadegg.exe" >> "%LOG%"
 exit /b 1
 
 :ENSURE_BUILT_APP
-if exist "%ROOT%\src-tauri\target\debug\cadegg.exe" exit /b 0
+call :APP_REBUILD_NEEDED
+if "%ERRORLEVEL%"=="0" exit /b 0
 
-echo [INFO] Built app is missing. Building debug app first...
-echo [INFO] Built app is missing. Building debug app first. >> "%LOG%"
+if /I "%APP_BUILD_REASON%"=="missing" (
+  echo [INFO] Built app is missing. Building debug app first...
+  echo [INFO] Built app is missing. Building debug app first. >> "%LOG%"
+) else (
+  echo [INFO] Built app is stale. Rebuilding debug app first...
+  echo [INFO] Built app is stale. Rebuilding debug app first. >> "%LOG%"
+)
 call :ENSURE_TOOLING
 if errorlevel 1 exit /b 1
 call :ENSURE_NODE_MODULES
@@ -111,6 +183,19 @@ if errorlevel 1 exit /b 1
 echo [STEP] Running npm.cmd run tauri -- build --debug --no-bundle... >> "%LOG%"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& npm.cmd run tauri -- build --debug --no-bundle 2>&1 | Tee-Object -FilePath '%LOG%' -Append; exit $LASTEXITCODE"
 exit /b %ERRORLEVEL%
+
+:APP_REBUILD_NEEDED
+set "APP_BUILD_REASON="
+set "APP_EXE=%ROOT%\src-tauri\target\debug\cadegg.exe"
+if not exist "%APP_EXE%" (
+  set "APP_BUILD_REASON=missing"
+  exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $root='%ROOT%'; $exe=Join-Path $root 'src-tauri\target\debug\cadegg.exe'; $exeTime=(Get-Item -LiteralPath $exe).LastWriteTimeUtc; $paths=@('src','src-tauri\src','src-tauri\tauri.conf.json','package.json','package-lock.json','vite.config.ts','tsconfig.json','dist'); $newest=$null; foreach($rel in $paths){ $p=Join-Path $root $rel; if(-not (Test-Path -LiteralPath $p)){ continue }; $item=Get-Item -LiteralPath $p; if($item -is [System.IO.DirectoryInfo]){ $items=Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue } else { $items=@($item) }; foreach($file in $items){ if(-not $newest -or $file.LastWriteTimeUtc -gt $newest){ $newest=$file.LastWriteTimeUtc } } }; if($newest -and $newest -gt $exeTime){ exit 1 }; exit 0" >> "%LOG%" 2>&1
+if "%ERRORLEVEL%"=="0" exit /b 0
+set "APP_BUILD_REASON=stale"
+exit /b 1
 
 :ENSURE_TOOLING
 if exist "%ProgramFiles%\nodejs\npm.cmd" set "PATH=%ProgramFiles%\nodejs;%PATH%"

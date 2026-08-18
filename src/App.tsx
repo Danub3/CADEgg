@@ -23,8 +23,10 @@ import type {
   Message,
   ObjectUpdate,
   Provider,
+  ProviderTokenUsage,
   SessionObject,
   SettingsView,
+  TokenTelemetry,
   ToolCall,
   View,
 } from "./types";
@@ -67,6 +69,7 @@ interface AppPreferences {
   language: "zh-CN" | "en-US";
   fontSize: number;
   storageLocation: "appdata" | "project";
+  autoExportSessionMarkdown: boolean;
   notifications: boolean;
   autoSyncObjects: boolean;
   alwaysOnTop: boolean;
@@ -78,6 +81,7 @@ const DEFAULT_APP_PREFERENCES: AppPreferences = {
   language: "zh-CN",
   fontSize: 14,
   storageLocation: "appdata",
+  autoExportSessionMarkdown: true,
   notifications: true,
   autoSyncObjects: true,
   alwaysOnTop: false,
@@ -152,6 +156,7 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   bridgeOnline: { "zh-CN": "BRIDGE 在线", "en-US": "BRIDGE Online" },
   bridgeError: { "zh-CN": "BRIDGE 异常", "en-US": "BRIDGE Error" },
   bridgeIdle: { "zh-CN": "BRIDGE 待测", "en-US": "BRIDGE Idle" },
+  bridgeChecking: { "zh-CN": "BRIDGE 检测中", "en-US": "BRIDGE Checking" },
   sessionTitle: { "zh-CN": "新会话", "en-US": "New Session" },
   saveAppModel: { "zh-CN": "保存应用与模型", "en-US": "Save App & Model" },
   actionCardTitle: { "zh-CN": "生成操作", "en-US": "Generation" },
@@ -191,18 +196,22 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   languageLabel: { "zh-CN": "界面语言", "en-US": "UI Language" },
   fontSizeLabel: { "zh-CN": "字体大小", "en-US": "Font Size" },
   fontSizeHint: {
-    "zh-CN": "拖动时仅预览数值，点击保存后应用到会话文字和输入区。",
-    "en-US": "Drag to preview; saving applies it to messages and the composer.",
+    "zh-CN": "拖动时即时预览主界面、会话、右栏和设置文字；保存后固化偏好。",
+    "en-US": "Drag to preview the app, chat, right rail, and settings text; save to keep it.",
   },
   storageLabel: { "zh-CN": "存储位置", "en-US": "Storage Location" },
   storageHint: {
-    "zh-CN": "模型 Key 和模型配置由 Rust 后端保存；当前使用系统 AppData，避免把密钥写入项目目录。",
-    "en-US": "Keys and model settings are stored by the Rust backend in system AppData.",
+    "zh-CN": "模型 Key 始终保存在系统 AppData；自动会话记忆包会按这里选择的位置保存。",
+    "en-US": "Model keys always stay in system AppData; automatic session memory bundles use this location.",
   },
   storageAppData: { "zh-CN": "系统 AppData（推荐）", "en-US": "System AppData (Recommended)" },
   storageProject: {
-    "zh-CN": "项目目录（仅记录偏好，后端暂不迁移密钥）",
-    "en-US": "Project directory (preference only; keys stay in AppData)",
+    "zh-CN": "项目目录（cadegg-sessions）",
+    "en-US": "Project directory (cadegg-sessions)",
+  },
+  autoExportSessionLabel: {
+    "zh-CN": "任务完成后自动保存会话记忆包",
+    "en-US": "Auto-save session memory bundle after tasks",
   },
   notificationsLabel: { "zh-CN": "通知", "en-US": "Notifications" },
   autoSyncLabel: { "zh-CN": "对象自动同步", "en-US": "Auto Sync Objects" },
@@ -231,6 +240,21 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
     "zh-CN": "轻量模型用于普通问答；强模型用于规划、出图、校核。请求失败时后端会自动切换。",
     "en-US": "Cheap models handle Q&A; strong models handle planning, drawing, and validation.",
   },
+  modelCostNote: {
+    "zh-CN": "模型列表只显式标注免费模型；未标注免费的一律按会消耗 Token/额度处理。",
+    "en-US": "Only free models are explicitly marked; unmarked models should be treated as token/credit consuming.",
+  },
+  failoverPoolTitle: { "zh-CN": "当前轮转池", "en-US": "Current Failover Pool" },
+  failoverPoolAvailable: {
+    "zh-CN": "可用供应商：{providers}",
+    "en-US": "Available providers: {providers}",
+  },
+  failoverPoolEmpty: {
+    "zh-CN": "暂无可用供应商：至少配置一个 API Key 后，轮转池才会生效。",
+    "en-US": "No providers are available: configure at least one API key to enable failover.",
+  },
+  providerConfigured: { "zh-CN": "已加入轮转池", "en-US": "In failover pool" },
+  providerMissingKey: { "zh-CN": "未配置 Key，轮转时会跳过", "en-US": "No key configured; skipped by failover" },
   baseUrlLabel: { "zh-CN": "API Base URL", "en-US": "API Base URL" },
   baseUrlHint: {
     "zh-CN": "兼容 OpenAI /chat/completions 的官方或中转地址。",
@@ -267,6 +291,24 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   conversations: { "zh-CN": "会话", "en-US": "Chats" },
   defaultModel: { "zh-CN": "默认模型", "en-US": "Default Model" },
   deleteSession: { "zh-CN": "删除会话", "en-US": "Delete Chat" },
+  exportSession: { "zh-CN": "导出会话", "en-US": "Export Session" },
+  exportSessionDone: { "zh-CN": "会话 Markdown 已导出", "en-US": "Session Markdown exported" },
+  exportSessionEmpty: { "zh-CN": "当前会话还没有可导出的内容", "en-US": "Current session has nothing to export" },
+  exportSessionFailed: { "zh-CN": "会话导出/保存失败：{error}", "en-US": "Session export/save failed: {error}" },
+  taskDuration: { "zh-CN": "任务耗时", "en-US": "Task Duration" },
+  taskRunning: { "zh-CN": "运行中", "en-US": "Running" },
+  taskPaused: { "zh-CN": "已暂停", "en-US": "Paused" },
+  noTaskDuration: { "zh-CN": "等待任务", "en-US": "Waiting" },
+  firstTokenLatency: { "zh-CN": "首响应", "en-US": "First Response" },
+  avgTokenGap: { "zh-CN": "平均片段间隔", "en-US": "Avg Chunk Gap" },
+  streamChunks: { "zh-CN": "流式片段", "en-US": "Stream Chunks" },
+  inputTokens: { "zh-CN": "输入 Token", "en-US": "Input Tokens" },
+  outputTokens: { "zh-CN": "输出 Token", "en-US": "Output Tokens" },
+  cacheReadTokens: { "zh-CN": "缓存命中", "en-US": "Cache Read" },
+  cacheWriteTokens: { "zh-CN": "缓存写入", "en-US": "Cache Write" },
+  reasoningTokens: { "zh-CN": "推理 Token", "en-US": "Reasoning Tokens" },
+  providerCalls: { "zh-CN": "模型调用", "en-US": "Provider Calls" },
+  estimatedContextTokens: { "zh-CN": "上下文估算", "en-US": "Context Estimate" },
   settingsNav: { "zh-CN": "设置", "en-US": "Settings" },
   minimizeWindow: { "zh-CN": "最小化", "en-US": "Minimize" },
   maximizeWindow: { "zh-CN": "最大化", "en-US": "Maximize" },
@@ -325,30 +367,23 @@ const PROVIDER_UI: Record<Provider, Record<"zh-CN" | "en-US", { label: string; s
 };
 
 const MODEL_UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
-  "glm-5.3": { "zh-CN": "GLM-5.3", "en-US": "GLM-5.3" },
   "glm-5.2": { "zh-CN": "GLM-5.2", "en-US": "GLM-5.2" },
   "glm-5.1": { "zh-CN": "GLM-5.1", "en-US": "GLM-5.1" },
-  "glm-5-plus": { "zh-CN": "GLM-5-Plus", "en-US": "GLM-5-Plus" },
+  "glm-5": { "zh-CN": "GLM-5", "en-US": "GLM-5" },
   "glm-5-turbo": { "zh-CN": "GLM-5-Turbo", "en-US": "GLM-5-Turbo" },
   "glm-4.7": { "zh-CN": "GLM-4.7", "en-US": "GLM-4.7" },
   "glm-4.7-flashx": { "zh-CN": "GLM-4.7-FlashX", "en-US": "GLM-4.7-FlashX" },
-  "glm-4.7-flash": { "zh-CN": "GLM-4.7-Flash", "en-US": "GLM-4.7-Flash" },
+  "glm-4.7-flash": { "zh-CN": "GLM-4.7-Flash（免费）", "en-US": "GLM-4.7-Flash (Free)" },
   "glm-4.6": { "zh-CN": "GLM-4.6", "en-US": "GLM-4.6" },
-  "glm-4.5": { "zh-CN": "GLM-4.5（付费）", "en-US": "GLM-4.5 (Paid)" },
+  "glm-4.5": { "zh-CN": "GLM-4.5", "en-US": "GLM-4.5" },
   "glm-4.5-air": { "zh-CN": "GLM-4.5-Air", "en-US": "GLM-4.5-Air" },
   "glm-4.5-airx": { "zh-CN": "GLM-4.5-AirX", "en-US": "GLM-4.5-AirX" },
   "glm-4.5-flash": { "zh-CN": "GLM-4.5-Flash（免费）", "en-US": "GLM-4.5-Flash (Free)" },
-  "glm-4-plus": { "zh-CN": "GLM-4-Plus（付费）", "en-US": "GLM-4-Plus (Paid)" },
-  "glm-4-air-250414": { "zh-CN": "GLM-4-Air-250414", "en-US": "GLM-4-Air-250414" },
-  "glm-4-long": { "zh-CN": "GLM-4-Long", "en-US": "GLM-4-Long" },
-  "glm-4-flash-250414": { "zh-CN": "GLM-4-Flash-250414", "en-US": "GLM-4-Flash-250414" },
+  "glm-4-flash-250414": { "zh-CN": "GLM-4-Flash-250414（免费）", "en-US": "GLM-4-Flash-250414 (Free)" },
   "glm-4-flashx-250414": { "zh-CN": "GLM-4-FlashX-250414", "en-US": "GLM-4-FlashX-250414" },
-  "glm-4-flash": { "zh-CN": "GLM-4-Flash（旧版）", "en-US": "GLM-4-Flash (Legacy)" },
   "deepseek-v4-pro": { "zh-CN": "DeepSeek V4 Pro", "en-US": "DeepSeek V4 Pro" },
   "deepseek-v4-flash": { "zh-CN": "DeepSeek V4 Flash", "en-US": "DeepSeek V4 Flash" },
-  "deepseek-chat": { "zh-CN": "DeepSeek Chat", "en-US": "DeepSeek Chat" },
   "qwen3.8-max": { "zh-CN": "通义千问 3.8 Max", "en-US": "Qwen 3.8 Max" },
-  "qwen3.8-max-preview": { "zh-CN": "通义千问 3.8 Max Preview", "en-US": "Qwen 3.8 Max Preview" },
   "qwen3.7-max": { "zh-CN": "通义千问 3.7 Max", "en-US": "Qwen 3.7 Max" },
   "qwen3.7-plus": { "zh-CN": "通义千问 3.7 Plus", "en-US": "Qwen 3.7 Plus" },
   "qwen3.7-flash": { "zh-CN": "通义千问 3.7 Flash", "en-US": "Qwen 3.7 Flash" },
@@ -365,7 +400,6 @@ const MODEL_UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   "qwen-turbo": { "zh-CN": "通义千问 Turbo", "en-US": "Qwen Turbo" },
   "kimi-k3": { "zh-CN": "Kimi K3", "en-US": "Kimi K3" },
   "kimi-k2.7-code": { "zh-CN": "Kimi K2.7 Code", "en-US": "Kimi K2.7 Code" },
-  "kimi-k2.7-code-highspeed": { "zh-CN": "Kimi K2.7 Code Highspeed", "en-US": "Kimi K2.7 Code Highspeed" },
   "kimi-k2.6": { "zh-CN": "Kimi K2.6", "en-US": "Kimi K2.6" },
   "kimi-k2.5": { "zh-CN": "Kimi K2.5", "en-US": "Kimi K2.5" },
   "moonshot-v1-8k": { "zh-CN": "Kimi 8K（旧版）", "en-US": "Kimi 8K (Legacy)" },
@@ -381,12 +415,28 @@ function modelDisplay(model: ModelOption, lang: "zh-CN" | "en-US") {
   return MODEL_UI[model.id]?.[lang] ?? model.label;
 }
 
-function starsForRating(rating: ModelRating) {
-  return `${"★".repeat(rating)}${"☆".repeat(5 - rating)}`;
+function modelTierDisplay(model: ModelOption, lang: "zh-CN" | "en-US") {
+  if (model.tier === "production") return lang === "zh-CN" ? "强模型" : "Strong";
+  if (model.tier === "limited") return lang === "zh-CN" ? "轻量/兼容" : "Light/Compat";
+  return lang === "zh-CN" ? "旧版/停用" : "Legacy";
 }
 
-function modelStarDisplay(model: ModelOption) {
-  return starsForRating(modelRating(model));
+function ratingStarStates(rating: ModelRating) {
+  return Array.from({ length: 5 }, (_, index) => {
+    const value = index + 1;
+    if (rating >= value) return "full";
+    if (rating >= value - 0.5) return "half";
+    return "empty";
+  });
+}
+
+function modelRatingCircleStates(rating: ModelRating) {
+  return ratingStarStates(rating);
+}
+
+function modelRatingById(provider: Provider, modelId: string): ModelRating | null {
+  const model = providerMeta(provider).models.find((item) => item.id === modelId);
+  return model ? modelRating(model) : null;
 }
 
 interface ChatSession {
@@ -401,11 +451,21 @@ interface ChatSession {
   demoLog: DemoLogEntry[];
   lastValidation: ElevatorValidation | null;
   lastDrawParams: Record<string, unknown> | null;
+  lastTaskDurationMs: number | null;
+  lastTokenTelemetry: TokenTelemetry | null;
 }
 
 interface StoredChatSessions {
   activeSessionId: string;
   sessions: ChatSession[];
+}
+
+interface SessionMemorySaveResult {
+  latestMarkdownPath: string;
+  summaryMarkdownPath: string;
+  eventsPath: string;
+  indexPath: string;
+  globalMemoryPath: string;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -464,11 +524,35 @@ function currentModelFor(settings: SettingsView, provider: Provider = settings.p
   );
 }
 
+const DEFAULT_SESSION_TITLE = "新会话";
+
+function displaySessionTitle(title: string, language: "zh-CN" | "en-US") {
+  const normalized = title.trim();
+  if (!normalized || normalized === DEFAULT_SESSION_TITLE || normalized === "New Session") {
+    return t("sessionTitle", language);
+  }
+  return title;
+}
+
+function providerKeyIsSet(settings: SettingsView, provider: Provider) {
+  const meta = providerMeta(provider);
+  return Boolean(settings[meta.keySetField]);
+}
+
+function failoverPoolText(settings: SettingsView, language: "zh-CN" | "en-US") {
+  const providers = MODEL_PROVIDERS
+    .filter((provider) => providerKeyIsSet(settings, provider.id))
+    .map((provider) => providerDisplay(provider.id, language, "short"));
+
+  if (providers.length === 0) return t("failoverPoolEmpty", language);
+  return t("failoverPoolAvailable", language, { providers: providers.join(" → ") });
+}
+
 function createChatSession(settings: SettingsView): ChatSession {
   const now = Date.now();
   return {
     id: makeId("session"),
-    title: "新会话",
+    title: DEFAULT_SESSION_TITLE,
     createdAt: now,
     updatedAt: now,
     provider: settings.provider,
@@ -478,13 +562,15 @@ function createChatSession(settings: SettingsView): ChatSession {
     demoLog: [],
     lastValidation: null,
     lastDrawParams: null,
+    lastTaskDurationMs: null,
+    lastTokenTelemetry: null,
   };
 }
 
 function sessionTitleFromMessages(messages: Message[]) {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
-  if (!lastUserMessage || !("content" in lastUserMessage)) return "新会话";
-  return lastUserMessage.content.replace(/\s+/g, " ").trim().slice(0, 28) || "新会话";
+  if (!lastUserMessage || !("content" in lastUserMessage)) return DEFAULT_SESSION_TITLE;
+  return lastUserMessage.content.replace(/\s+/g, " ").trim().slice(0, 28) || DEFAULT_SESSION_TITLE;
 }
 
 function normalizeChatSession(value: Partial<ChatSession>, fallback: ChatSession): ChatSession {
@@ -505,6 +591,433 @@ function normalizeChatSession(value: Partial<ChatSession>, fallback: ChatSession
     demoLog: Array.isArray(value.demoLog) ? (value.demoLog as DemoLogEntry[]) : [],
     lastValidation: value.lastValidation ?? null,
     lastDrawParams: value.lastDrawParams ?? null,
+    lastTaskDurationMs:
+      typeof value.lastTaskDurationMs === "number" ? value.lastTaskDurationMs : null,
+    lastTokenTelemetry:
+      value.lastTokenTelemetry && typeof value.lastTokenTelemetry === "object"
+        ? (value.lastTokenTelemetry as TokenTelemetry)
+        : null,
+  };
+}
+
+function formatMarkdownTime(value: number | string) {
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function formatDuration(ms: number | null | undefined) {
+  if (!ms || ms < 0) return "00:00";
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const tenths = Math.floor((ms % 1000) / 100);
+  if (minutes < 60) {
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${tenths}`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return `${hours}:${String(restMinutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatLatency(ms: number | null | undefined) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "n/a";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
+}
+
+function formatTokenCount(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+  return Math.round(value).toLocaleString();
+}
+
+function estimateTextTokens(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  if (!text) return 0;
+  return Math.ceil(text.length / 4) + 4;
+}
+
+function estimateSessionContextTokens(
+  messages: Message[],
+  objects: SessionObject[],
+  demoLog: DemoLogEntry[]
+) {
+  const messageTokens = messages.reduce((sum, message) => sum + estimateTextTokens(message), 0);
+  const objectTokens = objects
+    .slice(0, 20)
+    .reduce((sum, object) => sum + estimateTextTokens(object), 0);
+  const logTokens = demoLog
+    .slice(0, 8)
+    .reduce((sum, entry) => sum + estimateTextTokens(entry), 0);
+  return messageTokens + objectTokens + logTokens;
+}
+
+function safeMarkdownCell(value: unknown) {
+  return String(value ?? "")
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, " ");
+}
+
+function fencedJson(value: unknown) {
+  return `\`\`\`json\n${JSON.stringify(value ?? null, null, 2)}\n\`\`\``;
+}
+
+function markdownFilenamePart(value: string) {
+  return value
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 48) || "session";
+}
+
+function markdownMessage(message: Message, index: number) {
+  const lines = [`### ${index + 1}. ${message.role}`];
+  if (message.role === "user") {
+    lines.push("", message.content);
+  } else if (message.role === "assistant") {
+    if (message.text) lines.push("", message.text);
+    if (message.tool_calls.length > 0) {
+      lines.push("", "Tool calls:", "");
+      for (const call of message.tool_calls) {
+        lines.push(`- ${call.name} (${call.id})`, fencedJson(call.args));
+      }
+    }
+  } else if (message.role === "plan") {
+    if (message.text) lines.push("", message.text);
+    if (message.tool_calls.length > 0) {
+      lines.push("", "Planned tool calls:", "");
+      for (const call of message.tool_calls) {
+        lines.push(`- ${call.name} (${call.id})`, fencedJson(call.args));
+      }
+    }
+  } else {
+    lines.push("", `Tool: ${message.name}`, `Status: ${message.ok ? "ok" : "failed"}`);
+    if (message.content) lines.push("", message.content);
+    if (message.object_updates.length > 0) {
+      lines.push("", "Object updates:", fencedJson(message.object_updates));
+    }
+  }
+  return lines.join("\n");
+}
+
+function buildSessionMarkdown(session: ChatSession, language: "zh-CN" | "en-US") {
+  const title = displaySessionTitle(session.title, language);
+  const lines = [
+    `# CADEgg Session - ${title}`,
+    "",
+    "## Metadata",
+    "",
+    `- Session ID: ${session.id}`,
+    `- Created: ${formatMarkdownTime(session.createdAt)}`,
+    `- Updated: ${formatMarkdownTime(session.updatedAt)}`,
+    `- Provider: ${providerDisplay(session.provider, language, "label")}`,
+    `- Model: ${session.model}`,
+    `- Message Count: ${session.messages.length}`,
+    `- CAD Object Count: ${session.sessionObjects.length}`,
+    `- Last Task Duration: ${session.lastTaskDurationMs ? formatDuration(session.lastTaskDurationMs) : "n/a"}`,
+    `- First Response Latency: ${formatLatency(session.lastTokenTelemetry?.first_response_ms)}`,
+    `- Average Stream Chunk Gap: ${formatLatency(session.lastTokenTelemetry?.avg_chunk_gap_ms)}`,
+    `- Stream Chunk Count: ${session.lastTokenTelemetry?.chunk_count ?? "n/a"}`,
+    `- Input Tokens: ${formatTokenCount(session.lastTokenTelemetry?.input_tokens)}`,
+    `- Output Tokens: ${formatTokenCount(session.lastTokenTelemetry?.output_tokens)}`,
+    `- Cache Read Tokens: ${formatTokenCount(session.lastTokenTelemetry?.cache_read_tokens)}`,
+    `- Cache Write Tokens: ${formatTokenCount(session.lastTokenTelemetry?.cache_write_tokens)}`,
+    `- Reasoning Tokens: ${formatTokenCount(session.lastTokenTelemetry?.reasoning_tokens)}`,
+    `- Estimated Context Tokens: ${formatTokenCount(session.lastTokenTelemetry?.estimated_context_tokens)}`,
+    "",
+  ];
+
+  const firstUserMessage = session.messages.find((message) => message.role === "user");
+  if (firstUserMessage?.role === "user") {
+    lines.push("## Task", "", firstUserMessage.content, "");
+  }
+
+  if (session.lastDrawParams) {
+    lines.push("## Last Draw Parameters", "", fencedJson(session.lastDrawParams), "");
+  }
+
+  if (session.lastValidation) {
+    lines.push(
+      "## Last Validation",
+      "",
+      `- Result: ${session.lastValidation.ok ? "passed" : "failed"}`,
+      `- Issues: ${session.lastValidation.issues.length > 0 ? session.lastValidation.issues.join("; ") : "none"}`,
+      "",
+      "| Check | Passed |",
+      "| --- | --- |",
+      ...session.lastValidation.checks.map((check) => `| ${safeMarkdownCell(check.label)} | ${check.passed ? "yes" : "no"} |`),
+      "",
+      "Material table:",
+      fencedJson(session.lastValidation.material_table),
+      "",
+    );
+  }
+
+  lines.push("## CAD Objects", "");
+  if (session.sessionObjects.length === 0) {
+    lines.push("No CAD objects recorded for this session.", "");
+  } else {
+    lines.push("| Handle | Kind | Label | Source |", "| --- | --- | --- | --- |");
+    for (const object of session.sessionObjects) {
+      lines.push(
+        `| ${safeMarkdownCell(object.handle)} | ${safeMarkdownCell(object.kind)} | ${safeMarkdownCell(object.label)} | ${safeMarkdownCell(object.source ?? "session")} |`
+      );
+    }
+    lines.push("");
+  }
+
+  lines.push("## Task Log", "");
+  if (session.demoLog.length === 0) {
+    lines.push("No completed task log entries recorded.", "");
+  } else {
+    for (const entry of session.demoLog) {
+      lines.push(
+        `### ${formatMarkdownTime(entry.time)}`,
+        "",
+        `- User input: ${entry.user_input}`,
+        `- Tool calls: ${entry.tool_calls.join(", ") || "none"}`,
+        `- Duration: ${entry.duration_ms ? formatDuration(entry.duration_ms) : "n/a"}`,
+        `- First response: ${formatLatency(entry.token_telemetry?.first_response_ms)}`,
+        `- Avg chunk gap: ${formatLatency(entry.token_telemetry?.avg_chunk_gap_ms)}`,
+        `- Stream chunks: ${entry.token_telemetry?.chunk_count ?? "n/a"}`,
+        `- Input tokens: ${formatTokenCount(entry.token_telemetry?.input_tokens)}`,
+        `- Output tokens: ${formatTokenCount(entry.token_telemetry?.output_tokens)}`,
+        `- Cache read: ${formatTokenCount(entry.token_telemetry?.cache_read_tokens)}`,
+        `- Cache write: ${formatTokenCount(entry.token_telemetry?.cache_write_tokens)}`,
+        `- Reasoning tokens: ${formatTokenCount(entry.token_telemetry?.reasoning_tokens)}`,
+        `- Estimated context tokens: ${formatTokenCount(entry.token_telemetry?.estimated_context_tokens)}`,
+        `- Summary: ${entry.summary}`,
+        "",
+        "Parameters:",
+        fencedJson(entry.params),
+        "",
+      );
+      if (entry.validation) {
+        lines.push("Validation:", fencedJson(entry.validation), "");
+      }
+    }
+  }
+
+  lines.push("## Conversation", "");
+  if (session.messages.length === 0) {
+    lines.push("No messages recorded.", "");
+  } else {
+    lines.push(...session.messages.map((message, index) => markdownMessage(message, index)), "");
+  }
+
+  return lines.join("\n").replace(/\n{4,}/g, "\n\n\n");
+}
+
+function downloadMarkdown(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function sessionMarkdownFilename(title: string, language: "zh-CN" | "en-US") {
+  const displayTitle = displaySessionTitle(title, language);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `CADEgg-${markdownFilenamePart(displayTitle)}-${stamp}.md`;
+}
+
+function latestUserInput(session: ChatSession) {
+  const entry = session.demoLog[0];
+  if (entry?.user_input) return entry.user_input;
+  const message = [...session.messages].reverse().find((item) => item.role === "user");
+  return message?.role === "user" ? message.content : "";
+}
+
+function memoryKeywords(session: ChatSession) {
+  const source = [
+    session.title,
+    ...session.messages.map((message) =>
+      message.role === "user"
+        ? message.content
+        : message.role === "tool"
+          ? message.name
+          : message.text ?? ""
+    ),
+    ...session.demoLog.flatMap((entry) => [entry.user_input, entry.summary, ...entry.tool_calls]),
+    ...session.sessionObjects.flatMap((object) => [object.kind, object.label, object.source ?? ""]),
+  ].join(" ");
+  const tags = new Set<string>([
+    "CADEgg",
+    "AutoCAD",
+    providerMeta(session.provider).shortLabel,
+    session.model,
+  ]);
+
+  const keywordRules: Array<[string, string[]]> = [
+    ["电梯", ["电梯井口", "临边防护"]],
+    ["井口", ["电梯井口", "井口尺寸"]],
+    ["防护", ["施工安全", "防护门"]],
+    ["楼梯", ["双跑楼梯", "楼梯出图"]],
+    ["矩形", ["矩形", "基础绘图"]],
+    ["圆", ["圆", "基础绘图"]],
+    ["直线", ["直线", "基础绘图"]],
+    ["校核", ["安全校核"]],
+    ["材料表", ["材料表"]],
+  ];
+  for (const [needle, values] of keywordRules) {
+    if (source.includes(needle)) values.forEach((value) => tags.add(value));
+  }
+
+  for (const object of session.sessionObjects.slice(0, 12)) {
+    if (object.kind) tags.add(object.kind);
+    if (object.source) tags.add(object.source);
+  }
+  for (const entry of session.demoLog.slice(0, 8)) {
+    entry.tool_calls.forEach((tool) => tags.add(tool));
+  }
+
+  return Array.from(tags).filter(Boolean).slice(0, 24);
+}
+
+function buildSessionSummaryMarkdown(session: ChatSession, language: "zh-CN" | "en-US") {
+  const isZh = language === "zh-CN";
+  const title = displaySessionTitle(session.title, language);
+  const recentEntries = session.demoLog.slice(0, 8);
+  const objects = session.sessionObjects.slice(0, 20);
+  const keywords = memoryKeywords(session);
+  const lines = [
+    `# CADEgg Memory Summary - ${title}`,
+    "",
+    "## Session",
+    "",
+    `- Session ID: ${session.id}`,
+    `- Updated: ${formatMarkdownTime(session.updatedAt)}`,
+    `- Provider: ${providerDisplay(session.provider, language, "label")}`,
+    `- Model: ${session.model}`,
+    `- Message Count: ${session.messages.length}`,
+    `- CAD Object Count: ${session.sessionObjects.length}`,
+    `- Last User Input: ${latestUserInput(session) || "n/a"}`,
+    `- Last Task Duration: ${session.lastTaskDurationMs ? formatDuration(session.lastTaskDurationMs) : "n/a"}`,
+    `- First Response Latency: ${formatLatency(session.lastTokenTelemetry?.first_response_ms)}`,
+    `- Average Stream Chunk Gap: ${formatLatency(session.lastTokenTelemetry?.avg_chunk_gap_ms)}`,
+    `- Stream Chunk Count: ${session.lastTokenTelemetry?.chunk_count ?? "n/a"}`,
+    `- Input Tokens: ${formatTokenCount(session.lastTokenTelemetry?.input_tokens)}`,
+    `- Output Tokens: ${formatTokenCount(session.lastTokenTelemetry?.output_tokens)}`,
+    `- Cache Read Tokens: ${formatTokenCount(session.lastTokenTelemetry?.cache_read_tokens)}`,
+    `- Cache Write Tokens: ${formatTokenCount(session.lastTokenTelemetry?.cache_write_tokens)}`,
+    `- Reasoning Tokens: ${formatTokenCount(session.lastTokenTelemetry?.reasoning_tokens)}`,
+    `- Estimated Context Tokens: ${formatTokenCount(session.lastTokenTelemetry?.estimated_context_tokens)}`,
+    "",
+    "## Compact Memory",
+    "",
+  ];
+
+  if (recentEntries.length === 0) {
+    lines.push(isZh ? "- 暂无已完成任务。" : "- No completed task yet.");
+  } else {
+    for (const entry of recentEntries) {
+      lines.push(
+        `- ${formatMarkdownTime(entry.time)} | ${entry.user_input}`,
+        `  - ${isZh ? "结果" : "Result"}: ${entry.summary}`,
+        `  - ${isZh ? "工具" : "Tools"}: ${entry.tool_calls.join(", ") || "none"}`,
+        `  - ${isZh ? "耗时" : "Duration"}: ${entry.duration_ms ? formatDuration(entry.duration_ms) : "n/a"}`
+      );
+      if (entry.token_telemetry) {
+        lines.push(
+          `  - ${isZh ? "首响应" : "First response"}: ${formatLatency(entry.token_telemetry.first_response_ms)}`,
+          `  - ${isZh ? "平均片段间隔" : "Avg chunk gap"}: ${formatLatency(entry.token_telemetry.avg_chunk_gap_ms)}`,
+          `  - ${isZh ? "流式片段" : "Stream chunks"}: ${entry.token_telemetry.chunk_count}`,
+          `  - ${isZh ? "输入 Token" : "Input tokens"}: ${formatTokenCount(entry.token_telemetry.input_tokens)}`,
+          `  - ${isZh ? "输出 Token" : "Output tokens"}: ${formatTokenCount(entry.token_telemetry.output_tokens)}`,
+          `  - ${isZh ? "缓存命中" : "Cache read"}: ${formatTokenCount(entry.token_telemetry.cache_read_tokens)}`,
+          `  - ${isZh ? "缓存写入" : "Cache write"}: ${formatTokenCount(entry.token_telemetry.cache_write_tokens)}`,
+          `  - ${isZh ? "推理 Token" : "Reasoning tokens"}: ${formatTokenCount(entry.token_telemetry.reasoning_tokens)}`,
+          `  - ${isZh ? "上下文估算" : "Context estimate"}: ${formatTokenCount(entry.token_telemetry.estimated_context_tokens)}`
+        );
+      }
+      if (entry.validation) {
+        lines.push(
+          `  - ${isZh ? "校核" : "Validation"}: ${entry.validation.ok ? "passed" : "failed"}${
+            entry.validation.issues.length > 0 ? ` (${entry.validation.issues.join("; ")})` : ""
+          }`
+        );
+      }
+    }
+  }
+
+  lines.push("", "## CAD Object Snapshot", "");
+  if (objects.length === 0) {
+    lines.push(isZh ? "No CAD objects recorded." : "No CAD objects recorded.");
+  } else {
+    lines.push("| Handle | Kind | Label | Source |", "| --- | --- | --- | --- |");
+    for (const object of objects) {
+      lines.push(
+        `| ${safeMarkdownCell(object.handle)} | ${safeMarkdownCell(object.kind)} | ${safeMarkdownCell(object.label)} | ${safeMarkdownCell(object.source ?? "session")} |`
+      );
+    }
+    if (session.sessionObjects.length > objects.length) {
+      lines.push(`| ... | ... | ${session.sessionObjects.length - objects.length} more objects omitted | ... |`);
+    }
+  }
+
+  lines.push("", "## Retrieval Keywords", "", keywords.join(", ") || "n/a", "");
+  lines.push(
+    "## Note",
+    "",
+    isZh
+      ? "这是本地规则摘要，不是模型生成摘要。它用于后续检索候选，不应直接等同于完整会话记忆。"
+      : "This is a local rule-based summary, not a model-generated summary. It is a retrieval candidate, not the full session memory.",
+    ""
+  );
+
+  return lines.join("\n").replace(/\n{4,}/g, "\n\n\n");
+}
+
+function buildSessionMemoryEvent(session: ChatSession, eventKind: "task_completed" | "tool_confirmed") {
+  const latestEntry = session.demoLog[0];
+  return JSON.stringify({
+    schemaVersion: 1,
+    eventKind,
+    sessionId: session.id,
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    provider: session.provider,
+    model: session.model,
+    userInput: latestEntry?.user_input || latestUserInput(session) || "",
+    summary: latestEntry?.summary || "",
+    toolCalls: latestEntry?.tool_calls ?? [],
+    durationMs: latestEntry?.duration_ms ?? session.lastTaskDurationMs,
+    tokenTelemetry: latestEntry?.token_telemetry ?? session.lastTokenTelemetry,
+    validationOk: latestEntry?.validation?.ok ?? session.lastValidation?.ok ?? null,
+    cadObjectCount: session.sessionObjects.length,
+    cadObjects: session.sessionObjects.slice(0, 20),
+    keywords: memoryKeywords(session),
+  });
+}
+
+function buildSessionMemoryIndexEntry(session: ChatSession) {
+  const latestEntry = session.demoLog[0];
+  return {
+    schemaVersion: 1,
+    sessionId: session.id,
+    title: displaySessionTitle(session.title, "zh-CN"),
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    provider: session.provider,
+    model: session.model,
+    latestUserInput: latestEntry?.user_input || latestUserInput(session) || "",
+    latestSummary: latestEntry?.summary || "",
+    toolCalls: latestEntry?.tool_calls ?? [],
+    tokenTelemetry: latestEntry?.token_telemetry ?? session.lastTokenTelemetry,
+    validationOk: latestEntry?.validation?.ok ?? session.lastValidation?.ok ?? null,
+    messageCount: session.messages.length,
+    cadObjectCount: session.sessionObjects.length,
+    keywords: memoryKeywords(session),
+    relativePaths: {
+      latest: `sessions/${session.id}/latest.md`,
+      summary: `sessions/${session.id}/summary.md`,
+      events: `sessions/${session.id}/events.jsonl`,
+    },
   };
 }
 
@@ -550,6 +1063,20 @@ function normalizeGlassSettings(value: Partial<GlassSettings> & { opacity?: numb
   };
 }
 
+function appFontCssVariables(fontSize: number): CSSProperties {
+  const base = clamp(Math.round(fontSize), 11, 22);
+  return {
+    "--app-font-size": `${base}px`,
+    "--content-font-size": `${clamp(base, 11, 22)}px`,
+    "--small-font-size": `${clamp(base - 2, 10, 16)}px`,
+    "--tiny-font-size": `${clamp(base - 3, 9, 14)}px`,
+    "--panel-title-font-size": `${clamp(base + 1, 13, 20)}px`,
+    "--modal-title-font-size": `${clamp(base + 10, 20, 30)}px`,
+    "--hero-title-font-size": `${clamp(base + 38, 42, 58)}px`,
+    "--brand-font-size": `${clamp(base + 8, 20, 28)}px`,
+  } as CSSProperties;
+}
+
 function glassCssVariables(settings: GlassSettings, fontSize?: number): CSSProperties {
   const next = normalizeGlassSettings(settings);
   const transparency = clamp(next.transparency, 0, 90);
@@ -581,7 +1108,7 @@ function glassCssVariables(settings: GlassSettings, fontSize?: number): CSSPrope
   const textShadowStrength = clamp(1 - glassAlpha, 0, 0.75);
 
   return {
-    ...(typeof fontSize === "number" ? { "--content-font-size": `${fontSize}px` } : {}),
+    ...(typeof fontSize === "number" ? appFontCssVariables(fontSize) : {}),
     "--window-bg-alpha": glassAlpha.toFixed(2),
     "--glass-alpha": glassAlpha.toFixed(2),
     "--glass-alpha-soft": glassAlphaSoft.toFixed(2),
@@ -611,6 +1138,16 @@ function saveGlassSettingsNow(settings: GlassSettings) {
   window.localStorage.setItem(GLASS_STORAGE_KEY, JSON.stringify(normalizeGlassSettings(settings)));
 }
 
+function applyAppFontCssVariables(fontSize: number) {
+  if (typeof document === "undefined") return;
+  const app = document.querySelector<HTMLElement>(".cadegg-app");
+  if (!app) return;
+  const vars = appFontCssVariables(fontSize);
+  Object.entries(vars).forEach(([name, value]) => {
+    app.style.setProperty(name, String(value));
+  });
+}
+
 function applyGlassCssVariables(settings: GlassSettings) {
   if (typeof document === "undefined") return;
   const app = document.querySelector<HTMLElement>(".cadegg-app");
@@ -624,8 +1161,10 @@ function applyGlassCssVariables(settings: GlassSettings) {
 function normalizeAppPreferences(value: Partial<AppPreferences>): AppPreferences {
   return {
     language: value.language === "en-US" ? "en-US" : "zh-CN",
-    fontSize: clamp(Number(value.fontSize ?? DEFAULT_APP_PREFERENCES.fontSize), 12, 18),
+    fontSize: clamp(Number(value.fontSize ?? DEFAULT_APP_PREFERENCES.fontSize), 11, 22),
     storageLocation: value.storageLocation === "project" ? "project" : "appdata",
+    autoExportSessionMarkdown:
+      value.autoExportSessionMarkdown ?? DEFAULT_APP_PREFERENCES.autoExportSessionMarkdown,
     notifications: value.notifications ?? DEFAULT_APP_PREFERENCES.notifications,
     autoSyncObjects: value.autoSyncObjects ?? DEFAULT_APP_PREFERENCES.autoSyncObjects,
     alwaysOnTop: value.alwaysOnTop ?? DEFAULT_APP_PREFERENCES.alwaysOnTop,
@@ -684,10 +1223,13 @@ export default function App() {
     ...DEFAULT_VIEW,
   });
   const [sessions, setSessions] = useState<ChatSession[]>(initialSessions.sessions);
+  const sessionsRef = useRef<ChatSession[]>(initialSessions.sessions);
   const [activeSessionId, setActiveSessionId] = useState(initialSession.id);
+  const activeSessionIdRef = useRef(initialSession.id);
 
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>(initialSession.messages);
+  const messagesRef = useRef<Message[]>(initialSession.messages);
   const [assistantDraft, setAssistantDraft] = useState("");
   const [sessionObjects, setSessionObjects] = useState<SessionObject[]>(
     initialSession.sessionObjects
@@ -700,6 +1242,7 @@ export default function App() {
   const [deepseekKeyDraft, setDeepseekKeyDraft] = useState<string | null>(null);
   const [qwenKeyDraft, setQwenKeyDraft] = useState<string | null>(null);
   const [kimiKeyDraft, setKimiKeyDraft] = useState<string | null>(null);
+  const [settingsFocusProvider, setSettingsFocusProvider] = useState<Provider | null>(null);
 
   const [testStatus, setTestStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [undoing, setUndoing] = useState(false);
@@ -707,12 +1250,27 @@ export default function App() {
   const [importingSelection, setImportingSelection] = useState(false);
 
   const [demoLog, setDemoLog] = useState<DemoLogEntry[]>(initialSession.demoLog);
+  const demoLogRef = useRef<DemoLogEntry[]>(initialSession.demoLog);
   const [lastValidation, setLastValidation] = useState<ElevatorValidation | null>(
     initialSession.lastValidation
   );
+  const lastValidationRef = useRef<ElevatorValidation | null>(initialSession.lastValidation);
   const [lastDrawParams, setLastDrawParams] = useState<Record<string, unknown> | null>(
     initialSession.lastDrawParams
   );
+  const lastDrawParamsRef = useRef<Record<string, unknown> | null>(
+    initialSession.lastDrawParams
+  );
+  const [taskStartedAt, setTaskStartedAt] = useState<number | null>(null);
+  const [taskElapsedMs, setTaskElapsedMs] = useState(0);
+  const [lastTaskDurationMs, setLastTaskDurationMs] = useState<number | null>(
+    initialSession.lastTaskDurationMs
+  );
+  const lastTaskDurationMsRef = useRef<number | null>(initialSession.lastTaskDurationMs);
+  const [lastTokenTelemetry, setLastTokenTelemetry] = useState<TokenTelemetry | null>(
+    initialSession.lastTokenTelemetry
+  );
+  const lastTokenTelemetryRef = useRef<TokenTelemetry | null>(initialSession.lastTokenTelemetry);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const thinkingTraceRef = useRef<HTMLDivElement | null>(null);
@@ -725,6 +1283,21 @@ export default function App() {
   const pendingToolCallsRef = useRef<Record<string, ToolCall>>({});
   const completedToolIdsRef = useRef<Set<string>>(new Set());
   const preserveSelectedSessionTimestampRef = useRef<string | null>(initialSession.id);
+  const taskStartedAtRef = useRef<number | null>(null);
+  const modelRequestStartedAtRef = useRef<number | null>(null);
+  const firstResponseAtRef = useRef<number | null>(null);
+  const lastStreamChunkAtRef = useRef<number | null>(null);
+  const streamChunkIntervalsRef = useRef<number[]>([]);
+  const streamChunkCountRef = useRef(0);
+  const providerUsageRef = useRef({
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    calls: 0,
+    models: new Set<string>(),
+  });
   const [completedToolIds, setCompletedToolIds] = useState<Set<string>>(new Set());
   const lastUserInputRef = useRef("");
   const pendingLogRef = useRef<{
@@ -732,7 +1305,60 @@ export default function App() {
     params: Record<string, unknown>;
     validation: ElevatorValidation | null;
     summary: string;
+    startedAt: number | null;
   } | null>(null);
+
+  function setSessionsNow(next: SetStateAction<ChatSession[]>) {
+    const resolved =
+      typeof next === "function"
+        ? (next as (prev: ChatSession[]) => ChatSession[])(sessionsRef.current)
+        : next;
+    sessionsRef.current = resolved;
+    setSessions(resolved);
+  }
+
+  function setActiveSessionIdNow(id: string) {
+    activeSessionIdRef.current = id;
+    setActiveSessionId(id);
+  }
+
+  function setMessagesNow(next: SetStateAction<Message[]>) {
+    const resolved =
+      typeof next === "function"
+        ? (next as (prev: Message[]) => Message[])(messagesRef.current)
+        : next;
+    messagesRef.current = resolved;
+    setMessages(resolved);
+  }
+
+  function setDemoLogNow(next: SetStateAction<DemoLogEntry[]>) {
+    const resolved =
+      typeof next === "function"
+        ? (next as (prev: DemoLogEntry[]) => DemoLogEntry[])(demoLogRef.current)
+        : next;
+    demoLogRef.current = resolved;
+    setDemoLog(resolved);
+  }
+
+  function setLastValidationNow(next: ElevatorValidation | null) {
+    lastValidationRef.current = next;
+    setLastValidation(next);
+  }
+
+  function setLastDrawParamsNow(next: Record<string, unknown> | null) {
+    lastDrawParamsRef.current = next;
+    setLastDrawParams(next);
+  }
+
+  function setLastTaskDurationMsNow(next: number | null) {
+    lastTaskDurationMsRef.current = next;
+    setLastTaskDurationMs(next);
+  }
+
+  function setLastTokenTelemetryNow(next: TokenTelemetry | null) {
+    lastTokenTelemetryRef.current = next;
+    setLastTokenTelemetry(next);
+  }
 
   function tryParseValidation(content: string): ElevatorValidation | null {
     return parseValidationPayload(content);
@@ -756,6 +1382,189 @@ export default function App() {
     runTouchedObjectTableRef.current = false;
   }
 
+  function startTaskTimer() {
+    const now = Date.now();
+    taskStartedAtRef.current = now;
+    setTaskStartedAt(now);
+    setTaskElapsedMs(0);
+  }
+
+  function stopTaskTimer() {
+    const startedAt = taskStartedAtRef.current;
+    if (!startedAt) {
+      setTaskStartedAt(null);
+      return null;
+    }
+    const duration = Math.max(0, Date.now() - startedAt);
+    taskStartedAtRef.current = null;
+    setTaskStartedAt(null);
+    setTaskElapsedMs(duration);
+    setLastTaskDurationMsNow(duration);
+    return duration;
+  }
+
+  function startModelTelemetry() {
+    modelRequestStartedAtRef.current = Date.now();
+    firstResponseAtRef.current = null;
+    lastStreamChunkAtRef.current = null;
+    streamChunkIntervalsRef.current = [];
+    streamChunkCountRef.current = 0;
+    providerUsageRef.current = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      reasoning_tokens: 0,
+      calls: 0,
+      models: new Set<string>(),
+    };
+    setLastTokenTelemetryNow(null);
+  }
+
+  function recordModelResponseEvent(countChunk: boolean) {
+    const startedAt = modelRequestStartedAtRef.current;
+    if (!startedAt) return;
+
+    const now = Date.now();
+    if (!firstResponseAtRef.current) {
+      firstResponseAtRef.current = now;
+    }
+    if (countChunk) {
+      if (lastStreamChunkAtRef.current) {
+        streamChunkIntervalsRef.current.push(Math.max(0, now - lastStreamChunkAtRef.current));
+      }
+      lastStreamChunkAtRef.current = now;
+      streamChunkCountRef.current += 1;
+    }
+  }
+
+  function recordProviderUsage(usage: ProviderTokenUsage) {
+    const current = providerUsageRef.current;
+    current.input_tokens += usage.input_tokens;
+    current.output_tokens += usage.output_tokens;
+    current.cache_read_tokens += usage.cache_read_tokens ?? 0;
+    current.cache_write_tokens += usage.cache_write_tokens ?? 0;
+    current.reasoning_tokens += usage.reasoning_tokens ?? 0;
+    current.calls += 1;
+    current.models.add(`${usage.provider} / ${usage.model}`);
+  }
+
+  function finishModelTelemetry() {
+    const startedAt = modelRequestStartedAtRef.current;
+    if (!startedAt) return null;
+
+    const intervals = streamChunkIntervalsRef.current;
+    const firstResponseMs = firstResponseAtRef.current
+      ? Math.max(0, firstResponseAtRef.current - startedAt)
+      : undefined;
+    const avgChunkGapMs =
+      intervals.length > 0
+        ? intervals.reduce((sum, value) => sum + value, 0) / intervals.length
+        : undefined;
+    const maxChunkGapMs = intervals.length > 0 ? Math.max(...intervals) : undefined;
+    const telemetry: TokenTelemetry = {
+      started_at: startedAt,
+      first_response_ms: firstResponseMs,
+      avg_chunk_gap_ms: avgChunkGapMs,
+      max_chunk_gap_ms: maxChunkGapMs,
+      chunk_count: streamChunkCountRef.current,
+      input_tokens:
+        providerUsageRef.current.calls > 0 ? providerUsageRef.current.input_tokens : undefined,
+      output_tokens:
+        providerUsageRef.current.calls > 0 ? providerUsageRef.current.output_tokens : undefined,
+      cache_read_tokens:
+        providerUsageRef.current.calls > 0
+          ? providerUsageRef.current.cache_read_tokens
+          : undefined,
+      cache_write_tokens:
+        providerUsageRef.current.calls > 0
+          ? providerUsageRef.current.cache_write_tokens
+          : undefined,
+      reasoning_tokens:
+        providerUsageRef.current.calls > 0
+          ? providerUsageRef.current.reasoning_tokens
+          : undefined,
+      provider_calls:
+        providerUsageRef.current.calls > 0 ? providerUsageRef.current.calls : undefined,
+      provider_models:
+        providerUsageRef.current.calls > 0
+          ? Array.from(providerUsageRef.current.models)
+          : undefined,
+      estimated_context_tokens: estimateSessionContextTokens(
+        messagesRef.current,
+        sessionObjectsRef.current,
+        demoLogRef.current
+      ),
+    };
+
+    modelRequestStartedAtRef.current = null;
+    firstResponseAtRef.current = null;
+    lastStreamChunkAtRef.current = null;
+    streamChunkIntervalsRef.current = [];
+    streamChunkCountRef.current = 0;
+    setLastTokenTelemetryNow(telemetry);
+    return telemetry;
+  }
+
+  function currentSessionSnapshot(overrides: Partial<ChatSession> = {}): ChatSession {
+    const now = Date.now();
+    const currentId = activeSessionIdRef.current;
+    const baseSession = sessionsRef.current.find((session) => session.id === currentId);
+    const snapshotMessages = overrides.messages ?? messagesRef.current;
+    const provider = normalizeProvider(overrides.provider ?? baseSession?.provider ?? settings.provider);
+    const model = normalizeModelForProvider(
+      provider,
+      overrides.model ?? baseSession?.model,
+      currentModelFor(settings, provider)
+    );
+
+    return {
+      id: baseSession?.id ?? currentId,
+      title: overrides.title ?? sessionTitleFromMessages(snapshotMessages),
+      createdAt: baseSession?.createdAt ?? now,
+      updatedAt: overrides.updatedAt ?? now,
+      provider,
+      model,
+      messages: snapshotMessages,
+      sessionObjects: overrides.sessionObjects ?? sessionObjectsRef.current,
+      demoLog: overrides.demoLog ?? demoLogRef.current,
+      lastValidation: overrides.lastValidation ?? lastValidationRef.current,
+      lastDrawParams: overrides.lastDrawParams ?? lastDrawParamsRef.current,
+      lastTaskDurationMs: overrides.lastTaskDurationMs ?? lastTaskDurationMsRef.current,
+      lastTokenTelemetry: overrides.lastTokenTelemetry ?? lastTokenTelemetryRef.current,
+    };
+  }
+
+  function sessionHasExportableContent(session: ChatSession) {
+    return (
+      session.messages.length > 0 ||
+      session.sessionObjects.length > 0 ||
+      session.demoLog.length > 0
+    );
+  }
+
+  async function autoSaveSessionMemory(
+    snapshot: ChatSession,
+    eventKind: "task_completed" | "tool_confirmed"
+  ) {
+    const preferences = appPreferencesRef.current;
+    if (!preferences.autoExportSessionMarkdown || !sessionHasExportableContent(snapshot)) return;
+
+    try {
+      await invoke<SessionMemorySaveResult>("save_session_memory_bundle", {
+        sessionId: snapshot.id,
+        markdownContent: buildSessionMarkdown(snapshot, preferences.language),
+        summaryContent: buildSessionSummaryMarkdown(snapshot, preferences.language),
+        eventContent: buildSessionMemoryEvent(snapshot, eventKind),
+        indexEntry: buildSessionMemoryIndexEntry(snapshot),
+        location: preferences.storageLocation,
+      });
+    } catch (e) {
+      console.error("auto save session memory:", e);
+      setErrorMsg(t("exportSessionFailed", preferences.language, { error: String(e) }));
+    }
+  }
+
   async function refreshSettings() {
     try {
       const s = await invoke<SettingsView>("get_settings");
@@ -771,6 +1580,29 @@ export default function App() {
 
   useEffect(() => {
     refreshSettings();
+  }, []);
+
+  useEffect(() => {
+    if (!taskStartedAt) return;
+    const timer = window.setInterval(() => {
+      setTaskElapsedMs(Math.max(0, Date.now() - taskStartedAt));
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, [taskStartedAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTestStatus({ ok: true, msg: "Bridge 自动检测中..." });
+    invoke<string>("test_cad_connection")
+      .then((msg) => {
+        if (!cancelled) setTestStatus({ ok: true, msg });
+      })
+      .catch((e) => {
+        if (!cancelled) setTestStatus({ ok: false, msg: String(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -813,7 +1645,7 @@ export default function App() {
     if (preserveTimestampFor === activeSessionId) {
       preserveSelectedSessionTimestampRef.current = null;
     }
-    setSessions((prev) =>
+    setSessionsNow((prev) =>
       prev
         .map((session) =>
           session.id === activeSessionId
@@ -826,6 +1658,8 @@ export default function App() {
                 demoLog,
                 lastValidation,
                 lastDrawParams,
+                lastTaskDurationMs,
+                lastTokenTelemetry,
               }
             : session
         )
@@ -838,6 +1672,8 @@ export default function App() {
     demoLog,
     lastValidation,
     lastDrawParams,
+    lastTaskDurationMs,
+    lastTokenTelemetry,
   ]);
 
   useEffect(() => {
@@ -854,9 +1690,13 @@ export default function App() {
     listen<AgentEvent>("agent:event", (ev) => {
       const e = ev.payload;
       if (e.kind === "assistant_trace" || e.kind === "assistant_delta") {
+        recordModelResponseEvent(true);
         assistantDraftRef.current += e.delta;
         setAssistantDraft(assistantDraftRef.current);
+      } else if (e.kind === "usage") {
+        recordProviderUsage(e.usage);
       } else if (e.kind === "assistant") {
+        recordModelResponseEvent(Boolean(e.text || e.tool_calls.length > 0));
         for (const call of e.tool_calls) {
           pendingToolCallsRef.current[call.id] = call;
           if (pendingLogRef.current) {
@@ -868,7 +1708,7 @@ export default function App() {
           assistantDraftRef.current = "";
           setAssistantDraft("");
         }
-        setMessages((prev) => [
+        setMessagesNow((prev) => [
           ...prev,
           e.tool_calls.length > 0
             ? { role: "plan", text: e.text, tool_calls: e.tool_calls }
@@ -887,7 +1727,7 @@ export default function App() {
         if (e.result.name === "validate_elevator_shaft_protection") {
           const validation = tryParseValidation(e.result.content);
           if (validation) {
-            setLastValidation(validation);
+            setLastValidationNow(validation);
             if (pendingLogRef.current) {
               pendingLogRef.current.validation = validation;
             }
@@ -896,7 +1736,7 @@ export default function App() {
         if (e.result.name === "draw_elevator_shaft_protection") {
           if (e.result.ok) {
             const call = pendingToolCallsRef.current[e.result.id];
-            if (call) setLastDrawParams(call.args);
+            if (call) setLastDrawParamsNow(call.args);
           }
           if (pendingLogRef.current) {
             pendingLogRef.current.summary = e.result.ok
@@ -904,7 +1744,7 @@ export default function App() {
               : `绘图失败：${e.result.content}`;
           }
         }
-        setMessages((prev) => [
+        setMessagesNow((prev) => [
           ...prev,
           { role: "tool", ...e.result, pending_call: pendingCall },
         ]);
@@ -920,13 +1760,15 @@ export default function App() {
           assistantDraftRef.current = "";
           setAssistantDraft("");
         }
+        const taskDuration = stopTaskTimer();
+        const tokenTelemetry = finishModelTelemetry();
         commitUndoSnapshotIfNeeded();
         const pending = pendingLogRef.current;
         pendingLogRef.current = null;
         if (pending && pending.toolCalls.length > 0) {
           if (!e.text.trim()) {
             const summary = completionSummary(pending, appPreferencesRef.current.language);
-            setMessages((prev) => [...prev, { role: "assistant", text: summary, tool_calls: [] }]);
+            setMessagesNow((prev) => [...prev, { role: "assistant", text: summary, tool_calls: [] }]);
           }
           const entry: DemoLogEntry = {
             time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
@@ -935,18 +1777,36 @@ export default function App() {
             params: pending.params,
             validation: pending.validation ?? undefined,
             summary: pending.summary || "完成",
+            duration_ms: taskDuration ?? undefined,
+            token_telemetry: tokenTelemetry ?? undefined,
           };
-          setDemoLog((prev) => [entry, ...prev].slice(0, 30));
+          setDemoLogNow((prev) => [entry, ...prev].slice(0, 30));
         }
         const shouldPostRunSync = pendingPostRunSyncRef.current;
         pendingPostRunSyncRef.current = false;
         if (shouldPostRunSync) {
           void (async () => {
             await syncSessionObjects(false);
+            await autoSaveSessionMemory(
+              currentSessionSnapshot({
+                lastTaskDurationMs: taskDuration ?? lastTaskDurationMsRef.current,
+                lastTokenTelemetry: tokenTelemetry ?? lastTokenTelemetryRef.current,
+              }),
+              "task_completed"
+            );
             setSending(false);
           })();
         } else {
-          setSending(false);
+          void (async () => {
+            await autoSaveSessionMemory(
+              currentSessionSnapshot({
+                lastTaskDurationMs: taskDuration ?? lastTaskDurationMsRef.current,
+                lastTokenTelemetry: tokenTelemetry ?? lastTokenTelemetryRef.current,
+              }),
+              "task_completed"
+            );
+            setSending(false);
+          })();
         }
       } else if (e.kind === "error") {
         if (assistantDraftRef.current) {
@@ -956,8 +1816,13 @@ export default function App() {
         commitUndoSnapshotIfNeeded();
         pendingPostRunSyncRef.current = false;
         setErrorMsg(e.message);
+        stopTaskTimer();
+        finishModelTelemetry();
         setSending(false);
-        if (e.message.includes("API Key")) setView("settings");
+        if (e.message.includes("API Key")) {
+          const session = sessionsRef.current.find((item) => item.id === activeSessionIdRef.current);
+          openSettingsForProvider(normalizeProvider(session?.provider ?? settings.provider), true);
+        }
       }
     }).then((fn) => {
       if (cancelled) fn();
@@ -987,6 +1852,8 @@ export default function App() {
         setAppPreferences(DEFAULT_APP_PREFERENCES);
         setErrorMsg("外观与字体设置已重置");
       } else if (e.key === "Escape" && (view === "settings" || view === "help")) {
+        applyAppFontCssVariables(appPreferences.fontSize);
+        setSettingsFocusProvider(null);
         setView("chat");
       }
     }
@@ -1000,12 +1867,14 @@ export default function App() {
     const text = input.trim();
     if (!text || sending) return;
 
-    const newHistory: Message[] = [...messages, { role: "user", content: text }];
-    setMessages(newHistory);
+    const previousMessages = messagesRef.current;
+    const newHistory: Message[] = [...previousMessages, { role: "user", content: text }];
+    setMessagesNow(newHistory);
     setInput("");
     assistantDraftRef.current = "";
     setAssistantDraft("");
     setSending(true);
+    startTaskTimer();
     setErrorMsg(null);
     completedToolIdsRef.current = new Set();
     setCompletedToolIds(new Set());
@@ -1015,6 +1884,7 @@ export default function App() {
       if (syncedObjects.length > 0) {
         const latest = await syncSessionObjects(false);
         if (latest === null) {
+          stopTaskTimer();
           setSending(false);
           return;
         }
@@ -1030,12 +1900,14 @@ export default function App() {
         params: {},
         validation: null,
         summary: "",
+        startedAt: taskStartedAtRef.current,
       };
 
       // run_agent emits agent:event for each step; resolve only means the backend loop ended.
+      startModelTelemetry();
       await invoke("run_agent", {
         userInput: text,
-        history: buildHistoryPayload(messages),
+        history: buildHistoryPayload(previousMessages),
         sessionObjects: syncedObjects,
         modelSelection: {
           provider: activeProvider,
@@ -1047,6 +1919,8 @@ export default function App() {
       runTouchedObjectTableRef.current = false;
       pendingPostRunSyncRef.current = false;
       setErrorMsg(String(e));
+      stopTaskTimer();
+      finishModelTelemetry();
       setSending(false);
     }
   }
@@ -1085,7 +1959,7 @@ export default function App() {
   }
 
   async function runCadAction(cmd: "test_cad_connection" | "draw_test_line") {
-    setTestStatus({ ok: true, msg: "执行中..." });
+    setTestStatus({ ok: true, msg: cmd === "test_cad_connection" ? "Bridge 检测中..." : "执行中..." });
     try {
       const msg = await invoke<string>(cmd);
       setTestStatus({ ok: true, msg });
@@ -1177,7 +2051,7 @@ export default function App() {
     try {
       const msg = await invoke<string>("undo_last_generation");
       setTestStatus({ ok: true, msg });
-      setMessages((prev) => [...prev, { role: "assistant", text: msg, tool_calls: [] }]);
+      setMessagesNow((prev) => [...prev, { role: "assistant", text: msg, tool_calls: [] }]);
       const snapshot = undoSnapshotsRef.current.pop();
       if (snapshot) {
         updateSessionObjects(snapshot);
@@ -1195,7 +2069,9 @@ export default function App() {
   async function handleConfirmToolCall(messageIndex: number, call: ToolCall) {
     if (sending || undoing || syncingObjects || importingSelection) return;
     setSending(true);
+    startTaskTimer();
     setErrorMsg(null);
+    let shouldAutoSave = false;
     try {
       const result = await invoke<{
         id: string;
@@ -1206,7 +2082,7 @@ export default function App() {
         object_updates: ObjectUpdate[];
       }>("confirm_tool_call", { call });
 
-      setMessages((prev) =>
+      setMessagesNow((prev) =>
         prev
           .map((message, index) =>
             index === messageIndex && message.role === "tool"
@@ -1225,9 +2101,19 @@ export default function App() {
       if (result.ok && shouldAutoSyncObjectTable(result.name) && appPreferencesRef.current.autoSyncObjects) {
         await syncSessionObjects(false);
       }
+      shouldAutoSave = true;
     } catch (e) {
       setErrorMsg(String(e));
     } finally {
+      const taskDuration = stopTaskTimer();
+      if (shouldAutoSave) {
+        await autoSaveSessionMemory(
+          currentSessionSnapshot({
+            lastTaskDurationMs: taskDuration ?? lastTaskDurationMsRef.current,
+          }),
+          "tool_confirmed"
+        );
+      }
       setSending(false);
     }
   }
@@ -1242,14 +2128,24 @@ export default function App() {
     pendingUndoSnapshotRef.current = null;
     runTouchedObjectTableRef.current = false;
     pendingPostRunSyncRef.current = false;
+    taskStartedAtRef.current = null;
+    modelRequestStartedAtRef.current = null;
+    firstResponseAtRef.current = null;
+    lastStreamChunkAtRef.current = null;
+    streamChunkIntervalsRef.current = [];
+    streamChunkCountRef.current = 0;
+    setTaskStartedAt(null);
+    setTaskElapsedMs(0);
+    setLastTaskDurationMsNow(session.lastTaskDurationMs);
+    setLastTokenTelemetryNow(session.lastTokenTelemetry);
     sessionObjectsRef.current = session.sessionObjects;
-    setActiveSessionId(session.id);
-    setMessages(session.messages);
+    setActiveSessionIdNow(session.id);
+    setMessagesNow(session.messages);
     setAssistantDraft("");
     setSessionObjects(session.sessionObjects);
-    setDemoLog(session.demoLog);
-    setLastValidation(session.lastValidation);
-    setLastDrawParams(session.lastDrawParams);
+    setDemoLogNow(session.demoLog);
+    setLastValidationNow(session.lastValidation);
+    setLastDrawParamsNow(session.lastDrawParams);
     setInput("");
     setErrorMsg(null);
   }
@@ -1257,34 +2153,51 @@ export default function App() {
   function handleNewConversation() {
     if (sending) return;
     const session = createChatSession(settings);
-    setSessions((prev) => [session, ...prev]);
+    setSessionsNow((prev) => [session, ...prev]);
     applySession(session);
   }
 
   function handleSelectSession(id: string) {
-    if (sending || id === activeSessionId) return;
-    const session = sessions.find((item) => item.id === id);
+    if (sending || id === activeSessionIdRef.current) return;
+    const session = sessionsRef.current.find((item) => item.id === id);
     if (session) applySession(session, true);
   }
 
   function handleDeleteSession(id: string) {
     if (sending) return;
-    const remaining = sessions.filter((session) => session.id !== id);
+    const remaining = sessionsRef.current.filter((session) => session.id !== id);
     if (remaining.length > 0) {
-      setSessions(remaining);
-      if (id === activeSessionId) applySession(remaining[0], true);
+      setSessionsNow(remaining);
+      if (id === activeSessionIdRef.current) applySession(remaining[0], true);
       return;
     }
     const next = createChatSession(settings);
-    setSessions([next]);
+    setSessionsNow([next]);
     applySession(next);
+  }
+
+  function handleExportCurrentSession() {
+    const exportSession = currentSessionSnapshot({ updatedAt: Date.now() });
+
+    if (!sessionHasExportableContent(exportSession)) {
+      setErrorMsg(t("exportSessionEmpty", appPreferences.language));
+      return;
+    }
+
+    try {
+      const filename = sessionMarkdownFilename(exportSession.title, appPreferences.language);
+      downloadMarkdown(filename, buildSessionMarkdown(exportSession, appPreferences.language));
+      setErrorMsg(t("exportSessionDone", appPreferences.language));
+    } catch (e) {
+      setErrorMsg(t("exportSessionFailed", appPreferences.language, { error: String(e) }));
+    }
   }
 
   async function handleModelChange(provider: Provider, model: string) {
     const nextModel = normalizeModelForProvider(provider, model, currentModelFor(settings, provider));
-    setSessions((prev) =>
+    setSessionsNow((prev) =>
       prev.map((s) =>
-        s.id === activeSessionId
+        s.id === activeSessionIdRef.current
           ? { ...s, provider, model: nextModel, updatedAt: Date.now() }
           : s,
       ),
@@ -1332,6 +2245,26 @@ export default function App() {
     }
   }
 
+  function setKeyDraftForProvider(provider: Provider, draft: string | null) {
+    if (provider === "deepseek") {
+      setDeepseekKeyDraft(draft);
+    } else if (provider === "qwen") {
+      setQwenKeyDraft(draft);
+    } else if (provider === "kimi") {
+      setKimiKeyDraft(draft);
+    } else {
+      setGlmKeyDraft(draft);
+    }
+  }
+
+  function openSettingsForProvider(provider?: Provider, editKey = false) {
+    setSettingsFocusProvider(provider ?? null);
+    if (provider && editKey) {
+      setKeyDraftForProvider(provider, "");
+    }
+    setView("settings");
+  }
+
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const activeProvider = normalizeProvider(activeSession?.provider ?? settings.provider);
   const activeModel = normalizeModelForProvider(
@@ -1341,10 +2274,18 @@ export default function App() {
   );
   const selectedProviderMeta = providerMeta(activeProvider);
   const providerLabel = providerDisplay(activeProvider, appPreferences.language, "short");
-  const bridgeState =
-    testStatus === null ? "idle" : testStatus.ok ? "online" : "error";
+  const bridgeChecking = Boolean(
+    testStatus?.msg.includes("检测中") || testStatus?.msg.includes("执行中")
+  );
+  const bridgeState = testStatus === null || bridgeChecking ? "idle" : testStatus.ok ? "online" : "error";
   const bridgeLabel =
-    bridgeState === "online" ? t("bridgeOnline", appPreferences.language) : bridgeState === "error" ? t("bridgeError", appPreferences.language) : t("bridgeIdle", appPreferences.language);
+    bridgeChecking
+      ? t("bridgeChecking", appPreferences.language)
+      : bridgeState === "online"
+        ? t("bridgeOnline", appPreferences.language)
+        : bridgeState === "error"
+          ? t("bridgeError", appPreferences.language)
+          : t("bridgeIdle", appPreferences.language);
   const objectReferenceHints = getObjectReferenceHints(sessionObjects);
   const currentKeySet = Boolean(settings[selectedProviderMeta.keySetField]);
   const quickPromptsZh = [
@@ -1383,8 +2324,12 @@ export default function App() {
           </div>
         </div>
 
-        <div className="session-title drag-zone" title={sessionTitle} onMouseDown={handleWindowDrag}>
-          {sessionTitle}
+        <div
+          className="session-title drag-zone"
+          title={displaySessionTitle(sessionTitle, appPreferences.language)}
+          onMouseDown={handleWindowDrag}
+        >
+          {displaySessionTitle(sessionTitle, appPreferences.language)}
         </div>
 
         <div className="topbar-actions" data-no-drag>
@@ -1438,45 +2383,65 @@ export default function App() {
 
           <div className="sidebar-section">
             <div className="section-label">{t("conversations", appPreferences.language)}</div>
-            {sessions.map((session) => (
-              <button
-                type="button"
-                className={`session-card ${session.id === activeSessionId ? "active" : ""}`}
-                onClick={() => handleSelectSession(session.id)}
-                key={session.id}
-              >
-                <strong>{session.title}</strong>
-                <span>
-                  {providerDisplay(session.provider, appPreferences.language, "short")} ·{" "}
-                  {session.model || t("defaultModel", appPreferences.language)}
-                </span>
-                {sessions.length > 1 && (
-                  <i
-                    role="button"
-                    tabIndex={0}
-                    aria-label={t("deleteSession", appPreferences.language)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSession(session.id);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
+            {sessions.map((session) => {
+              const sessionRating = modelRatingById(session.provider, session.model);
+              return (
+                <button
+                  type="button"
+                  className={`session-card ${session.id === activeSessionId ? "active" : ""}`}
+                  onClick={() => handleSelectSession(session.id)}
+                  key={session.id}
+                >
+                  <strong>{displaySessionTitle(session.title, appPreferences.language)}</strong>
+                  <span>
+                    {providerDisplay(session.provider, appPreferences.language, "short")} ·{" "}
+                    {session.model || t("defaultModel", appPreferences.language)}
+                    {sessionRating && (
+                      <>
+                        {" · "}
+                        <ModelRatingCircles rating={sessionRating} />
+                      </>
+                    )}
+                  </span>
+                  {sessions.length > 1 && (
+                    <i
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t("deleteSession", appPreferences.language)}
+                      onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteSession(session.id);
-                      }
-                    }}
-                  >
-                    ×
-                  </i>
-                )}
-              </button>
-            ))}
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDeleteSession(session.id);
+                        }
+                      }}
+                    >
+                      ×
+                    </i>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <div className="sidebar-spacer" />
 
-          <button type="button" className="sidebar-settings" onClick={() => setView("settings")}>
+          <button
+            type="button"
+            className="sidebar-settings"
+            onClick={handleExportCurrentSession}
+            disabled={sending}
+          >
+            <IconDownload />
+            <span>{t("exportSession", appPreferences.language)}</span>
+            <span>.md</span>
+          </button>
+
+          <button type="button" className="sidebar-settings" onClick={() => openSettingsForProvider()}>
             <IconGear />
             <span>{t("settingsNav", appPreferences.language)}</span>
             <span>v0.3.4</span>
@@ -1491,7 +2456,7 @@ export default function App() {
                 setInput={setInput}
                 currentKeySet={currentKeySet}
                 providerLabel={providerLabel}
-                onOpenSettings={() => setView("settings")}
+                onOpenSettings={() => openSettingsForProvider(activeProvider, !currentKeySet)}
                 language={appPreferences.language}
               />
             ) : (
@@ -1521,7 +2486,7 @@ export default function App() {
               currentKeySet={currentKeySet}
               onModelChange={handleModelChange}
               onAutoFailoverChange={handleAutoFailoverChange}
-              onOpenSettings={() => setView("settings")}
+              onOpenSettings={() => openSettingsForProvider(activeProvider, !currentKeySet)}
               language={appPreferences.language}
             />
             <div className="composer-hint">{t("composerHint", appPreferences.language)}</div>
@@ -1561,6 +2526,10 @@ export default function App() {
             sending={sending}
             undoing={undoing}
             syncingObjects={syncingObjects}
+            taskElapsedMs={taskElapsedMs}
+            taskStartedAt={taskStartedAt}
+            lastTaskDurationMs={lastTaskDurationMs}
+            lastTokenTelemetry={lastTokenTelemetry}
             language={appPreferences.language}
           />
           <DrawResultCard lastDrawParams={lastDrawParams} language={appPreferences.language} />
@@ -1597,7 +2566,11 @@ export default function App() {
           runCadAction={runCadAction}
           handleImportSelectedObjects={handleImportSelectedObjects}
           syncSessionObjects={syncSessionObjects}
-          onClose={() => setView("chat")}
+          focusedProvider={settingsFocusProvider}
+          onClose={() => {
+            setSettingsFocusProvider(null);
+            setView("chat");
+          }}
         />
       )}
 
@@ -1606,6 +2579,106 @@ export default function App() {
           language={appPreferences.language}
           onClose={() => setView("chat")}
         />
+      )}
+    </div>
+  );
+}
+
+function ModelRatingCircles({
+  rating,
+  className,
+}: {
+  rating: ModelRating;
+  className?: string;
+}) {
+  return (
+    <span className={className ? `circle-rating ${className}` : "circle-rating"} aria-label={`${rating}/5`}>
+      {modelRatingCircleStates(rating).map((state, index) => (
+        <span className={`rating-circle ${state}`} key={index} aria-hidden="true" />
+      ))}
+    </span>
+  );
+}
+
+function ModelSelect({
+  models,
+  value,
+  onChange,
+  language,
+  ariaLabel,
+}: {
+  models: ModelOption[];
+  value: string;
+  onChange: (model: string) => void;
+  language: "zh-CN" | "en-US";
+  ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = models.find((item) => item.id === value);
+  const selectedRating = selected ? modelRating(selected) : null;
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(e: PointerEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className={`model-select ${open ? "open" : ""}`} ref={rootRef}>
+      <button
+        type="button"
+        className="model-select-button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span>{selected ? modelDisplay(selected, language) : value}</span>
+        {selectedRating && <ModelRatingCircles rating={selectedRating} />}
+        <em>{selected ? modelTierDisplay(selected, language) : "Custom"}</em>
+      </button>
+
+      {open && (
+        <div className="model-select-options" role="listbox" aria-label={ariaLabel}>
+          {models.map((item) => {
+            const rating = modelRating(item);
+            return (
+              <button
+                type="button"
+                className={`model-select-option ${item.id === value ? "selected" : ""}`}
+                role="option"
+                aria-selected={item.id === value}
+                key={item.id}
+                onClick={() => {
+                  onChange(item.id);
+                  setOpen(false);
+                }}
+              >
+                <span>{modelDisplay(item, language)}</span>
+                <ModelRatingCircles rating={rating} />
+                <em>{modelTierDisplay(item, language)}</em>
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -1631,7 +2704,6 @@ function ModelPicker({
   language: "zh-CN" | "en-US";
 }) {
   const meta = providerMeta(provider);
-  const hasPreset = meta.models.some((item) => item.id === model);
 
   return (
     <div className="model-picker" data-no-drag>
@@ -1652,22 +2724,13 @@ function ModelPicker({
         ))}
       </select>
 
-      <select
-        aria-label={t("sessionModelAria", language)}
-        value={hasPreset ? model : "__custom"}
-        onChange={(e) => {
-          if (e.target.value !== "__custom") {
-            void onModelChange(provider, e.target.value);
-          }
-        }}
-      >
-        {!hasPreset && <option value="__custom">{model}</option>}
-        {meta.models.map((item) => (
-          <option key={item.id} value={item.id}>
-            {modelDisplay(item, language)} · {modelStarDisplay(item)}
-          </option>
-        ))}
-      </select>
+      <ModelSelect
+        ariaLabel={t("sessionModelAria", language)}
+        models={meta.models}
+        value={model}
+        onChange={(nextModel) => void onModelChange(provider, nextModel)}
+        language={language}
+      />
 
       <button
         type="button"
@@ -1737,19 +2800,55 @@ function GenerationActionsCard({
   undoing,
   sending,
   syncingObjects,
+  taskElapsedMs,
+  taskStartedAt,
+  lastTaskDurationMs,
+  lastTokenTelemetry,
   handleUndoLastGeneration,
   language,
 }: {
   undoing: boolean;
   sending: boolean;
   syncingObjects: boolean;
+  taskElapsedMs: number;
+  taskStartedAt: number | null;
+  lastTaskDurationMs: number | null;
+  lastTokenTelemetry: TokenTelemetry | null;
   handleUndoLastGeneration: () => Promise<void>;
   language: "zh-CN" | "en-US";
 }) {
+  const visibleDuration = taskStartedAt ? taskElapsedMs : lastTaskDurationMs;
   return (
     <section className="rail-card action-card">
       <PanelHeader title={t("actionCardTitle", language)} />
       <p>{t("actionCardDesc", language)}</p>
+      <div className={`task-duration ${taskStartedAt ? "running" : "paused"}`}>
+        <span>{t("taskDuration", language)}</span>
+        <strong>{visibleDuration ? formatDuration(visibleDuration) : t("noTaskDuration", language)}</strong>
+        <em>{taskStartedAt ? t("taskRunning", language) : t("taskPaused", language)}</em>
+      </div>
+    <div className="token-telemetry">
+      <span>{t("firstTokenLatency", language)}</span>
+      <b>{formatLatency(lastTokenTelemetry?.first_response_ms)}</b>
+      <span>{t("avgTokenGap", language)}</span>
+      <b>{formatLatency(lastTokenTelemetry?.avg_chunk_gap_ms)}</b>
+      <span>{t("streamChunks", language)}</span>
+      <b>{lastTokenTelemetry?.chunk_count ?? "n/a"}</b>
+      <span>{t("inputTokens", language)}</span>
+      <b>{formatTokenCount(lastTokenTelemetry?.input_tokens)}</b>
+      <span>{t("outputTokens", language)}</span>
+      <b>{formatTokenCount(lastTokenTelemetry?.output_tokens)}</b>
+      <span>{t("cacheReadTokens", language)}</span>
+      <b>{formatTokenCount(lastTokenTelemetry?.cache_read_tokens)}</b>
+      <span>{t("cacheWriteTokens", language)}</span>
+      <b>{formatTokenCount(lastTokenTelemetry?.cache_write_tokens)}</b>
+      <span>{t("reasoningTokens", language)}</span>
+      <b>{formatTokenCount(lastTokenTelemetry?.reasoning_tokens)}</b>
+      <span>{t("providerCalls", language)}</span>
+      <b>{lastTokenTelemetry?.provider_calls ?? "n/a"}</b>
+      <span>{t("estimatedContextTokens", language)}</span>
+      <b>{formatTokenCount(lastTokenTelemetry?.estimated_context_tokens)}</b>
+    </div>
       <button
         type="button"
         className="dark-action"
@@ -1771,9 +2870,12 @@ function CadDebugCard({
   runCadAction: (cmd: "test_cad_connection" | "draw_test_line") => Promise<void>;
   language: "zh-CN" | "en-US";
 }) {
+  const checking = Boolean(testStatus?.msg.includes("检测中") || testStatus?.msg.includes("执行中"));
+  const status = testStatus === null || checking ? "idle" : testStatus.ok ? "online" : "error";
+
   return (
     <section className="debug-panel">
-      <PanelHeader title={t("cadDebugTitle", language)} status={testStatus?.ok ? "online" : "idle"} />
+      <PanelHeader title={t("cadDebugTitle", language)} status={status} />
       <p>{t("cadDebugDesc", language)}</p>
       <div className="button-row">
         <button type="button" onClick={() => runCadAction("test_cad_connection")}>
@@ -1973,6 +3075,7 @@ function SettingsModal({
   runCadAction,
   handleImportSelectedObjects,
   syncSessionObjects,
+  focusedProvider,
   onClose,
 }: {
   settings: SettingsView;
@@ -2002,6 +3105,7 @@ function SettingsModal({
   runCadAction: (cmd: "test_cad_connection" | "draw_test_line") => Promise<void>;
   handleImportSelectedObjects: () => Promise<void>;
   syncSessionObjects: (showStatus: boolean) => Promise<SessionObject[] | null>;
+  focusedProvider: Provider | null;
   onClose: () => void;
 }) {
   const [draftAppPreferences, setDraftAppPreferences] = useState<AppPreferences>(() =>
@@ -2012,6 +3116,7 @@ function SettingsModal({
   );
   const [isPreviewingGlass, setIsPreviewingGlass] = useState(false);
   const previewGlassSettingsRef = useRef(draftGlassSettings);
+  const providerCardRefs = useRef<Partial<Record<Provider, HTMLElement | null>>>({});
 
   useEffect(() => {
     setDraftAppPreferences(normalizeAppPreferences(appPreferences));
@@ -2023,10 +3128,33 @@ function SettingsModal({
     setDraftGlassSettings(next);
   }, [glassSettings]);
 
+  useEffect(() => {
+    if (!focusedProvider) return;
+    const timer = window.setTimeout(() => {
+      providerCardRefs.current[focusedProvider]?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [focusedProvider]);
+
   async function handleSaveAll() {
     const nextAppPreferences = normalizeAppPreferences(draftAppPreferences);
+    applyAppFontCssVariables(nextAppPreferences.fontSize);
     setAppPreferences(nextAppPreferences);
     await saveSettings();
+  }
+
+  function previewFontSize(fontSize: number) {
+    const nextFontSize = normalizeAppPreferences({ fontSize }).fontSize;
+    setDraftAppPreferences((prev) => ({ ...prev, fontSize: nextFontSize }));
+    applyAppFontCssVariables(nextFontSize);
+  }
+
+  function handleClose() {
+    applyAppFontCssVariables(appPreferences.fontSize);
+    onClose();
   }
 
   function previewGlassSettings(partial: Partial<GlassSettings>) {
@@ -2088,7 +3216,7 @@ function SettingsModal({
       <section className="settings-modal glass-modal" role="dialog" aria-modal="true">
         <ModalHeader
           title={t("settingsTitle", language)}
-          onClose={onClose}
+          onClose={handleClose}
           closeLabel={t("closeWindow", language)}
         />
 
@@ -2115,16 +3243,12 @@ function SettingsModal({
               <StableRange
                 ariaLabel={t("fontSizeLabel", language)}
                 className="inline-slider"
-                min={12}
-                max={18}
+                min={11}
+                max={22}
                 value={draftAppPreferences.fontSize}
                 suffix="px"
-                onCommit={(fontSize) =>
-                  setDraftAppPreferences((prev) => ({
-                    ...prev,
-                    fontSize,
-                  }))
-                }
+                onPreview={previewFontSize}
+                onCommit={previewFontSize}
               />
             </Field>
 
@@ -2157,6 +3281,16 @@ function SettingsModal({
                 checked={draftAppPreferences.autoSyncObjects}
                 onChange={(checked) =>
                   setDraftAppPreferences((prev) => ({ ...prev, autoSyncObjects: checked }))
+                }
+              />
+              <SwitchField
+                label={t("autoExportSessionLabel", language)}
+                checked={draftAppPreferences.autoExportSessionMarkdown}
+                onChange={(checked) =>
+                  setDraftAppPreferences((prev) => ({
+                    ...prev,
+                    autoExportSessionMarkdown: checked,
+                  }))
                 }
               />
               <SwitchField
@@ -2258,6 +3392,16 @@ function SettingsModal({
                 setSettings((prev) => ({ ...prev, auto_failover: checked }))
               }
             />
+            <div
+              className={`failover-pool ${
+                MODEL_PROVIDERS.some((provider) => providerKeyIsSet(settings, provider.id))
+                  ? ""
+                  : "empty"
+              }`}
+            >
+              <strong>{t("failoverPoolTitle", language)}</strong>
+              <span>{failoverPoolText(settings, language)}</span>
+            </div>
             <div className="provider-settings-list">
               {MODEL_PROVIDERS.map((provider) => {
                 const keyDraft = keyDraftFor(provider.id);
@@ -2268,10 +3412,22 @@ function SettingsModal({
                 const keyPreview = String(settings[provider.keyPreviewField] ?? "");
 
                 return (
-                  <section className="provider-settings-card" key={provider.id}>
+                  <section
+                    className={`provider-settings-card ${
+                      focusedProvider === provider.id ? "focused" : ""
+                    }`}
+                    key={provider.id}
+                    ref={(node) => {
+                      providerCardRefs.current[provider.id] = node;
+                    }}
+                  >
                     <GroupHeader
                       title={providerDisplay(provider.id, language, "label")}
-                      desc={t("modelCardDesc", language)}
+                      desc={`${t("modelCardDesc", language)} ${
+                        keySet
+                          ? t("providerConfigured", language)
+                          : t("providerMissingKey", language)
+                      }`}
                     />
                     <KeyField
                       label={provider.apiLabel}
@@ -2296,46 +3452,41 @@ function SettingsModal({
                       />
                     </Field>
                     <Field label={t("cheapModelLabel", language)}>
-                      <select
-                        className={inputCls}
+                      <ModelSelect
+                        ariaLabel={`${providerDisplay(provider.id, language, "label")} ${t("cheapModelLabel", language)}`}
+                        models={provider.models}
                         value={cheapModel}
-                        onChange={(e) =>
+                        onChange={(nextModel) =>
                           setSettings((prev) => ({
                             ...prev,
-                            [provider.cheapModelField]: e.target.value,
+                            [provider.cheapModelField]: nextModel,
                           }))
                         }
-                      >
-                        {provider.models.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {modelDisplay(model, language)} · {modelStarDisplay(model)}
-                          </option>
-                        ))}
-                      </select>
+                        language={language}
+                      />
                     </Field>
                     <Field label={t("strongModelLabel", language)}>
-                      <select
-                        className={inputCls}
+                      <ModelSelect
+                        ariaLabel={`${providerDisplay(provider.id, language, "label")} ${t("strongModelLabel", language)}`}
+                        models={provider.models}
                         value={strongModel}
-                        onChange={(e) =>
+                        onChange={(nextModel) =>
                           setSettings((prev) => ({
                             ...prev,
-                            [provider.strongModelField]: e.target.value,
+                            [provider.strongModelField]: nextModel,
                           }))
                         }
-                      >
-                        {provider.models.map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {modelDisplay(model, language)} · {modelStarDisplay(model)}
-                          </option>
-                        ))}
-                      </select>
+                        language={language}
+                      />
                     </Field>
                   </section>
                 );
               })}
             </div>
 
+            <p className="settings-note">
+              {t("modelCostNote", language)}
+            </p>
             <p className="settings-note">
               {t("settingsKeyNote", language)}
             </p>
@@ -2369,7 +3520,7 @@ function SettingsModal({
 
         <div className="modal-footer">
           <span>{savedHint ? t("saved", language) : ""}</span>
-          <button type="button" className="outline-action" onClick={onClose}>
+          <button type="button" className="outline-action" onClick={handleClose}>
             {t("back", language)}
           </button>
           <button type="button" className="primary-action" onClick={() => void handleSaveAll()}>
@@ -2902,6 +4053,19 @@ function IconSend() {
   );
 }
 
+function IconDownload() {
+  return (
+    <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="7" y="2" width="2" height="7" />
+      <rect x="5" y="7" width="2" height="2" />
+      <rect x="9" y="7" width="2" height="2" />
+      <rect x="3" y="10" width="10" height="2" />
+      <rect x="3" y="12" width="2" height="2" />
+      <rect x="11" y="12" width="2" height="2" />
+    </svg>
+  );
+}
+
 function IconGear() {
   return (
     <svg className="pixel-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -2950,21 +4114,305 @@ interface HelpPanelProps {
   onClose: () => void;
 }
 
-const MODEL_EVAL_TABLE = [
-  { model: "GLM-5.3 / GLM-5.2", score: "9.3", rating: 5 as ModelRating, noteZh: "强规划与工具调用，适合复杂出图和复核", noteEn: "Strong planning and tool calling for complex drawing and review" },
-  { model: "GLM-4.5", score: "8.8", rating: 5 as ModelRating, noteZh: "当前已打通，函数调用稳定，适合作为默认强模型", noteEn: "Currently verified, stable function calling, good default strong model" },
-  { model: "DeepSeek V4 Pro / Chat", score: "8.7", rating: 5 as ModelRating, noteZh: "工具选择和多步编排表现好，成本友好", noteEn: "Good tool selection and multi-step orchestration, cost friendly" },
-  { model: "Qwen 3.8 Max / 3 Max", score: "8.5", rating: 5 as ModelRating, noteZh: "结构化输出强，适合规划和参数化任务", noteEn: "Strong structured output for planning and parametric tasks" },
-  { model: "Kimi K3 / K2.7 Code", score: "8.2", rating: 4 as ModelRating, noteZh: "代码与长上下文能力好，工具链仍需实测监督", noteEn: "Good coding and long-context ability; tool chain still needs supervision" },
-  { model: "GLM-4.7 / GLM-4.6", score: "8.0", rating: 4 as ModelRating, noteZh: "可作为 GLM-4.5 的升级候选或备用强模型", noteEn: "Good candidates as GLM-4.5 upgrades or strong fallbacks" },
-  { model: "GLM Air / FlashX / Qwen Flash", score: "7.0", rating: 3 as ModelRating, noteZh: "适合轻量问答和低风险辅助，不建议独立承担复杂出图", noteEn: "Useful for light Q&A and low-risk assistance, not ideal for complex drawing alone" },
-  { model: "Moonshot v1 / 旧版 Flash", score: "5.5", rating: 2 as ModelRating, noteZh: "保留兼容入口，不建议用于 agent 自动出图", noteEn: "Kept for compatibility; not recommended for autonomous drawing" },
+type EvidenceStatus = "primary" | "candidate" | "light" | "legacy";
+
+interface ModelEvidenceRow {
+  provider: string;
+  model: string;
+  status: EvidenceStatus;
+  rating: ModelRating;
+  officialZh: string;
+  officialEn: string;
+  cadeggZh: string;
+  cadeggEn: string;
+  sourceZh: string;
+  sourceEn: string;
+}
+
+const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
+  {
+    provider: "GLM",
+    model: "glm-5.2 / glm-5.1 / glm-5",
+    status: "candidate",
+    rating: 4,
+    officialZh: "智谱当前 GLM-5 文本模型系列。",
+    officialEn: "Current Zhipu GLM-5 text model family.",
+    cadeggZh: "强模型候选；需要 CAD 工具链回归后再设为默认。",
+    cadeggEn: "Strong candidate; needs CADEgg tool-chain regression before default use.",
+    sourceZh: "智谱模型概览/价格",
+    sourceEn: "Zhipu model overview/pricing",
+  },
+  {
+    provider: "GLM",
+    model: "glm-5-turbo",
+    status: "light",
+    rating: 3.5,
+    officialZh: "智谱 GLM-5 系列轻量模型。",
+    officialEn: "Lightweight model in the Zhipu GLM-5 family.",
+    cadeggZh: "适合普通问答、参数解释和低风险辅助。",
+    cadeggEn: "Useful for Q&A, parameter explanation, and low-risk assistance.",
+    sourceZh: "智谱模型概览/价格",
+    sourceEn: "Zhipu model overview/pricing",
+  },
+  {
+    provider: "GLM",
+    model: "glm-4.7",
+    status: "candidate",
+    rating: 4.5,
+    officialZh: "智谱建议从 GLM-4.5 迁移到 GLM-4.7。",
+    officialEn: "Zhipu recommends migration from GLM-4.5 to GLM-4.7.",
+    cadeggZh: "下一轮优先实测的强模型。",
+    cadeggEn: "Priority strong-model target for the next CADEgg test round.",
+    sourceZh: "智谱模型概览",
+    sourceEn: "Zhipu model overview",
+  },
+  {
+    provider: "GLM",
+    model: "glm-4.6",
+    status: "candidate",
+    rating: 4,
+    officialZh: "智谱 GLM-4 系列当前模型。",
+    officialEn: "Current model in the Zhipu GLM-4 family.",
+    cadeggZh: "可作为 GLM-4.5/4.7 之间的备用强模型。",
+    cadeggEn: "Usable as a backup strong model between GLM-4.5 and GLM-4.7.",
+    sourceZh: "智谱模型概览/价格",
+    sourceEn: "Zhipu model overview/pricing",
+  },
+  {
+    provider: "GLM",
+    model: "glm-4.5",
+    status: "primary",
+    rating: 4.5,
+    officialZh: "官方提示后续应迁移到 GLM-4.7。",
+    officialEn: "Official docs indicate migration toward GLM-4.7.",
+    cadeggZh: "当前默认强模型；已接入，短期保留稳定性。",
+    cadeggEn: "Current default strong model; kept for short-term integration stability.",
+    sourceZh: "智谱模型概览",
+    sourceEn: "Zhipu model overview",
+  },
+  {
+    provider: "GLM",
+    model: "glm-4.7-flashx / glm-4.5-airx / glm-4-flashx-250414",
+    status: "light",
+    rating: 3.5,
+    officialZh: "FlashX/AirX 属于速度优先或轻量变体。",
+    officialEn: "FlashX/AirX are speed-oriented or lightweight variants.",
+    cadeggZh: "适合轻量问答；不建议独立承担复杂出图。",
+    cadeggEn: "Good for light Q&A; not recommended as sole model for complex drawing.",
+    sourceZh: "智谱模型概览/价格",
+    sourceEn: "Zhipu model overview/pricing",
+  },
+  {
+    provider: "GLM",
+    model: "glm-4.7-flash / glm-4.5-flash / glm-4-flash-250414",
+    status: "light",
+    rating: 3.5,
+    officialZh: "官方免费或免费 Flash 模型。",
+    officialEn: "Official free or free Flash models.",
+    cadeggZh: "可作为免费轻量入口；复杂 CAD 操作前应切强模型。",
+    cadeggEn: "Free lightweight entry; switch to a strong model for complex CAD work.",
+    sourceZh: "智谱免费模型/价格",
+    sourceEn: "Zhipu free models/pricing",
+  },
+  {
+    provider: "GLM",
+    model: "glm-4.5-air",
+    status: "legacy",
+    rating: 3,
+    officialZh: "旧版或特定场景 GLM 模型。",
+    officialEn: "Older or scenario-specific GLM models.",
+    cadeggZh: "保留兼容，不作为自动出图首选。",
+    cadeggEn: "Kept for compatibility; not the first choice for autonomous drawing.",
+    sourceZh: "智谱模型概览/价格",
+    sourceEn: "Zhipu model overview/pricing",
+  },
+  {
+    provider: "DeepSeek",
+    model: "deepseek-v4-pro",
+    status: "candidate",
+    rating: 4.5,
+    officialZh: "DeepSeek 当前高能力 API 模型。",
+    officialEn: "Current high-capability DeepSeek API model.",
+    cadeggZh: "强模型候选；需要做 CAD 工具调用回归。",
+    cadeggEn: "Strong candidate; needs CAD tool-call regression.",
+    sourceZh: "DeepSeek API 价格页",
+    sourceEn: "DeepSeek API pricing",
+  },
+  {
+    provider: "DeepSeek",
+    model: "deepseek-v4-flash",
+    status: "light",
+    rating: 3.5,
+    officialZh: "DeepSeek 当前轻量 API 模型。",
+    officialEn: "Current lightweight DeepSeek API model.",
+    cadeggZh: "适合低成本问答和失败重试备用。",
+    cadeggEn: "Useful for lower-cost Q&A and fallback retries.",
+    sourceZh: "DeepSeek API 价格页",
+    sourceEn: "DeepSeek API pricing",
+  },
+  {
+    provider: "Qwen",
+    model: "qwen3.8-max / qwen3.7-max / qwen3-max",
+    status: "candidate",
+    rating: 4.5,
+    officialZh: "阿里云百炼模型价格页列出的高能力模型。",
+    officialEn: "High-capability models listed in Alibaba Cloud Model Studio pricing.",
+    cadeggZh: "强模型候选；默认强模型保持 qwen3.8-max。",
+    cadeggEn: "Strong candidates; default Qwen strong model remains qwen3.8-max.",
+    sourceZh: "阿里云百炼模型价格",
+    sourceEn: "Alibaba Cloud Model Studio pricing",
+  },
+  {
+    provider: "Qwen",
+    model: "qwen3.7-plus / qwen3.6-plus / qwen3.5-plus / qwen-plus",
+    status: "candidate",
+    rating: 4,
+    officialZh: "Plus 系列适合通用任务和结构化输出。",
+    officialEn: "Plus models suit general tasks and structured output.",
+    cadeggZh: "可用于规划和参数化说明；复杂出图仍需实测。",
+    cadeggEn: "Useful for planning and parameterized explanations; complex drawing still needs tests.",
+    sourceZh: "阿里云百炼模型价格",
+    sourceEn: "Alibaba Cloud Model Studio pricing",
+  },
+  {
+    provider: "Qwen",
+    model: "qwen3.7-flash / qwen3.6-flash / qwen3.5-flash / qwen-flash / qwen-turbo",
+    status: "light",
+    rating: 3,
+    officialZh: "Flash/Turbo 为轻量或低延迟模型。",
+    officialEn: "Flash/Turbo models are lightweight or low-latency options.",
+    cadeggZh: "适合轻量问答、参数补全和兜底，不独立负责复杂出图。",
+    cadeggEn: "Good for light Q&A, parameter completion, and fallback; not standalone for complex drawing.",
+    sourceZh: "阿里云百炼模型价格",
+    sourceEn: "Alibaba Cloud Model Studio pricing",
+  },
+  {
+    provider: "Qwen",
+    model: "qwen3-coder-plus / qwen3-coder-flash",
+    status: "light",
+    rating: 3.5,
+    officialZh: "Coder 系列偏代码能力。",
+    officialEn: "Coder models are code-oriented.",
+    cadeggZh: "可辅助脚本/规则生成；默认仍限制任意 LISP 执行。",
+    cadeggEn: "Can assist script/rule generation; arbitrary LISP execution remains restricted.",
+    sourceZh: "阿里云百炼模型价格",
+    sourceEn: "Alibaba Cloud Model Studio pricing",
+  },
+  {
+    provider: "Qwen",
+    model: "qwen-max",
+    status: "legacy",
+    rating: 3,
+    officialZh: "旧版 Max 兼容入口。",
+    officialEn: "Legacy Max compatibility entry.",
+    cadeggZh: "仅保留旧配置兼容，新任务优先 qwen3.7-max 或 qwen3-max。",
+    cadeggEn: "Kept for old settings; prefer qwen3.7-max or qwen3-max for new tasks.",
+    sourceZh: "阿里云百炼模型价格",
+    sourceEn: "Alibaba Cloud Model Studio pricing",
+  },
+  {
+    provider: "Kimi",
+    model: "kimi-k3",
+    status: "candidate",
+    rating: 4,
+    officialZh: "Kimi 旗舰模型，1M 上下文，面向长程编码和深度推理。",
+    officialEn: "Kimi flagship model with 1M context for long-horizon coding and deep reasoning.",
+    cadeggZh: "强模型候选；成本最高，默认不自动选，需先做 CAD 工具链回归。",
+    cadeggEn: "Strong candidate; highest cost, not default, needs CAD tool-chain regression.",
+    sourceZh: "Kimi 官网/帮助中心",
+    sourceEn: "Kimi homepage/help center",
+  },
+  {
+    provider: "Kimi",
+    model: "kimi-k2.7-code",
+    status: "candidate",
+    rating: 4,
+    officialZh: "Kimi Coding 模型，长上下文指令遵循更可靠。",
+    officialEn: "Kimi coding model with more reliable long-context instruction following.",
+    cadeggZh: "适合脚本、规则和 CAD 代码辅助；不默认执行任意 LISP。",
+    cadeggEn: "Good for scripts, rules, and CAD code assistance; arbitrary LISP remains restricted.",
+    sourceZh: "Kimi 官网",
+    sourceEn: "Kimi homepage",
+  },
+  {
+    provider: "Kimi",
+    model: "kimi-k2.6",
+    status: "candidate",
+    rating: 3.5,
+    officialZh: "Kimi API 当前模型列表中的新模型。",
+    officialEn: "New model in the current Kimi API model list.",
+    cadeggZh: "Kimi 默认强模型；需要 CAD 工具链回归。",
+    cadeggEn: "Default Kimi strong model; needs CADEgg tool-chain regression.",
+    sourceZh: "Kimi API 模型列表/价格",
+    sourceEn: "Kimi API model list/pricing",
+  },
+  {
+    provider: "Kimi",
+    model: "kimi-k2.5",
+    status: "light",
+    rating: 3,
+    officialZh: "Kimi API 当前兼容模型。",
+    officialEn: "Current compatible Kimi API model.",
+    cadeggZh: "适合长上下文阅读和轻量问答。",
+    cadeggEn: "Useful for long-context reading and light Q&A.",
+    sourceZh: "Kimi API 模型列表/价格",
+    sourceEn: "Kimi API model list/pricing",
+  },
+  {
+    provider: "Kimi",
+    model: "moonshot-v1-8k / 32k / 128k",
+    status: "legacy",
+    rating: 2,
+    officialZh: "Moonshot v1 旧版兼容模型。",
+    officialEn: "Legacy Moonshot v1 compatibility models.",
+    cadeggZh: "保留兼容，不建议用于新 Agent 出图链路。",
+    cadeggEn: "Kept for compatibility; not recommended for new agent drawing flows.",
+    sourceZh: "Kimi API 模型列表/价格",
+    sourceEn: "Kimi API model list/pricing",
+  },
 ];
+
+const MODEL_SOURCE_LINKS = [
+  {
+    labelZh: "智谱对话补全 API / 模型概览",
+    labelEn: "Zhipu chat completions API / model overview",
+    url: "https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8",
+  },
+  {
+    labelZh: "DeepSeek API 模型与价格",
+    labelEn: "DeepSeek API models and pricing",
+    url: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  },
+  {
+    labelZh: "阿里云百炼模型价格",
+    labelEn: "Alibaba Cloud Model Studio pricing",
+    url: "https://help.aliyun.com/zh/model-studio/model-pricing",
+  },
+  {
+    labelZh: "Kimi API 开放平台",
+    labelEn: "Kimi API platform",
+    url: "https://platform.kimi.com/",
+  },
+];
+
+function evidenceStatusLabel(status: EvidenceStatus, language: "zh-CN" | "en-US") {
+  const labels: Record<EvidenceStatus, Record<"zh-CN" | "en-US", string>> = {
+    primary: { "zh-CN": "当前默认", "en-US": "Default" },
+    candidate: { "zh-CN": "强模型候选", "en-US": "Strong Candidate" },
+    light: { "zh-CN": "轻量/免费/兼容", "en-US": "Light/Free/Compat" },
+    legacy: { "zh-CN": "旧版保留", "en-US": "Legacy" },
+  };
+  return labels[status][language];
+}
 
 function StarRating({ rating }: { rating: ModelRating }) {
   return (
-    <span className={`star-rating rating-${rating}`} aria-label={`${rating}/5`}>
-      {starsForRating(rating)}
+    <span className="star-rating" aria-label={`${rating}/5`}>
+      {ratingStarStates(rating).map((state, index) => (
+        <span className={`rating-star ${state}`} key={index} aria-hidden="true">
+          ★
+        </span>
+      ))}
     </span>
   );
 }
@@ -2985,33 +4433,103 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
           {/* Model Evaluation */}
           <section className="settings-group">
             <GroupHeader
-              title={isZh ? "模型能力评估" : "Model Capability Evaluation"}
+              title={isZh ? "模型接入评估" : "Model Integration Evaluation"}
               desc={isZh
-                ? "基于公开函数调用能力、当前接入状态和 CADEgg 工具链风险分层。五星优先用于强模型，三星以内只适合轻量或兼容场景。"
-                : "Based on public function-calling ability, current integration status, and CADEgg tool-chain risk. Five stars are preferred for strong models; three or fewer are for light or compatibility use."}
+                ? "星级是综合结论：优先看能否发挥 CADEgg 全功能，再看性价比、工具调用/结构化可靠性、上下文/速度和当前接入成熟度。"
+                : "Stars are a combined conclusion: CADEgg feature coverage first, then cost-performance, tool/structured-output reliability, context/speed, and current integration maturity."}
             />
 
             <div className="help-table-wrap">
-              <table className="help-table">
+              <table className="help-table model-evidence-table">
                 <thead>
                   <tr>
+                    <th>{isZh ? "供应商" : "Provider"}</th>
                     <th>{isZh ? "模型" : "Model"}</th>
-                    <th>{isZh ? "评分" : "Score"}</th>
+                    <th>{isZh ? "状态" : "Status"}</th>
                     <th>{isZh ? "星级" : "Stars"}</th>
-                    <th>{isZh ? "说明" : "Notes"}</th>
+                    <th>{isZh ? "官方依据" : "Official Basis"}</th>
+                    <th>{isZh ? "CADEgg 建议" : "CADEgg Use"}</th>
+                    <th>{isZh ? "来源" : "Source"}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {MODEL_EVAL_TABLE.map((row) => (
-                    <tr key={row.model} className={`eval-rating-${row.rating}`}>
+                  {MODEL_EVIDENCE_TABLE.map((row) => (
+                    <tr key={`${row.provider}-${row.model}`} className={`evidence-${row.status}`}>
+                      <td>{row.provider}</td>
                       <td><strong>{row.model}</strong></td>
-                      <td>{row.score}</td>
+                      <td>
+                        <span className={`model-status ${row.status}`}>
+                          {evidenceStatusLabel(row.status, language)}
+                        </span>
+                      </td>
                       <td><StarRating rating={row.rating} /></td>
-                      <td>{isZh ? row.noteZh : row.noteEn}</td>
+                      <td>{isZh ? row.officialZh : row.officialEn}</td>
+                      <td>{isZh ? row.cadeggZh : row.cadeggEn}</td>
+                      <td className="source-cell">{isZh ? row.sourceZh : row.sourceEn}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+            <p className="settings-note">
+              {isZh
+                ? "说明：当前星级是官方资料、模型定位、价格/免费状态和 CADEgg 当前接入经验的综合评分；后续实测会用同一组 CAD 任务记录首 token、总耗时、工具调用成功率、校核通过率和失败恢复，并回写星级。"
+                : "Note: current stars combine official docs, model positioning, cost/free status, and CADEgg integration experience. Later benchmarks will run the same CAD tasks and feed first-token latency, total latency, tool-call success, validation pass rate, and recovery behavior back into the stars."}
+            </p>
+            <div className="model-source-links">
+              <strong>{isZh ? "官方来源" : "Official Sources"}</strong>
+              {MODEL_SOURCE_LINKS.map((source) => (
+                <a key={source.url} href={source.url} target="_blank" rel="noreferrer">
+                  {isZh ? source.labelZh : source.labelEn}
+                </a>
+              ))}
+            </div>
+          </section>
+
+          {/* Product Direction */}
+          <section className="settings-group">
+            <GroupHeader
+              title={isZh ? "定位与后续路线" : "Positioning & Roadmap"}
+              desc={isZh
+                ? "CADEgg 的重点不是把固定 CAD 命令换成大模型，而是把语言、规范、图纸状态和可追溯校核连成工程闭环。"
+                : "CADEgg should not replace fixed CAD commands with an LLM; its value is connecting language, standards, drawing state, and traceable validation into an engineering loop."}
+            />
+
+            <div className="help-guide">
+              <h4>{isZh ? "边界判断" : "Boundary"}</h4>
+              <ul>
+                <li>{isZh
+                  ? "固定参数化绘图、常用尺寸和批量命令，天正类成熟插件通常更高效，CADEgg 不应把这类简单工作变贵。"
+                  : "For fixed parametric drafting, common dimensions, and batch commands, mature Tianzheng-style CAD plugins are usually more efficient. CADEgg should not make simple work more expensive."}</li>
+                <li>{isZh
+                  ? "CADEgg 应只在语言意图不完整、规范约束需要检索、图纸现状需要检查、修改意见需要转译、过程需要留痕时使用模型。"
+                  : "CADEgg should use models where intent is incomplete, standards must be retrieved, drawing state must be inspected, review comments must be translated into actions, or the process needs an audit trail."}</li>
+                <li>{isZh
+                  ? "模型负责理解、规划、解释和校核；实际绘图尽量落到确定性的 CAD 工具、知识卡和规则验证。"
+                  : "The model should handle understanding, planning, explanation, and validation, while drawing execution should land on deterministic CAD tools, knowledge cards, and rule checks."}</li>
+              </ul>
+
+              <h4>{isZh ? "优先路线" : "Priority Route"}</h4>
+              <ol>
+                <li>{isZh
+                  ? "施工安全规范闭环：缺参追问、知识卡命中、出图、规则校核、报告。"
+                  : "Construction-safety standards loop: ask for missing parameters, hit knowledge cards, draw, validate, and report."}</li>
+                <li>{isZh
+                  ? "已有图纸检查：读取对象分布，输出问题清单和可执行修复建议。"
+                  : "Existing drawing inspection: read object distribution, then produce issue lists and actionable fixes."}</li>
+                <li>{isZh
+                  ? "自然语言改图：把审图意见转成按 handle 可追踪的移动、删除、标注和重画。"
+                  : "Natural-language revision: turn review comments into handle-traceable move, delete, annotate, and redraw operations."}</li>
+                <li>{isZh
+                  ? "项目记忆和规则包：把常用图层、单位、项目做法、规范资料做成本地可维护资料。"
+                  : "Project memory and rule packs: keep layers, units, project conventions, and standard documents as local maintainable data."}</li>
+                <li>{isZh
+                  ? "批量 QA 和交付：多图批检、导出 Markdown/报告、记录模型和耗时数据。"
+                  : "Batch QA and delivery: inspect multiple drawings, export Markdown/reports, and record model and duration telemetry."}</li>
+                <li>{isZh
+                  ? "完成安全场景闭环后，再扩展到更广的工程图纸工作流。"
+                  : "After the safety workflow is closed, expand into broader engineering drawing workflows."}</li>
+              </ol>
             </div>
           </section>
 
