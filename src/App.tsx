@@ -20,6 +20,7 @@ import "./App.css";
 import type {
   AgentEvent,
   BenchmarkCandidate,
+  BenchmarkCaseResult,
   BenchmarkEvent,
   BenchmarkModelResult,
   BenchmarkSummary,
@@ -686,10 +687,146 @@ function normalizeChatSession(value: Partial<ChatSession>, fallback: ChatSession
   };
 }
 
-function formatMarkdownTime(value: number | string) {
-  const date = typeof value === "number" ? new Date(value) : new Date(value);
+function formatMarkdownTime(value: number | string | null | undefined) {
+  if (value == null || value === "") return "n/a";
+  const normalizedValue = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+  if (typeof normalizedValue === "number" && normalizedValue <= 0) return "n/a";
+  const date = new Date(normalizedValue);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString();
+}
+
+function readRecordField(record: Record<string, unknown>, snakeKey: string, camelKey: string) {
+  if (Object.prototype.hasOwnProperty.call(record, snakeKey)) return record[snakeKey];
+  if (Object.prototype.hasOwnProperty.call(record, camelKey)) return record[camelKey];
+  return undefined;
+}
+
+function coerceText(value: unknown, fallback = "") {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return fallback;
+}
+
+function coerceNumber(value: unknown, fallback = 0) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function normalizeMemoryFileInfo(value: MemoryFileInfo | Record<string, unknown>): MemoryFileInfo {
+  const record = value as Record<string, unknown>;
+  return {
+    name: coerceText(readRecordField(record, "name", "name")),
+    size_bytes: coerceNumber(readRecordField(record, "size_bytes", "sizeBytes")),
+    updated_at_ms: coerceNumber(readRecordField(record, "updated_at_ms", "updatedAtMs")),
+  };
+}
+
+function normalizeMemoryBundleInfo(value: MemoryBundleInfo | null | undefined): MemoryBundleInfo | null {
+  if (!value) return null;
+  const record = value as unknown as Record<string, unknown>;
+  const filesValue = readRecordField(record, "files", "files");
+  return {
+    dir: coerceText(readRecordField(record, "dir", "dir")),
+    files: Array.isArray(filesValue)
+      ? filesValue.map((file) => normalizeMemoryFileInfo(file as Record<string, unknown>))
+      : [],
+    global_memory: coerceText(readRecordField(record, "global_memory", "globalMemory")),
+    global_memory_exists: Boolean(readRecordField(record, "global_memory_exists", "globalMemoryExists")),
+  };
+}
+
+function normalizeBenchmarkCandidate(
+  value: BenchmarkCandidate | Record<string, unknown>
+): BenchmarkCandidate {
+  const record = value as Record<string, unknown>;
+  const skipReason = coerceText(readRecordField(record, "skip_reason", "skipReason"));
+  return {
+    provider: coerceText(readRecordField(record, "provider", "provider")),
+    provider_label: coerceText(readRecordField(record, "provider_label", "providerLabel")),
+    model: coerceText(readRecordField(record, "model", "model")),
+    ...(skipReason ? { skip_reason: skipReason } : {}),
+  };
+}
+
+function normalizeBenchmarkCaseResult(
+  value: BenchmarkCaseResult | Record<string, unknown>
+): BenchmarkCaseResult {
+  const record = value as Record<string, unknown>;
+  return {
+    id: coerceText(readRecordField(record, "id", "id")),
+    label: coerceText(readRecordField(record, "label", "label")),
+    score: coerceNumber(readRecordField(record, "score", "score")),
+    note: coerceText(readRecordField(record, "note", "note")),
+  };
+}
+
+function normalizeBenchmarkModelResult(
+  value: BenchmarkModelResult | Record<string, unknown>
+): BenchmarkModelResult {
+  const record = value as Record<string, unknown>;
+  const casesValue = readRecordField(record, "cases", "cases");
+  const errorsValue = readRecordField(record, "errors", "errors");
+  const avgOutputTokens = readRecordField(record, "avg_output_tokens", "avgOutputTokens");
+  return {
+    provider: coerceText(readRecordField(record, "provider", "provider")),
+    provider_label: coerceText(readRecordField(record, "provider_label", "providerLabel")),
+    model: coerceText(readRecordField(record, "model", "model")),
+    requests: Math.max(0, Math.floor(coerceNumber(readRecordField(record, "requests", "requests")))),
+    succeeded: Math.max(0, Math.floor(coerceNumber(readRecordField(record, "succeeded", "succeeded")))),
+    avg_duration_ms: Math.max(
+      0,
+      Math.floor(coerceNumber(readRecordField(record, "avg_duration_ms", "avgDurationMs")))
+    ),
+    avg_output_tokens:
+      avgOutputTokens == null ? undefined : coerceNumber(avgOutputTokens, Number.NaN),
+    score: coerceNumber(readRecordField(record, "score", "score")),
+    rating: coerceNumber(readRecordField(record, "rating", "rating")),
+    cases: Array.isArray(casesValue)
+      ? casesValue.map((item) => normalizeBenchmarkCaseResult(item as Record<string, unknown>))
+      : [],
+    errors: Array.isArray(errorsValue)
+      ? errorsValue.map((item) => coerceText(item))
+      : [],
+  };
+}
+
+function normalizeBenchmarkSummary(
+  value: BenchmarkSummary | null | undefined
+): BenchmarkSummary | null {
+  if (!value) return null;
+  const record = value as unknown as Record<string, unknown>;
+  const modelsValue = readRecordField(record, "models", "models");
+  const startedAtMs = coerceNumber(readRecordField(record, "started_at_ms", "startedAtMs"));
+  const finishedAtMs = readRecordField(record, "finished_at_ms", "finishedAtMs");
+  const resultsJsonPath = coerceText(readRecordField(record, "results_json_path", "resultsJsonPath"));
+  const resultsMdPath = coerceText(readRecordField(record, "results_md_path", "resultsMdPath"));
+  return {
+    started_at_ms: startedAtMs,
+    ...(finishedAtMs == null ? {} : { finished_at_ms: coerceNumber(finishedAtMs, startedAtMs) }),
+    cancelled: Boolean(readRecordField(record, "cancelled", "cancelled")),
+    candidates_total: Math.max(
+      0,
+      Math.floor(coerceNumber(readRecordField(record, "candidates_total", "candidatesTotal")))
+    ),
+    models_tested: Math.max(
+      0,
+      Math.floor(coerceNumber(readRecordField(record, "models_tested", "modelsTested")))
+    ),
+    max_requests: Math.max(
+      0,
+      Math.floor(coerceNumber(readRecordField(record, "max_requests", "maxRequests")))
+    ),
+    models: Array.isArray(modelsValue)
+      ? modelsValue.map((item) => normalizeBenchmarkModelResult(item as Record<string, unknown>))
+      : [],
+    results_json_path: resultsJsonPath,
+    results_md_path: resultsMdPath,
+  };
 }
 
 function formatDuration(ms: number | null | undefined) {
@@ -1496,9 +1633,11 @@ export default function App() {
   async function refreshMemoryBundle() {
     setMemoryLoading(true);
     try {
-      const info = await invoke<MemoryBundleInfo>("read_memory_bundle", {
-        location: appPreferencesRef.current.storageLocation,
-      });
+      const info = normalizeMemoryBundleInfo(
+        await invoke<MemoryBundleInfo>("read_memory_bundle", {
+          location: appPreferencesRef.current.storageLocation,
+        })
+      );
       memoryBundleRef.current = info;
       setMemoryBundle(info);
     } catch (e) {
@@ -1531,11 +1670,15 @@ export default function App() {
 
   async function refreshBenchmarkState() {
     try {
-      const candidates = await invoke<BenchmarkCandidate[]>("benchmark_candidates");
+      const candidates = (await invoke<BenchmarkCandidate[]>("benchmark_candidates")).map((item) =>
+        normalizeBenchmarkCandidate(item)
+      );
       setBenchmarkCandidates(candidates);
-      const summary = await invoke<BenchmarkSummary | null>("read_benchmark_results", {
-        location: appPreferencesRef.current.storageLocation,
-      });
+      const summary = normalizeBenchmarkSummary(
+        await invoke<BenchmarkSummary | null>("read_benchmark_results", {
+          location: appPreferencesRef.current.storageLocation,
+        })
+      );
       setBenchmarkSummary(summary);
     } catch (e) {
       console.error("load benchmark state:", e);
@@ -1558,11 +1701,13 @@ export default function App() {
           : benchmarkScope === "failed"
             ? failedSpecs
             : null;
-      const summary = await invoke<BenchmarkSummary>("run_model_benchmark", {
-        location: appPreferencesRef.current.storageLocation,
-        maxRequests: BENCHMARK_MAX_REQUESTS,
-        models: specs,
-      });
+      const summary = normalizeBenchmarkSummary(
+        await invoke<BenchmarkSummary>("run_model_benchmark", {
+          location: appPreferencesRef.current.storageLocation,
+          maxRequests: BENCHMARK_MAX_REQUESTS,
+          models: specs,
+        })
+      );
       setBenchmarkSummary(summary);
     } catch (e) {
       setBenchmarkError(String(e));
@@ -3669,7 +3814,7 @@ function BenchmarkCard({
         <div className="benchmark-results">
           <p className="benchmark-meta">
             {t("benchmarkLastRun", language, {
-              date: new Date(summary.started_at_ms).toLocaleString(),
+              date: formatMarkdownTime(summary.started_at_ms),
             })}
             {summary.cancelled ? ` · ${t("benchmarkCancelledNote", language)}` : ""}
           </p>
@@ -5127,6 +5272,24 @@ function evidenceStatusLabel(status: EvidenceStatus, language: "zh-CN" | "en-US"
   return labels[status][language];
 }
 
+function evidenceProviderId(provider: string): Provider | null {
+  const normalized = provider.toLowerCase();
+  if (normalized === "glm" || normalized === "deepseek" || normalized === "qwen" || normalized === "kimi") {
+    return normalized;
+  }
+  return null;
+}
+
+function evidenceRowRating(row: ModelEvidenceRow): ModelRating {
+  const providerId = evidenceProviderId(row.provider);
+  const sourceModelId = row.model.split("/")[0]?.trim();
+  if (providerId && sourceModelId) {
+    const rating = modelRatingById(providerId, sourceModelId);
+    if (rating) return rating;
+  }
+  return row.rating;
+}
+
 function StarRating({ rating }: { rating: ModelRating }) {
   return (
     <span className="star-rating" aria-label={`${rating}/5`}>
@@ -5184,7 +5347,7 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
                           {evidenceStatusLabel(row.status, language)}
                         </span>
                       </td>
-                      <td><StarRating rating={row.rating} /></td>
+                      <td><StarRating rating={evidenceRowRating(row)} /></td>
                       <td>{isZh ? row.officialZh : row.officialEn}</td>
                       <td>{isZh ? row.cadeggZh : row.cadeggEn}</td>
                       <td className="source-cell">{isZh ? row.sourceZh : row.sourceEn}</td>

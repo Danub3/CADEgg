@@ -1465,6 +1465,10 @@ button:disabled {
   line-height: 1.4;
 }
 
+.benchmark-card {
+  min-height: 0;
+}
+
 .benchmark-skipped {
   margin: 0;
   color: rgb(120 53 15 / 0.75);
@@ -1501,13 +1505,11 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 140px;
-  overflow-y: auto;
 }
 
 .benchmark-row {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
@@ -1523,11 +1525,25 @@ button:disabled {
 }
 
 .benchmark-score {
-  flex-shrink: 0;
+  flex: 1 1 0;
+  min-width: 0;
   font-family: "Pixelify Sans", "Consolas", monospace;
   font-size: var(--tiny-font-size, 11px);
   font-weight: 900;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: right;
+  white-space: normal;
+}
+
+.benchmark-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: min(44vh, 420px);
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .benchmark-weights {
