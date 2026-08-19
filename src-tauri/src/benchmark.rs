@@ -1132,6 +1132,16 @@ mod tests {
     }
 
     #[test]
+    fn utc_file_stamp_formats_epoch_millis() {
+        // 2026-08-19 10:00:00 UTC = 1787133600000 ms
+        assert_eq!(utc_file_stamp(1_787_133_600_000), "20260819T100000Z");
+        // 1970-01-01 00:00:00
+        assert_eq!(utc_file_stamp(0), "19700101T000000Z");
+        // 跨日边界：23:59:59.500 仍是 235959Z（毫秒被截断为秒）
+        assert_eq!(utc_file_stamp(1_787_183_999_500), "20260819T235959Z");
+    }
+
+    #[test]
     fn provider_pause_respects_kimi_rpm() {
         assert_eq!(provider_pause_ms("kimi"), 21_000);
         assert_eq!(provider_pause_ms("glm"), 2_500);
