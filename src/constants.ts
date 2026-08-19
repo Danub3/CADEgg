@@ -142,6 +142,7 @@ export const DEFAULT_VIEW: SettingsView = {
   provider: "glm",
   work_mode: "safety_demo_mode",
   auto_failover: true,
+  memory_carry_token_budget: 1200,
   glm_model: "glm-4.5-air",
   glm_strong_model: "glm-4.5",
   glm_base_url: "https://open.bigmodel.cn/api/paas/v4",

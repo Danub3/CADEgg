@@ -1998,6 +1998,32 @@ button:disabled {
   gap: 14px;
 }
 
+.settings-budget-field {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.settings-budget-field input {
+  width: 150px;
+  padding: 6px 8px;
+  border: 3px solid rgb(255 253 245 / 0.30);
+  background: rgb(30 22 51 / 0.55);
+  color: var(--ink);
+  font-family: "Pixelify Sans", "Consolas", monospace;
+  font-size: var(--tiny-font-size, 11px);
+  outline: none;
+}
+
+.settings-budget-field input:focus {
+  border-color: var(--yellow);
+}
+
+.settings-budget-hint {
+  color: rgb(255 253 245 / 0.66);
+  font-size: var(--tiny-font-size, 11px);
+}
+
 .provider-settings-card {
   display: grid;
   gap: 12px;

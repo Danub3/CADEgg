@@ -205,6 +205,7 @@ export interface SettingsView {
   provider: Provider;
   work_mode: WorkMode;
   auto_failover: boolean;
+  memory_carry_token_budget: number;
   glm_model: string;
   glm_strong_model: string;
   glm_base_url: string;

@@ -63,6 +63,30 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// 把 epoch 毫秒转成 UTC `YYYYMMDDTHHMMSSZ` 文件名时间戳（不引入 chrono）。
+fn utc_file_stamp(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let hh = rem / 3600;
+    let mm = (rem % 3600) / 60;
+    let ss = rem % 60;
+    // Howard Hinnant civil_from_days 逆算法
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    if m <= 2 {
+        y += 1;
+    }
+    format!("{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z")
+}
+
 // ---------------- 数据模型（camelCase 供前端） ----------------
 
 #[derive(Serialize, Clone)]
@@ -773,7 +797,12 @@ fn save_benchmark_results(
     let md_path = dir.join("benchmark-results.md");
     let json_text = serde_json::to_string_pretty(summary)
         .map_err(|e| format!("序列化基准结果失败: {e}"))?;
-    std::fs::write(&json_path, json_text).map_err(|e| format!("写入 benchmark-results.json 失败: {e}"))?;
+    std::fs::write(&json_path, &json_text).map_err(|e| format!("写入 benchmark-results.json 失败: {e}"))?;
+    // 按时间戳归档，避免每次运行互相覆盖历史结果
+    let stamp = utc_file_stamp(summary.started_at_ms);
+    let archive_json = dir.join(format!("benchmark-results-{stamp}.json"));
+    std::fs::write(&archive_json, &json_text)
+        .map_err(|e| format!("写入基准归档 {stamp}.json 失败: {e}"))?;
 
     let started = summary.started_at_ms;
     let mut md = String::new();
@@ -830,7 +859,9 @@ fn save_benchmark_results(
 "));
         }
     }
-    std::fs::write(&md_path, md).map_err(|e| format!("写入 benchmark-results.md 失败: {e}"))?;
+    std::fs::write(&md_path, &md).map_err(|e| format!("写入 benchmark-results.md 失败: {e}"))?;
+    let archive_md = dir.join(format!("benchmark-results-{stamp}.md"));
+    std::fs::write(&archive_md, &md).map_err(|e| format!("写入基准归档 {stamp}.md 失败: {e}"))?;
     Ok((
         json_path.display().to_string(),
         md_path.display().to_string(),

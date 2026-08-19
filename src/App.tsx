@@ -86,8 +86,10 @@ interface AppPreferences {
   densePanels: boolean;
 }
 
-/// 携带记忆的 token 预算：超过部分截断，避免隐性成本膨胀。
-const MEMORY_CARRY_TOKEN_BUDGET = 1200;
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
 
 /// 全量基准清单：模型列表里的全部模型（与 constants.ts 单一事实源保持一致）。
 const ALL_BENCHMARK_SPECS = MODEL_PROVIDERS.flatMap((provider) =>
@@ -282,8 +284,8 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   cheapModelLabel: { "zh-CN": "轻量模型", "en-US": "Cheap Model" },
   strongModelLabel: { "zh-CN": "强模型", "en-US": "Strong Model" },
   settingsKeyNote: {
-    "zh-CN": "API Key 仅保存在本机 AppData/settings.json。界面不会明文回显已保存的 key。",
-    "en-US": "API keys are stored only in local AppData/settings.json and are never shown in full.",
+    "zh-CN": "API Key 仅保存在本机 AppData/settings.json，界面不会明文回显。请勿分享或上传 settings.json，泄露等于泄露密钥。",
+    "en-US": "API keys are stored only in local AppData/settings.json and are never shown in full. Never share or upload settings.json — it contains your secrets.",
   },
   developerToolsTitle: { "zh-CN": "开发者工具", "en-US": "Developer Tools" },
   developerToolsDesc: {
@@ -360,6 +362,8 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   },
   memoryTokensFull: { "zh-CN": "全文约 {tokens} tokens", "en-US": "Full text ≈ {tokens} tokens" },
   memoryBudget: { "zh-CN": "携带预算 {budget} tokens，超出截断", "en-US": "Carry budget {budget} tokens, truncated if exceeded" },
+  memoryBudgetSetting: { "zh-CN": "记忆携带预算（tokens）", "en-US": "Memory carry budget (tokens)" },
+  memoryBudgetSettingHint: { "zh-CN": "范围 200–8000，超出部分截断", "en-US": "Range 200–8000, truncated beyond" },
   memoryPreviewShow: { "zh-CN": "展开预览", "en-US": "Expand" },
   memoryPreviewHide: { "zh-CN": "收起预览", "en-US": "Collapse" },
   memoryCarriedBadge: { "zh-CN": "将携带全局记忆 · 约 {tokens} tokens", "en-US": "Carrying global memory · ≈{tokens} tokens" },
@@ -2347,7 +2351,7 @@ export default function App() {
         carryMemoryRef.current && memoryBundleRef.current?.global_memory.trim()
           ? buildMemoryInjection(
               memoryBundleRef.current.global_memory,
-              MEMORY_CARRY_TOKEN_BUDGET
+              clampNumber(settings.memory_carry_token_budget, 200, 8000)
             )
           : null;
       setCarryMemoryNow(false);
@@ -2384,6 +2388,7 @@ export default function App() {
           provider: nextSettings.provider,
           work_mode: nextSettings.work_mode,
           auto_failover: nextSettings.auto_failover,
+          memory_carry_token_budget: nextSettings.memory_carry_token_budget,
           glm_model: nextSettings.glm_model,
           glm_strong_model: nextSettings.glm_strong_model,
           glm_base_url: nextSettings.glm_base_url,
@@ -2949,7 +2954,7 @@ export default function App() {
               (() => {
                 const injection = buildMemoryInjection(
                   memoryBundle.global_memory,
-                  MEMORY_CARRY_TOKEN_BUDGET
+                  clampNumber(settings.memory_carry_token_budget, 200, 8000)
                 );
                 return (
                   <div className="memory-carry-badge">
@@ -3017,6 +3022,7 @@ export default function App() {
             onRefresh={() => void refreshMemoryBundle()}
             onOpenDir={() => void openMemoryDir()}
             openError={memoryDirError}
+            budgetTokens={clampNumber(settings.memory_carry_token_budget, 200, 8000)}
             language={appPreferences.language}
           />
           <BenchmarkCard
@@ -3602,6 +3608,7 @@ function MemoryCard({
   onRefresh,
   onOpenDir,
   openError,
+  budgetTokens,
   language,
 }: {
   bundle: MemoryBundleInfo | null;
@@ -3613,6 +3620,7 @@ function MemoryCard({
   onRefresh: () => void;
   onOpenDir: () => void;
   openError: string | null;
+  budgetTokens: number;
   language: "zh-CN" | "en-US";
 }) {
   const fileList = bundle?.files ?? [];
@@ -3679,7 +3687,7 @@ function MemoryCard({
               />
               <p className="memory-est">
                 {t("memoryTokensFull", language, { tokens: String(fullTokens) })} ·{" "}
-                {t("memoryBudget", language, { budget: String(MEMORY_CARRY_TOKEN_BUDGET) })}
+                {t("memoryBudget", language, { budget: String(budgetTokens) })}
               </p>
               {previewOpen && <pre className="memory-preview">{globalMemory}</pre>}
               <p className="memory-hint">{t("memoryCarryHint", language)}</p>
@@ -4259,6 +4267,29 @@ function SettingsModal({
                 setSettings((prev) => ({ ...prev, auto_failover: checked }))
               }
             />
+            <label className="settings-field settings-budget-field">
+              <span>{t("memoryBudgetSetting", language)}</span>
+              <input
+                type="number"
+                min={200}
+                max={8000}
+                step={100}
+                value={settings.memory_carry_token_budget}
+                onChange={(e) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    memory_carry_token_budget: clampNumber(Number(e.target.value), 200, 8000),
+                  }))
+                }
+                onBlur={(e) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    memory_carry_token_budget: clampNumber(Number(e.target.value), 200, 8000),
+                  }))
+                }
+              />
+              <span className="settings-budget-hint">{t("memoryBudgetSettingHint", language)}</span>
+            </label>
             <div
               className={`failover-pool ${
                 MODEL_PROVIDERS.some((provider) => providerKeyIsSet(settings, provider.id))

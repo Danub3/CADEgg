@@ -20,6 +20,9 @@ pub struct Settings {
     pub work_mode: WorkMode,
     #[serde(default = "default_auto_failover")]
     pub auto_failover: bool,
+    /// 手动携带全局记忆时的 token 预算（前端截断用）。
+    #[serde(default = "default_memory_carry_token_budget")]
+    pub memory_carry_token_budget: u32,
 
     // Claude
     #[serde(default)]
@@ -88,6 +91,9 @@ fn default_work_mode() -> WorkMode {
 }
 fn default_auto_failover() -> bool {
     true
+}
+fn default_memory_carry_token_budget() -> u32 {
+    1200
 }
 fn default_claude_model() -> String {
     "claude-opus-4-7".to_string()
@@ -233,6 +239,7 @@ pub fn normalize_model_for_provider(provider: &str, value: &str, fallback: &str)
 }
 
 fn sanitize_settings(mut settings: Settings) -> Settings {
+    settings.memory_carry_token_budget = settings.memory_carry_token_budget.clamp(200, 8000);
     settings.provider = normalize_provider_id(&settings.provider);
     settings.glm_model = normalize_model_for_provider(
         "glm",
@@ -283,6 +290,7 @@ impl Default for Settings {
             provider: default_provider(),
             work_mode: default_work_mode(),
             auto_failover: default_auto_failover(),
+            memory_carry_token_budget: default_memory_carry_token_budget(),
             anthropic_api_key: String::new(),
             model: default_claude_model(),
             base_url: default_claude_base_url(),
@@ -316,6 +324,7 @@ pub struct SettingsView {
     pub provider: String,
     pub work_mode: WorkMode,
     pub auto_failover: bool,
+    pub memory_carry_token_budget: u32,
     pub model: String,
     pub base_url: String,
     pub gemini_model: String,
@@ -367,6 +376,7 @@ impl From<&Settings> for SettingsView {
             provider: s.provider.clone(),
             work_mode: s.work_mode,
             auto_failover: s.auto_failover,
+            memory_carry_token_budget: s.memory_carry_token_budget,
             model: s.model.clone(),
             base_url: s.base_url.clone(),
             gemini_model: s.gemini_model.clone(),
@@ -409,6 +419,8 @@ pub struct SettingsUpdate {
     pub work_mode: WorkMode,
     #[serde(default = "default_auto_failover")]
     pub auto_failover: bool,
+    #[serde(default = "default_memory_carry_token_budget")]
+    pub memory_carry_token_budget: u32,
     #[serde(default = "default_claude_model")]
     pub model: String,
     #[serde(default = "default_claude_base_url")]
@@ -488,6 +500,7 @@ pub fn save_settings(app: tauri::AppHandle, update: SettingsUpdate) -> Result<()
     current.provider = update.provider;
     current.work_mode = update.work_mode;
     current.auto_failover = update.auto_failover;
+    current.memory_carry_token_budget = update.memory_carry_token_budget;
     current.model = update.model;
     current.base_url = update.base_url;
     current.gemini_model = update.gemini_model;
