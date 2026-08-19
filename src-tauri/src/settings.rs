@@ -501,6 +501,7 @@ pub fn load(app: &tauri::AppHandle) -> Result<Settings, String> {
 /// 从默认 app_data_dir/settings.json 读取（无需 AppHandle）。
 /// CLI / 测试环境专用：目录取自 `%APPDATA%/<identifier>`，
 /// 与 Tauri 的 app_data_dir 约定一致。
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn load_from_default_path() -> Result<Settings, String> {
     #[cfg(windows)]
     let path = {

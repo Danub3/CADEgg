@@ -799,6 +799,7 @@ async fn run_model_suite(
 
 /// 无 UI 依赖的单模型补测入口：不持有 AppHandle、不 emit 事件，
 /// 供 CLI / 测试环境对个别模型（如持续 429 的 glm-4.7-flash）错峰补测。
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn run_headless_model_retest(
     provider: &str,
     model: &str,
