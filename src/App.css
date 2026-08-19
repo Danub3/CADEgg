@@ -222,6 +222,9 @@ button:disabled {
   z-index: 1;
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 320px;
+  /* 行高锁定到容器高度：否则行高 auto 会被右栏内容撑破窗口，
+     右栏自身 overflow-y:auto 因高度等于内容高度而永不触发滚动。 */
+  grid-template-rows: minmax(0, 1fr);
   height: calc(100vh - 63px);
   min-height: 0;
 }
@@ -273,6 +276,7 @@ button:disabled {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
   padding: 16px;
   background:
     linear-gradient(180deg, rgb(255 93 143 / var(--glass-alpha)), rgb(139 92 246 / var(--glass-alpha))),
