@@ -3373,7 +3373,9 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
         cleanup_handles.push(trimmed_handle.clone());
         thread::sleep(Duration::from_millis(250));
         let trimmed = cad_inspect_handle(&trimmed_handle)?;
-        if !line_matches(&trimmed, 100.0, 50.0, 200.0, 50.0) {
+        // pick=(150,50) 在边界 x=100 右侧，按「拾取点指明修掉哪一端」语义，
+        // 修掉右侧 (100,50)→(200,50)，保留 (0,50)→(100,50)。
+        if !line_matches(&trimmed, 0.0, 50.0, 100.0, 50.0) {
             return Err(format!("trim 校验失败: {trimmed}"));
         }
 
