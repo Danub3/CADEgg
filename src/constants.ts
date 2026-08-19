@@ -49,10 +49,6 @@ export const QWEN_MODELS: ModelOption[] = [
   { id: "qwen3-coder-plus", label: "通义千问 Coder Plus", tier: "limited", rating: 4.5 },
   { id: "qwen3-coder-flash", label: "通义千问 Coder Flash", tier: "limited", rating: 4 },
   { id: "qwen3-max", label: "通义千问 3 Max", tier: "production", rating: 4 },
-  { id: "qwen-flash", label: "通义千问 Flash", tier: "limited", rating: 4 },
-  { id: "qwen-max", label: "通义千问 Max（旧版）", tier: "production", rating: 4 },
-  { id: "qwen-plus", label: "通义千问 Plus", tier: "limited", rating: 4 },
-  { id: "qwen-turbo", label: "通义千问 Turbo", tier: "limited", rating: 4 },
 ];
 
 export const KIMI_MODELS: ModelOption[] = [
@@ -60,9 +56,6 @@ export const KIMI_MODELS: ModelOption[] = [
   { id: "kimi-k2.7-code", label: "Kimi K2.7 Code", tier: "production", rating: 4.5 },
   { id: "kimi-k2.6", label: "Kimi K2.6", tier: "production", rating: 4 },
   { id: "kimi-k2.5", label: "Kimi K2.5", tier: "limited", rating: 4.5 },
-  { id: "moonshot-v1-8k", label: "Kimi 8K（旧版）", tier: "unavailable", rating: 4 },
-  { id: "moonshot-v1-32k", label: "Kimi 32K（旧版）", tier: "unavailable", rating: 4 },
-  { id: "moonshot-v1-128k", label: "Kimi 128K（旧版）", tier: "unavailable", rating: 4 },
 ];
 
 export function modelRating(model: ModelOption): ModelRating {

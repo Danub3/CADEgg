@@ -176,19 +176,25 @@ const QWEN_MODELS: &[&str] = &[
     "qwen3-coder-plus",
     "qwen3-coder-flash",
     "qwen3-max",
-    "qwen-flash",
-    "qwen-max",
-    "qwen-plus",
-    "qwen-turbo",
 ];
 const KIMI_MODELS: &[&str] = &[
     "kimi-k3",
     "kimi-k2.7-code",
     "kimi-k2.6",
     "kimi-k2.5",
-    "moonshot-v1-8k",
-    "moonshot-v1-32k",
-    "moonshot-v1-128k",
+];
+
+/// 旧模型 ID → 现行 ID 的显式迁移映射。
+/// 已有 settings.json 里若存有旧 ID，加载时直接迁到语义最接近的现行模型，
+/// 而不是掉进「列表第一个」这种语义错位的回退。
+const LEGACY_MODEL_MIGRATIONS: &[(&str, &str)] = &[
+    ("qwen-plus", "qwen3.7-plus"),
+    ("qwen-max", "qwen3.7-max"),
+    ("qwen-turbo", "qwen3.7-flash"),
+    ("qwen-flash", "qwen3.7-flash"),
+    ("moonshot-v1-8k", "kimi-k2.5"),
+    ("moonshot-v1-32k", "kimi-k2.5"),
+    ("moonshot-v1-128k", "kimi-k2.6"),
 ];
 
 pub fn normalize_provider_id(value: &str) -> String {
@@ -228,6 +234,15 @@ fn default_cheap_model_for_provider(provider: &str) -> String {
 pub fn normalize_model_for_provider(provider: &str, value: &str, fallback: &str) -> String {
     let models = supported_models(provider);
     let candidate = value.trim();
+    // 旧 ID 显式迁移优先：语义最接近的现行模型。
+    if let Some((_, migrated)) = LEGACY_MODEL_MIGRATIONS
+        .iter()
+        .find(|(legacy, _)| *legacy == candidate)
+    {
+        if models.contains(migrated) {
+            return (*migrated).to_string();
+        }
+    }
     if models.contains(&candidate) {
         return candidate.to_string();
     }
@@ -578,6 +593,25 @@ mod tests {
         assert_eq!(sanitized.glm_model, "glm-4.5-air");
         assert_eq!(sanitized.deepseek_model, "deepseek-v4-flash");
         assert_eq!(sanitized.qwen_strong_model, "qwen3.8-max");
+        assert_eq!(sanitized.kimi_strong_model, "kimi-k2.6");
+    }
+
+    #[test]
+    fn sanitize_migrates_legacy_qwen_and_kimi_ids() {
+        let settings = Settings {
+            provider: "qwen".to_string(),
+            qwen_model: "qwen-plus".to_string(),
+            qwen_strong_model: "qwen-max".to_string(),
+            kimi_model: "moonshot-v1-32k".to_string(),
+            kimi_strong_model: "moonshot-v1-128k".to_string(),
+            ..Default::default()
+        };
+
+        let sanitized = sanitize_settings(settings);
+
+        assert_eq!(sanitized.qwen_model, "qwen3.7-plus");
+        assert_eq!(sanitized.qwen_strong_model, "qwen3.7-max");
+        assert_eq!(sanitized.kimi_model, "kimi-k2.5");
         assert_eq!(sanitized.kimi_strong_model, "kimi-k2.6");
     }
 
