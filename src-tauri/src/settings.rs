@@ -495,10 +495,35 @@ fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 pub fn load(app: &tauri::AppHandle) -> Result<Settings, String> {
     let path = settings_path(app)?;
+    load_from_path(&path)
+}
+
+/// 从默认 app_data_dir/settings.json 读取（无需 AppHandle）。
+/// CLI / 测试环境专用：目录取自 `%APPDATA%/<identifier>`，
+/// 与 Tauri 的 app_data_dir 约定一致。
+pub fn load_from_default_path() -> Result<Settings, String> {
+    #[cfg(windows)]
+    let path = {
+        let base = std::env::var("APPDATA")
+            .map_err(|e| format!("拿不到 APPDATA 环境变量: {e}"))?;
+        PathBuf::from(base).join("io.github.danub3.cadegg").join("settings.json")
+    };
+    #[cfg(not(windows))]
+    let path = {
+        let base = std::env::var("HOME")
+            .map_err(|e| format!("拿不到 HOME 环境变量: {e}"))?;
+        PathBuf::from(base)
+            .join(".local/share/io.github.danub3.cadegg")
+            .join("settings.json")
+    };
     if !path.exists() {
         return Ok(Settings::default());
     }
-    let content = fs::read_to_string(&path).map_err(|e| format!("读配置失败: {e}"))?;
+    load_from_path(&path)
+}
+
+fn load_from_path(path: &PathBuf) -> Result<Settings, String> {
+    let content = fs::read_to_string(path).map_err(|e| format!("读配置失败: {e}"))?;
     let settings = serde_json::from_str(&content).map_err(|e| format!("解析配置失败: {e}"))?;
     Ok(sanitize_settings(settings))
 }

@@ -534,7 +534,7 @@ struct RunMetrics {
 
 async fn run_case(
     client: &reqwest::Client,
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     cand: &BenchmarkCandidate,
     settings: &Settings,
     case_id: &str,
@@ -601,16 +601,17 @@ async fn run_case(
                     } else {
                         pause_ms.max(2_000)
                     };
-                    let _ = app.emit(
-                        "benchmark:event",
-                        BenchmarkEvent {
-                            kind: "case".to_string(),
-                            current,
-                            total,
-                            provider: Some(cand.provider.clone()),
-                            model: Some(cand.model.clone()),
-                            message: format!(
-                                "{} / {} · {} 请求失败，{}s 后重试（第 {} 次）",
+                    if let Some(app) = app {
+                        let _ = app.emit(
+                            "benchmark:event",
+                            BenchmarkEvent {
+                                kind: "case".to_string(),
+                                current,
+                                total,
+                                provider: Some(cand.provider.clone()),
+                                model: Some(cand.model.clone()),
+                                message: format!(
+                                    "{} / {} · {} 请求失败，{}s 后重试（第 {} 次）",
                                 cand.provider_label,
                                 cand.model,
                                 case_label,
@@ -618,7 +619,8 @@ async fn run_case(
                                 attempt
                             ),
                         },
-                    );
+                        );
+                    }
                     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
                     continue;
                 }
@@ -627,17 +629,19 @@ async fn run_case(
         }
     };
     metrics.durations.push(last_elapsed);
-    let _ = app.emit(
-        "benchmark:event",
-        BenchmarkEvent {
-            kind: "case".to_string(),
-            current,
-            total,
-            provider: Some(cand.provider.clone()),
-            model: Some(cand.model.clone()),
-            message: format!("{} / {} · {} · {}ms", cand.provider_label, cand.model, case_label, last_elapsed),
-        },
-    );
+    if let Some(app) = app {
+        let _ = app.emit(
+            "benchmark:event",
+            BenchmarkEvent {
+                kind: "case".to_string(),
+                current,
+                total,
+                provider: Some(cand.provider.clone()),
+                model: Some(cand.model.clone()),
+                message: format!("{} / {} · {} · {}ms", cand.provider_label, cand.model, case_label, last_elapsed),
+            },
+        );
+    }
     match result {
         Ok(resp) => {
             metrics.succeeded += 1;
@@ -673,7 +677,7 @@ async fn run_case(
 
 async fn run_model_suite(
     client: &reqwest::Client,
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     cand: &BenchmarkCandidate,
     settings: &Settings,
     budget: u32,
@@ -791,6 +795,30 @@ async fn run_model_suite(
         cases,
         errors: metrics.errors,
     }
+}
+
+/// 无 UI 依赖的单模型补测入口：不持有 AppHandle、不 emit 事件，
+/// 供 CLI / 测试环境对个别模型（如持续 429 的 glm-4.7-flash）错峰补测。
+pub(crate) async fn run_headless_model_retest(
+    provider: &str,
+    model: &str,
+) -> Result<BenchmarkModelResult, String> {
+    let settings = crate::settings::load_from_default_path().map_err(|e| format!("读取设置失败: {e}"))?;
+    let (label, key, _base_url) = provider_creds(&settings, provider);
+    if key.trim().is_empty() {
+        return Err(format!("{label} API Key 未配置"));
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let cand = BenchmarkCandidate {
+        provider: provider.to_string(),
+        provider_label: label,
+        model: model.to_string(),
+        skip_reason: None,
+    };
+    Ok(run_model_suite(&client, None, &cand, &settings, MAX_BENCHMARK_REQUESTS, 1, 1).await)
 }
 
 // ---------------- 结果保存 ----------------
@@ -974,7 +1002,7 @@ async fn run_benchmark_inner(
                 message: format!("开始测试 {} / {}", cand.provider_label, cand.model),
             },
         );
-        let result = run_model_suite(&client, app, cand, &settings, budget, index + 1, total_models).await;
+        let result = run_model_suite(&client, Some(app), cand, &settings, budget, index + 1, total_models).await;
         let _ = app.emit(
             "benchmark:event",
             BenchmarkEvent {
@@ -1107,6 +1135,40 @@ mod tests {
         assert!(glm.skip_reason.is_none());
         let ds = candidates.iter().find(|c| c.provider == "deepseek").unwrap();
         assert!(ds.skip_reason.as_deref().unwrap_or("").contains("未配置"));
+    }
+
+    /// 无 UI 单模型补测入口（ignored）：对持续 429 的模型错峰补测。
+    /// 用法：cargo test retest_model_headless -- --ignored --nocapture
+    /// 默认补测 glm-4.7-flash；改环境变量 CADEGG_RETEST_MODEL 可换模型。
+    #[test]
+    #[ignore = "requires live API credentials — 按需错峰补测"]
+    fn retest_model_headless() {
+        let model = std::env::var("CADEGG_RETEST_MODEL").unwrap_or_else(|_| "glm-4.7-flash".to_string());
+        let provider = if model.starts_with("glm") {
+            "glm"
+        } else if model.starts_with("deepseek") {
+            "deepseek"
+        } else if model.starts_with("qwen") {
+            "qwen"
+        } else {
+            "kimi"
+        };
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let result = rt.block_on(super::run_headless_model_retest(provider, &model));
+        match result {
+            Ok(summary) => {
+                println!("=== 单模型补测结果 ===");
+                println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+                assert!(
+                    summary.succeeded == summary.requests,
+                    "补测未全通过：{}/{}，错误：{:?}",
+                    summary.succeeded,
+                    summary.requests,
+                    summary.errors
+                );
+            }
+            Err(e) => panic!("补测失败: {e}"),
+        }
     }
 
     #[test]
