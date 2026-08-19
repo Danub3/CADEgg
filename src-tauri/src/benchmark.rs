@@ -52,6 +52,13 @@ fn parse_retry_after_secs(message: &str) -> Option<u64> {
     num.parse::<u64>().ok().map(|s| s.clamp(5, 90))
 }
 
+/// 限流错误的重试等待：有 Retry-After 用 Retry-After，否则用较长退避（≥30s）。
+fn rate_limit_wait_ms(message: &str, pause_ms: u64) -> u64 {
+    parse_retry_after_secs(message)
+        .map(|secs| (secs * 1000).max(pause_ms))
+        .unwrap_or_else(|| pause_ms.max(30_000))
+}
+
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 static REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -588,7 +595,9 @@ async fn run_case(
                 if attempt < MAX_ATTEMPTS_PER_CASE {
                     retried = true;
                     let wait_ms = if is_rate_limit_error(&e) {
-                        parse_retry_after_secs(&e).unwrap_or(pause_ms).max(pause_ms)
+                        // 429 无 Retry-After（如智谱「当前访问量过大」）时用较长退避，
+                        // 而不是 2.5s 立即重试——这类过载通常持续数分钟。
+                        rate_limit_wait_ms(&e, pause_ms)
                     } else {
                         pause_ms.max(2_000)
                     };
@@ -1118,6 +1127,14 @@ mod tests {
         let runnable: Vec<_> = candidates.iter().filter(|c| c.skip_reason.is_none()).collect();
         assert_eq!(runnable.len(), 1, "glm 双档位相同模型应去重");
         assert_eq!(runnable[0].model, "glm-4.5");
+    }
+
+    #[test]
+    fn rate_limit_wait_without_retry_after_uses_long_backoff() {
+        assert_eq!(rate_limit_wait_ms("该模型当前访问量过大，请您稍后再试", 2_500), 30_000);
+        assert_eq!(rate_limit_wait_ms("please try again after 12 seconds", 2_500), 12_000);
+        // Retry-After 秒数小于供应商间隔时，仍遵守供应商间隔下限
+        assert_eq!(rate_limit_wait_ms("try again after 5 seconds", 21_000), 21_000);
     }
 
     #[test]
