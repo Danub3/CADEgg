@@ -266,7 +266,7 @@ pub(crate) fn benchmark_candidates_from_settings(settings: &Settings) -> Vec<Ben
 fn model_is_known_free(model: &str) -> bool {
     matches!(
         model.to_ascii_lowercase().as_str(),
-        "glm-4.7-flash" | "glm-4.5-flash" | "glm-4-flash-250414"
+        "glm-4.5-flash" | "glm-4-flash-250414"
     )
 }
 
@@ -798,7 +798,7 @@ async fn run_model_suite(
 }
 
 /// 无 UI 依赖的单模型补测入口：不持有 AppHandle、不 emit 事件，
-/// 供 CLI / 测试环境对个别模型（如持续 429 的 glm-4.7-flash）错峰补测。
+/// 供 CLI / 测试环境对个别模型错峰补测。
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn run_headless_model_retest(
     provider: &str,
@@ -1138,13 +1138,13 @@ mod tests {
         assert!(ds.skip_reason.as_deref().unwrap_or("").contains("未配置"));
     }
 
-    /// 无 UI 单模型补测入口（ignored）：对持续 429 的模型错峰补测。
-    /// 用法：cargo test retest_model_headless -- --ignored --nocapture
-    /// 默认补测 glm-4.7-flash；改环境变量 CADEGG_RETEST_MODEL 可换模型。
+    /// 无 UI 单模型补测入口（ignored）：对个别模型错峰补测。
+    /// 用法：$env:CADEGG_RETEST_MODEL='<model-id>'; cargo test retest_model_headless -- --ignored --nocapture
+    /// 默认补测 glm-4.5-flash（免费稳定）。
     #[test]
     #[ignore = "requires live API credentials — 按需错峰补测"]
     fn retest_model_headless() {
-        let model = std::env::var("CADEGG_RETEST_MODEL").unwrap_or_else(|_| "glm-4.7-flash".to_string());
+        let model = std::env::var("CADEGG_RETEST_MODEL").unwrap_or_else(|_| "glm-4.5-flash".to_string());
         let provider = if model.starts_with("glm") {
             "glm"
         } else if model.starts_with("deepseek") {

@@ -464,7 +464,6 @@ const MODEL_UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   "glm-5-turbo": { "zh-CN": "GLM-5-Turbo", "en-US": "GLM-5-Turbo" },
   "glm-4.7": { "zh-CN": "GLM-4.7", "en-US": "GLM-4.7" },
   "glm-4.7-flashx": { "zh-CN": "GLM-4.7-FlashX", "en-US": "GLM-4.7-FlashX" },
-  "glm-4.7-flash": { "zh-CN": "GLM-4.7-Flash（免费）", "en-US": "GLM-4.7-Flash (Free)" },
   "glm-4.6": { "zh-CN": "GLM-4.6", "en-US": "GLM-4.6" },
   "glm-4.5": { "zh-CN": "GLM-4.5", "en-US": "GLM-4.5" },
   "glm-4.5-air": { "zh-CN": "GLM-4.5-Air", "en-US": "GLM-4.5-Air" },
@@ -5095,9 +5094,9 @@ const MODEL_EVIDENCE_TABLE: ModelEvidenceRow[] = [
   },
   {
     provider: "GLM",
-    model: "glm-4.7-flash / glm-4.5-flash / glm-4-flash-250414",
+    model: "glm-4.5-flash / glm-4-flash-250414",
     status: "light",
-    rating: 3.5,
+    rating: 4,
     officialZh: "官方免费或免费 Flash 模型。",
     officialEn: "Official free or free Flash models.",
     cadeggZh: "可作为免费轻量入口；复杂 CAD 操作前应切强模型。",
@@ -5370,7 +5369,6 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
                     <li>速度最快：Kimi moonshot 系列约 0.9s/请求；GLM-4.5 最慢（约 9-10s），GLM-4.5-Flash 平均 36s。</li>
                     <li>工具 JSON 与多轮接续普遍稳定；「缺参时是否先追问」仍是所有模型的共同弱项（产品侧会注入知识卡允许按规范默认值出图）。</li>
                     <li>Kimi k2/k3 系列仅接受 temperature=1：基准已自动兼容；Kimi 账户限额（RPM）从 Tier0 升级 Tier1 后不再限流。</li>
-                    <li>例外：glm-4.7-flash 实测期间持续 429「访问量过大」，未取得完整数据，保留官方评分 3.5。</li>
                     <li>完整报告：记忆目录 benchmark-results.json / benchmark-results.md。</li>
                   </>
                 ) : (
@@ -5379,7 +5377,6 @@ function HelpPanel({ language, onClose }: HelpPanelProps) {
                     <li>Fastest: Kimi moonshot series ≈0.9s/request; GLM-4.5 is slowest (≈9-10s), GLM-4.5-Flash averaged 36s.</li>
                     <li>Tool JSON and multi-turn continuity are generally stable; "clarify missing params first" remains the common weak spot (the product injects knowledge cards allowing standard defaults).</li>
                     <li>Kimi k2/k3 accept only temperature=1: the benchmark auto-falls back. Kimi rate limits no longer throttle after Tier0→Tier1 upgrade.</li>
-                    <li>Exception: glm-4.7-flash kept hitting 429 (overloaded) during the run; it keeps the official 3.5 rating.</li>
                     <li>Full report: benchmark-results.json / benchmark-results.md in the memory folder.</li>
                   </>
                 )}

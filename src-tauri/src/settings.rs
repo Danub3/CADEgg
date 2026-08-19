@@ -154,7 +154,6 @@ const GLM_MODELS: &[&str] = &[
     "glm-5-turbo",
     "glm-4.7",
     "glm-4.7-flashx",
-    "glm-4.7-flash",
     "glm-4.6",
     "glm-4.5",
     "glm-4.5-air",

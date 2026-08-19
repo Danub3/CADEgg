@@ -2,7 +2,6 @@ import type { Provider, SettingsView } from "./types";
 
 // 评级说明：rating 为 CADEgg 实测基准回写（全量 38 模型，测试日期 2026-08-18，结果见记忆目录 benchmark-results.json/md）。
 // 评分权重：工具调用可靠性 25% · CAD/规范准确性 25% · 稳定性 15% · 速度 15% · 成本 10% · 长上下文 10%。
-// 例外：glm-4.7-flash 实测期间持续 429（访问量过大）未取得完整数据，保留官方评分 3.5。
 // 模型标签只标免费，未标注一律按消耗 token/额度处理。
 
 export type ModelTier = "production" | "limited" | "unavailable";
@@ -22,7 +21,6 @@ export const GLM_MODELS: ModelOption[] = [
   { id: "glm-5-turbo", label: "GLM-5-Turbo", tier: "limited", rating: 4.5 },
   { id: "glm-4.7", label: "GLM-4.7", tier: "production", rating: 4 },
   { id: "glm-4.7-flashx", label: "GLM-4.7-FlashX", tier: "limited", rating: 4.5 },
-  { id: "glm-4.7-flash", label: "GLM-4.7-Flash（免费）", tier: "limited", rating: 3.5 },
   { id: "glm-4.6", label: "GLM-4.6", tier: "production", rating: 4 },
   { id: "glm-4.5", label: "GLM-4.5", tier: "production", rating: 4 },
   { id: "glm-4.5-air", label: "GLM-4.5-Air", tier: "limited", rating: 4 },
