@@ -351,8 +351,9 @@ fn params_draw_elevator_shaft_protection() -> Value {
             "y": {"type": "number", "description": "电梯井口中心 Y"},
             "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0（现场实测）"},
             "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0（现场实测）"},
-            "guard_height": {"type": "number", "description": "防护门高度，毫米，规范定值 1500（1.5m），缺省按 1500"},
-            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，规范定值 200，缺省按 200"},
+            "guard_height": {"type": "number", "description": "防护门高度，毫米，不小于 1500（1.5m），缺省按最低合规值 1500"},
+            "door_bottom_gap": {"type": "number", "description": "防护门底端距地面高度，毫米，不大于 50，缺省按最大合规值 50"},
+            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，指导图册推荐 200，缺省按 200"},
             "include_warning_sign": {"type": "boolean", "description": "是否绘制警示牌「当心坠落 严禁抛物」，默认 true"},
             "include_material_table": {"type": "boolean", "description": "是否绘制材料表，默认 true"},
             "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"}
@@ -372,8 +373,9 @@ fn params_validate_elevator_shaft_protection() -> Value {
         "properties": {
             "opening_width": {"type": "number", "description": "井口宽度，毫米，须大于 0"},
             "opening_height": {"type": "number", "description": "井口高度/进深，毫米，须大于 0"},
-            "guard_height": {"type": "number", "description": "防护门高度，毫米，规范 1500"},
-            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，规范 200"},
+            "guard_height": {"type": "number", "description": "防护门高度，毫米，须不小于 1500"},
+            "door_bottom_gap": {"type": "number", "description": "防护门底端距地面高度，毫米，须不大于 50"},
+            "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，推荐 200"},
             "include_warning_sign": {"type": "boolean", "description": "是否包含警示牌"},
             "include_material_table": {"type": "boolean", "description": "是否包含材料表"}
         },
@@ -381,6 +383,7 @@ fn params_validate_elevator_shaft_protection() -> Value {
             "opening_width",
             "opening_height",
             "guard_height",
+            "door_bottom_gap",
             "toe_board_height",
             "include_warning_sign",
             "include_material_table"
@@ -557,15 +560,28 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
-/// 判断是否为电梯井口防护门相关请求。
+/// 判断是否为已登记的施工安全场景请求。
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_safety_request(user_input: &str) -> bool {
-    crate::safety::is_elevator_shaft_request(user_input)
+    crate::scenes::match_safety_scene(user_input).is_some()
+        || crate::safety::is_elevator_shaft_request(user_input)
+}
+
+pub fn safety_context_scene(user_input: &str) -> Option<&'static str> {
+    if crate::safety::is_elevator_shaft_request(user_input) {
+        return Some("elevator_shaft_protection");
+    }
+    crate::scenes::match_safety_scene(user_input).map(|scene| scene.scene)
 }
 
 /// 电梯井口防护门的必填关键参数。返回缺参列表，用于追问闭环。
 /// 仅对「要画防护图」但缺关键尺寸的请求返回缺项；若用户已在同一句里给出尺寸则视为已提供。
 pub fn safety_missing_params(user_input: &str) -> Vec<&'static str> {
-    crate::safety::missing_elevator_shaft_params(user_input)
+    if crate::safety::is_elevator_shaft_request(user_input) {
+        crate::safety::missing_elevator_shaft_params(user_input)
+    } else {
+        Vec::new()
+    }
 }
 
 /// 生成缺参追问提示文案，供系统提示注入或前端直接展示。
@@ -576,6 +592,136 @@ pub fn safety_clarification_prompt(user_input: &str) -> Option<String> {
     crate::safety::elevator_shaft_clarification_prompt(user_input)
 }
 
+fn scene_category_label(category: crate::scenes::SafetySceneCategory) -> &'static str {
+    match category {
+        crate::scenes::SafetySceneCategory::FallProtection => "高处坠落防护",
+        crate::scenes::SafetySceneCategory::AccessProtection => "通行与防护棚",
+    }
+}
+
+fn safety_scene_tooling_context(
+    scene: &crate::scenes::SafetySceneSpec,
+    user_input: &str,
+    has_session: bool,
+) -> ToolingContext {
+    let mut selected = vec![
+        "draw_text",
+        "zoom_extents",
+        "inspect_handle",
+        "modelspace_snapshot",
+    ];
+    if let Some(draw_tool) = scene.draw_tool {
+        selected.insert(0, draw_tool);
+    }
+    if let Some(validate_tool) = scene.validate_tool {
+        selected.insert(if scene.draw_tool.is_some() { 1 } else { 0 }, validate_tool);
+    }
+    if contains_any(
+        &user_input.to_lowercase(),
+        &["选中", "选择集", "圈选", "预选"],
+    ) {
+        selected.push("list_selection");
+        selected.push("import_selection");
+    }
+
+    let required_params = if scene.required_params.is_empty() {
+        "无固定必填参数".to_string()
+    } else {
+        scene.required_params.join(", ")
+    };
+    let mut lines = vec![format!(
+        "安全场景注册表命中：{} ({})；分类={}；必填参数={}。",
+        scene.name,
+        scene.scene,
+        scene_category_label(scene.category),
+        required_params
+    )];
+
+    if scene.auto_draw {
+        let draw_tool = scene.draw_tool.unwrap_or("未配置");
+        let validate_tool = scene.validate_tool.unwrap_or("未配置");
+        lines.push(format!(
+            "本场景已开放确定性出图/校核工具：draw={}，validate={}；优先完成 draw -> validate -> modelspace_snapshot 闭环。",
+            draw_tool, validate_tool
+        ));
+        lines.push(
+            "缺少现场实测的必填参数时先追问；不要编造尺寸，不要调用 run_lisp 绕过场景工具。"
+                .to_string(),
+        );
+        if let Some(prompt) = safety_clarification_prompt(user_input) {
+            lines.push(prompt);
+        }
+    } else {
+        lines.push(
+            "该场景已注册但尚未开放确定性 CAD 出图/校核工具；不得调用电梯井口工具替代。"
+                .to_string(),
+        );
+        lines.push(
+            "当前只能基于知识卡和注册规则输出做法边界、参数清单、追问项或人工审核提示。"
+                .to_string(),
+        );
+    }
+
+    if !scene.mandatory_rules.is_empty() {
+        lines.push(format!("强制规则：{}。", scene.mandatory_rules.join(", ")));
+    }
+    if !scene.recommended_rules.is_empty() {
+        lines.push(format!(
+            "推荐做法：{}。",
+            scene.recommended_rules.join(", ")
+        ));
+    }
+    if !scene.prohibited_rules.is_empty() {
+        lines.push(format!("禁止误用：{}。", scene.prohibited_rules.join(", ")));
+    }
+    if has_session {
+        lines.push(
+            "若继续操作已有对象，可先 inspect_handle 查询，但不要使用任意 LISP 或低层编辑工具。"
+                .to_string(),
+        );
+    }
+
+    ToolingContext {
+        tool_names: ordered_unique(selected),
+        guidance: lines.join("\n"),
+    }
+}
+
+fn generic_safety_tooling_context(user_input: &str, has_session: bool) -> ToolingContext {
+    let mut selected = vec![
+        "draw_text",
+        "zoom_extents",
+        "inspect_handle",
+        "modelspace_snapshot",
+    ];
+    if contains_any(
+        &user_input.to_lowercase(),
+        &["选中", "选择集", "圈选", "预选"],
+    ) {
+        selected.push("list_selection");
+        selected.push("import_selection");
+    }
+
+    let mut lines = vec![
+        "安全模式：当前请求未命中已注册的确定性施工安全场景。".to_string(),
+        "只提供文字说明、图面查询和结构化审查入口；不得自行套用电梯井口防护门工具，也不要调用 run_lisp 绕过场景边界。"
+            .to_string(),
+        "请先明确作业部位、风险类型、施工阶段、现场尺寸和拟采用的防护构件；涉及专项方案或专业审查时标记为人工审核。"
+            .to_string(),
+    ];
+    if has_session {
+        lines.push(
+            "若继续操作已有对象，可先 inspect_handle 查询，但不要使用任意 LISP 或低层编辑工具。"
+                .to_string(),
+        );
+    }
+
+    ToolingContext {
+        tool_names: ordered_unique(selected),
+        guidance: lines.join("\n"),
+    }
+}
+
 pub fn select_tooling_context(
     user_input: &str,
     session_objects: &[SessionObject],
@@ -583,37 +729,19 @@ pub fn select_tooling_context(
 ) -> ToolingContext {
     let text = user_input.to_lowercase();
     let has_session = !session_objects.is_empty();
-    let is_safety_request = crate::tools::is_safety_request(user_input);
 
-    if work_mode == WorkMode::SafetyDemoMode || is_safety_request {
-        let mut selected = vec![
-            "draw_elevator_shaft_protection",
-            "validate_elevator_shaft_protection",
-            "draw_text",
-            "zoom_extents",
-            "inspect_handle",
-            "modelspace_snapshot",
-        ];
-        if contains_any(&text, &["选中", "选择集", "圈选", "预选"]) {
-            selected.push("list_selection");
-            selected.push("import_selection");
+    let matched_scene = crate::scenes::match_safety_scene(user_input).or_else(|| {
+        if crate::safety::is_elevator_shaft_request(user_input) {
+            crate::scenes::scene_by_id("elevator_shaft_protection")
+        } else {
+            None
         }
-        let mut lines = vec![
-            "安全防护 demo 模式：只暴露室内电梯井口防护门专用工具、校核工具、文字和最少查询工具。".to_string(),
-            "优先调用 draw_elevator_shaft_protection；绘图完成后调用 validate_elevator_shaft_protection 输出 JSON 校核结果。".to_string(),
-            "缺少 opening_width/opening_height 时，先向用户追问，不要编造尺寸；防护门高 guard_height(1500)、踢脚板 toe_board_height(200) 是规范定值，缺省即用规范值。".to_string(),
-            "用户未指定绘图位置时，x/y 默认取 0（井口中心落在原点），不要因缺少坐标而追问或停止出图。".to_string(),
-        ];
-        if let Some(prompt) = safety_clarification_prompt(user_input) {
-            lines.push(prompt);
-        }
-        if has_session {
-            lines.push("若继续操作已有对象，可先 inspect_handle 查询，但不要使用任意 LISP 或低层编辑工具。".to_string());
-        }
-        return ToolingContext {
-            tool_names: ordered_unique(selected),
-            guidance: lines.join("\n"),
-        };
+    });
+    if let Some(scene) = matched_scene {
+        return safety_scene_tooling_context(scene, user_input, has_session);
+    }
+    if work_mode == WorkMode::SafetyDemoMode {
+        return generic_safety_tooling_context(user_input, has_session);
     }
 
     let is_stair_request =
@@ -1211,6 +1339,10 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .and_then(|v| v.as_f64())
                 .unwrap_or(crate::safety::TOE_BOARD_HEIGHT_MM),
             call.args
+                .get("door_bottom_gap")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::DOOR_BOTTOM_GAP_MAX_MM),
+            call.args
                 .get("include_warning_sign")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
@@ -1235,6 +1367,10 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .get("toe_board_height")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(crate::safety::TOE_BOARD_HEIGHT_MM),
+            call.args
+                .get("door_bottom_gap")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::DOOR_BOTTOM_GAP_MAX_MM),
             call.args
                 .get("include_warning_sign")
                 .and_then(|v| v.as_bool())
@@ -1418,6 +1554,50 @@ mod tests {
             .tool_names
             .iter()
             .any(|name| name == "validate_elevator_shaft_protection"));
+        assert!(tooling.guidance.contains("edge_guardrail"));
+        assert!(tooling.guidance.contains("尚未开放确定性 CAD 出图"));
+    }
+
+    #[test]
+    fn safety_demo_mode_does_not_force_edge_guardrail_to_elevator_tool() {
+        let tooling = select_tooling_context(
+            "画一个屋面临边防护栏杆，长度 5000",
+            &[],
+            WorkMode::SafetyDemoMode,
+        );
+
+        assert!(is_safety_request("画一个屋面临边防护栏杆"));
+        assert_eq!(
+            safety_context_scene("画一个屋面临边防护栏杆"),
+            Some("edge_guardrail")
+        );
+        assert!(!tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_elevator_shaft_protection"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "modelspace_snapshot"));
+    }
+
+    #[test]
+    fn safety_demo_mode_keeps_generic_safety_requests_in_safe_context() {
+        let tooling = select_tooling_context(
+            "施工安全规范怎么梳理",
+            &[],
+            WorkMode::SafetyDemoMode,
+        );
+
+        assert!(!tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_elevator_shaft_protection"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "modelspace_snapshot"));
+        assert!(tooling.guidance.contains("未命中已注册"));
     }
 
     #[test]

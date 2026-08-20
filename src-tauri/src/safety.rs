@@ -2,21 +2,33 @@ use serde::Serialize;
 
 pub const GUARD_DOOR_HEIGHT_MM: f64 = 1500.0;
 pub const TOE_BOARD_HEIGHT_MM: f64 = 200.0;
+pub const DOOR_BOTTOM_GAP_MAX_MM: f64 = 50.0;
 pub const DOOR_WIDTH_NARROW_M: f64 = 1.5;
 pub const DOOR_WIDTH_WIDE_M: f64 = 2.1;
 pub const DOOR_WIDTH_THRESHOLD_MM: f64 = 1800.0;
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationSeverity {
+    Mandatory,
+    Recommended,
+    #[allow(dead_code)]
+    Unverified,
+}
 
 #[derive(Serialize, Debug, Clone)]
 pub struct ValidationCheck {
     pub id: &'static str,
     pub label: &'static str,
     pub passed: bool,
+    pub severity: ValidationSeverity,
 }
 
 #[derive(Serialize, Debug, Clone)]
 pub struct MaterialTable {
     pub guard_door: String,
     pub toe_board_height: f64,
+    pub door_bottom_gap: f64,
     pub warning_sign: bool,
     pub material_table_included: bool,
 }
@@ -25,6 +37,7 @@ pub struct MaterialTable {
 pub struct ElevatorShaftValidation {
     pub ok: bool,
     pub issues: Vec<&'static str>,
+    pub warnings: Vec<&'static str>,
     pub checks: Vec<ValidationCheck>,
     pub material_table: MaterialTable,
 }
@@ -146,7 +159,7 @@ pub fn elevator_shaft_clarification_prompt(user_input: &str) -> Option<String> {
         lines.push(format!("{}. {}", i + 1, field));
     }
     lines.push(
-        "防护门高度（1.5m）、踢脚板（200mm）按规范定值，无需追问；警示牌和材料表未说明时默认包含。"
+        "防护门高度未说明时按最低合规值 1500mm，门底间隙未说明时按最大合规值 50mm，踢脚板未说明时按图册推荐值 200mm；警示牌和材料表未说明时默认包含。"
             .to_string(),
     );
     Some(lines.join("\n"))
@@ -157,58 +170,95 @@ pub fn validate_elevator_shaft_protection(
     opening_height: f64,
     guard_height: f64,
     toe_board_height: f64,
+    door_bottom_gap: f64,
     include_warning_sign: bool,
     include_material_table: bool,
 ) -> ElevatorShaftValidation {
     let mut checks = Vec::new();
     let mut issues = Vec::new();
+    let mut warnings = Vec::new();
 
-    let mut add_check = |id: &'static str, label: &'static str, passed: bool| {
-        checks.push(ValidationCheck { id, label, passed });
-        if !passed {
-            issues.push(label);
-        }
-    };
+    let mut add_check =
+        |id: &'static str, label: &'static str, severity: ValidationSeverity, passed: bool| {
+            checks.push(ValidationCheck {
+                id,
+                label,
+                passed,
+                severity,
+            });
+            if !passed {
+                match severity {
+                    ValidationSeverity::Mandatory => issues.push(label),
+                    ValidationSeverity::Recommended | ValidationSeverity::Unverified => {
+                        warnings.push(label)
+                    }
+                }
+            }
+        };
 
     add_check(
         "opening_size_valid",
         "井口宽度和高度已提供且为正数",
+        ValidationSeverity::Mandatory,
         opening_width > 0.0 && opening_height > 0.0,
     );
     add_check(
         "guard_door_height_valid",
-        "防护门高度为 1500mm（1.5m）",
-        (guard_height - GUARD_DOOR_HEIGHT_MM).abs() < 0.5,
+        "防护门高度不小于 1500mm（1.5m）",
+        ValidationSeverity::Mandatory,
+        guard_height >= GUARD_DOOR_HEIGHT_MM - 0.5,
+    );
+    add_check(
+        "door_bottom_gap_valid",
+        "防护门底端距地面高度不大于 50mm",
+        ValidationSeverity::Mandatory,
+        door_bottom_gap >= 0.0 && door_bottom_gap <= DOOR_BOTTOM_GAP_MAX_MM + 0.5,
     );
     add_check(
         "toe_board_present",
-        "防护门底部踢脚板高度为 200mm",
+        "已设置挡脚板（踢脚板）",
+        ValidationSeverity::Mandatory,
+        toe_board_height > 0.0,
+    );
+    add_check(
+        "toe_board_height_recommended",
+        "踢脚板高度为 200mm（指导图册推荐做法）",
+        ValidationSeverity::Recommended,
         (toe_board_height - TOE_BOARD_HEIGHT_MM).abs() < 0.5,
     );
     add_check(
         "warning_sign_present",
-        "警示牌「当心坠落 严禁抛物」已配置",
+        "警示牌「当心坠落 严禁抛物」已配置（指导图册做法）",
+        ValidationSeverity::Recommended,
         include_warning_sign,
     );
     add_check(
         "material_table_present",
-        "材料表已配置",
+        "材料表已配置（便于验收复核）",
+        ValidationSeverity::Recommended,
         include_material_table,
     );
     add_check(
         "dimension_complete",
-        "井口尺寸、防护门高、踢脚板高度标注齐全",
-        opening_width > 0.0 && opening_height > 0.0 && guard_height > 0.0 && toe_board_height > 0.0,
+        "井口尺寸、防护门高、门底间隙、踢脚板高度标注齐全",
+        ValidationSeverity::Mandatory,
+        opening_width > 0.0
+            && opening_height > 0.0
+            && guard_height > 0.0
+            && door_bottom_gap >= 0.0
+            && toe_board_height > 0.0,
     );
 
     let door_spec_m = guard_door_width_spec_m(opening_width);
     ElevatorShaftValidation {
         ok: issues.is_empty(),
         issues,
+        warnings,
         checks,
         material_table: MaterialTable {
             guard_door: format!("{}m 上翻式防护门", door_spec_m),
             toe_board_height,
+            door_bottom_gap,
             warning_sign: include_warning_sign,
             material_table_included: include_material_table,
         },
@@ -259,16 +309,50 @@ mod tests {
     #[test]
     fn validation_payload_matches_standard_values() {
         let validation =
-            validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, true, true);
+            validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true);
         assert!(validation.ok);
         assert_eq!(validation.material_table.guard_door, "2.1m 上翻式防护门");
+        assert!(validation.warnings.is_empty());
 
         let validation =
-            validate_elevator_shaft_protection(1500.0, 1800.0, 1200.0, 180.0, true, true);
+            validate_elevator_shaft_protection(1500.0, 1800.0, 1200.0, 200.0, 50.0, true, true);
         assert!(!validation.ok);
         assert!(validation
             .issues
             .iter()
             .any(|issue| issue.contains("防护门高度")));
+    }
+
+    #[test]
+    fn validation_accepts_guard_height_above_minimum_and_checks_bottom_gap() {
+        let validation =
+            validate_elevator_shaft_protection(2000.0, 1800.0, 1600.0, 200.0, 50.0, true, true);
+        assert!(validation.ok);
+
+        let validation =
+            validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, 75.0, true, true);
+        assert!(!validation.ok);
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.contains("防护门底端距地面")));
+    }
+
+    #[test]
+    fn validation_distinguishes_recommended_items_from_mandatory_failures() {
+        let validation =
+            validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 180.0, 50.0, false, false);
+        assert!(validation.ok);
+        assert!(validation.issues.is_empty());
+        assert!(validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("踢脚板高度为 200mm")));
+        assert!(validation
+            .checks
+            .iter()
+            .any(|check| check.id == "toe_board_height_recommended"
+                && check.severity == ValidationSeverity::Recommended
+                && !check.passed));
     }
 }

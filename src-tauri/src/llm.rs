@@ -1808,8 +1808,9 @@ pub async fn run_agent(
     }
 
     let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
+    let safety_context_scene = tools::safety_context_scene(&user_text);
     let use_safety_context = settings.work_mode == crate::settings::WorkMode::SafetyDemoMode
-        || tools::is_safety_request(&user_text);
+        || safety_context_scene.is_some();
 
     // 确定性任务分级：出图/规划/复核走强模型，纯问答走便宜模型。
     // 安全防护请求（需严格按知识卡出图/校核）强制走强模型，保证质量。
@@ -1865,15 +1866,18 @@ pub async fn run_agent(
     if use_safety_context {
         // 闭环第 3 步：按用户输入关键词检索知识卡（search_scenes 多卡命中），
         // 让模型基于受控规则出图/追问，而非自由发挥。
-        // 兜底：若关键词检索未命中，回退到电梯井口这张默认卡。
+        // 兜底：若关键词检索未命中，回退到场景注册表命中的 scene，不跨场景回退到电梯井口。
         let scenes = crate::knowledge::search_scenes(&user_text);
-        let scene = scenes
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("elevator_shaft_protection");
-        if let Some(card) = crate::knowledge::render_scene_context(scene) {
+        let scene = scenes.first().map(|s| s.as_str()).or(safety_context_scene);
+        if let Some(scene) = scene {
+            if let Some(card) = crate::knowledge::render_scene_context(scene) {
+                msgs.push(MessageView::User {
+                    content: format!("系统提醒（标准图册知识卡，出图/追问须遵守）：\n{card}"),
+                });
+            }
+        } else {
             msgs.push(MessageView::User {
-                content: format!("系统提醒（标准图册知识卡，出图/追问须遵守）：\n{card}"),
+                content: "系统提醒（安全模式）：当前未命中具体知识卡。先澄清作业部位、风险、施工阶段、现场尺寸和防护目标；不得把电梯井口防护门规则套用于其他场景。涉及专项方案、结构计算或专业审查时必须提示人工审核。".to_string(),
             });
         }
         if let Some(prompt) = tools::safety_clarification_prompt(&user_text) {

@@ -192,6 +192,7 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
   openingWidth: { "zh-CN": "井口宽度", "en-US": "Opening Width" },
   openingHeight: { "zh-CN": "井口高度", "en-US": "Opening Height" },
   guardHeight: { "zh-CN": "防护门高", "en-US": "Guard Height" },
+  doorBottomGap: { "zh-CN": "门底间隙", "en-US": "Door Gap" },
   toeBoard: { "zh-CN": "踢脚板", "en-US": "Toe Board" },
   warningSign: { "zh-CN": "警示牌", "en-US": "Warning Sign" },
   materialTable: { "zh-CN": "材料表", "en-US": "Material Table" },
@@ -203,8 +204,13 @@ const UI: Record<string, Record<"zh-CN" | "en-US", string>> = {
     "en-US": "Validation results appear after tool execution",
   },
   validationPassed: { "zh-CN": "安全校核通过", "en-US": "Safety Check Passed" },
+  validationPassedWithWarnings: {
+    "zh-CN": "强制项通过，存在建议项提醒",
+    "en-US": "Mandatory Checks Passed, Recommendations Pending",
+  },
   validationFailed: { "zh-CN": "安全校核未通过", "en-US": "Safety Check Failed" },
   riskItems: { "zh-CN": "风险项：{items}", "en-US": "Risks: {items}" },
+  warningItems: { "zh-CN": "建议项：{items}", "en-US": "Recommendations: {items}" },
   materialSummary: {
     "zh-CN": "材料表：防护门 {guardDoor} · 踢脚板 {toeBoard}mm · 警示牌 {warningSign}",
     "en-US": "Materials: guard door {guardDoor} · toe board {toeBoard}mm · warning sign {warningSign}",
@@ -3526,6 +3532,7 @@ function DrawResultCard({
         <Metric label={t("openingWidth", language)} value={`${String(lastDrawParams.opening_width ?? "-")} mm`} />
         <Metric label={t("openingHeight", language)} value={`${String(lastDrawParams.opening_height ?? "-")} mm`} />
         <Metric label={t("guardHeight", language)} value={`${String(lastDrawParams.guard_height ?? "1500")} mm`} />
+        <Metric label={t("doorBottomGap", language)} value={`${String(lastDrawParams.door_bottom_gap ?? "50")} mm`} />
         <Metric label={t("toeBoard", language)} value={`${String(lastDrawParams.toe_board_height ?? "200")} mm`} />
       </div>
       <div className="tag-row">
@@ -3557,11 +3564,18 @@ function ValidationCard({
       </section>
     );
   }
+  const warnings = lastValidation.warnings ?? [];
+  const statusText =
+    lastValidation.ok && warnings.length > 0
+      ? t("validationPassedWithWarnings", language)
+      : lastValidation.ok
+        ? t("validationPassed", language)
+        : t("validationFailed", language);
 
   return (
     <section className={`rail-card validation-card ${lastValidation.ok ? "valid" : "invalid"}`}>
       <PanelHeader title={t("validationTitle", language)} status={lastValidation.ok ? "online" : "error"} />
-      <strong>{lastValidation.ok ? t("validationPassed", language) : t("validationFailed", language)}</strong>
+      <strong>{statusText}</strong>
       <div className="check-list">
         {lastValidation.checks.map((check) => (
           <div key={check.id}>
@@ -3575,6 +3589,11 @@ function ValidationCard({
       {lastValidation.issues.length > 0 && (
         <div className="risk-box">
           {t("riskItems", language, { items: lastValidation.issues.join(language === "zh-CN" ? "；" : "; ") })}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="risk-box">
+          {t("warningItems", language, { items: warnings.join(language === "zh-CN" ? "；" : "; ") })}
         </div>
       )}
       <p>
@@ -4442,8 +4461,12 @@ function parseValidationPayload(content: string): ElevatorValidation | null {
 }
 
 function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
+  const warnings = validation.warnings ?? [];
   if (language === "en-US") {
     if (validation.ok) {
+      if (warnings.length > 0) {
+        return `Mandatory checks passed; recommendations: ${warnings.slice(0, 3).join(", ")}.`;
+      }
       return "Validation passed: dimensions, guard height, toe board, warning sign, and material table are checked.";
     }
     const issues = validation.issues.slice(0, 3).join(", ");
@@ -4451,6 +4474,9 @@ function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "
   }
 
   if (validation.ok) {
+    if (warnings.length > 0) {
+      return `强制项通过，建议项提醒：${warnings.slice(0, 3).join("、")}。`;
+    }
     return "校核通过：井口尺寸、防护门高度、踢脚板、警示牌和材料表已检查。";
   }
   const issues = validation.issues.slice(0, 3).join("、");

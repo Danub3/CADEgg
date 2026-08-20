@@ -6,6 +6,7 @@ mod benchmark;
 mod knowledge;
 mod llm;
 mod safety;
+mod scenes;
 mod session_export;
 mod settings;
 mod tools;

@@ -2036,6 +2036,7 @@ pub fn cad_draw_elevator_shaft_protection(
     opening_height: f64,
     guard_height: f64,
     toe_board_height: f64,
+    door_bottom_gap: f64,
     include_warning_sign: bool,
     include_material_table: bool,
     scale: f64,
@@ -2046,10 +2047,10 @@ pub fn cad_draw_elevator_shaft_protection(
             opening_width, opening_height
         ));
     }
-    if guard_height <= 0.0 || toe_board_height <= 0.0 {
+    if guard_height <= 0.0 || toe_board_height <= 0.0 || door_bottom_gap < 0.0 {
         return Err(format!(
-            "guard_height、toe_board_height 必须为正数，收到 {}, {}",
-            guard_height, toe_board_height
+            "guard_height、toe_board_height must be positive and door_bottom_gap must be non-negative, got {}, {}, {}",
+            guard_height, toe_board_height, door_bottom_gap
         ));
     }
     if scale <= 0.0 {
@@ -2084,8 +2085,9 @@ pub fn cad_draw_elevator_shaft_protection(
 
     let width = opening_width * scale; // 井口宽（水平）
     let height = opening_height * scale; // 井口高（竖直，门洞高）
-    let door_h = guard_height * scale; // 防护门高（规范定值 1500）
-    let toe_h = toe_board_height * scale; // 踢脚板高（规范定值 200）
+    let door_h = guard_height * scale; // 防护门高（不得小于 1500）
+    let door_gap_h = door_bottom_gap * scale; // 防护门底端距地面高度（不得大于 50）
+    let toe_h = toe_board_height * scale; // 踢脚板高（指导图册推荐 200）
     let hinge_size = (60.0 * scale).max(30.0); // 上口两端翻转轴（Φ16）标记尺寸
 
     // ── 字号分层：不同文字类型用不同高度，避免「一刀切过大」 ──
@@ -2103,10 +2105,10 @@ pub fn cad_draw_elevator_shaft_protection(
     let bottom = y - height / 2.0;
     let top = y + height / 2.0;
 
-    // 防护门：安装在井口外侧，覆盖洞口；门高 door_h（1.5m），从井口底边向上。
+    // 防护门：安装在井口外侧，底端按 door_bottom_gap 离地；门扇自身高度为 door_h。
     // 门扇对开，中线在井口中心 x 处。
-    let door_bottom = bottom;
-    let door_top = bottom + door_h;
+    let door_bottom = bottom + door_gap_h;
+    let door_top = door_bottom + door_h;
     let door_mid_x = x;
 
     // ── 顶部纵向布局：标题 / 说明 / 警示牌自下而上排列，避免互相遮挡 ──
@@ -2377,8 +2379,9 @@ pub fn cad_draw_elevator_shaft_protection(
 
     // 说明文字：说明较长，按井口宽度压到更适合图面浏览的字号，并同样限制左边界。
     let note_text = format!(
-        "防护门高 {}  踢脚板 {}  门宽规格 {}m（按井口选型）",
+        "防护门高 {}  门底间隙 {}  踢脚板 {}  门宽规格 {}m（按井口选型）",
         fmt_num(guard_height),
+        fmt_num(door_bottom_gap),
         fmt_num(toe_board_height),
         door_spec_m
     );
@@ -2551,12 +2554,13 @@ pub fn cad_draw_elevator_shaft_protection(
     );
 
     Ok(format!(
-        "已生成电梯井口防护（上翻式防护门）：中心({},{})，井口 {}x{}，防护门高 {}，踢脚板 {}，门宽规格 {}m，警示牌={}，材料表={}。依据：建办质函〔2019〕90号指导图册 2.7.4。",
+        "已生成电梯井口防护（上翻式防护门）：中心({},{})，井口 {}x{}，防护门高 {}，门底间隙 {}，踢脚板 {}，门宽规格 {}m，警示牌={}，材料表={}。依据：JGJ 80-2016 4.2.2、建办质函〔2019〕90号指导图册 2.7.4。",
         fmt_num(x),
         fmt_num(y),
         fmt_num(opening_width),
         fmt_num(opening_height),
         fmt_num(guard_height),
+        fmt_num(door_bottom_gap),
         fmt_num(toe_board_height),
         door_spec_m,
         include_warning_sign,
@@ -2569,6 +2573,7 @@ pub fn cad_validate_elevator_shaft_protection(
     opening_height: f64,
     guard_height: f64,
     toe_board_height: f64,
+    door_bottom_gap: f64,
     include_warning_sign: bool,
     include_material_table: bool,
 ) -> Result<String, String> {
@@ -2577,6 +2582,7 @@ pub fn cad_validate_elevator_shaft_protection(
         opening_height,
         guard_height,
         toe_board_height,
+        door_bottom_gap,
         include_warning_sign,
         include_material_table,
     );
@@ -3425,14 +3431,14 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
     let draw_result = cad_draw_elevator_shaft_protection(
-        1000.0, 2000.0, 2000.0, 1800.0, 1500.0, 200.0, true, true, 1.0,
+        1000.0, 2000.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0,
     )?;
     if !draw_result.contains("电梯井口防护") {
         return Err(format!("绘图结果不符合预期: {draw_result}"));
     }
 
     let validation =
-        cad_validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, true, true)?;
+        cad_validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true)?;
     let validation_json: serde_json::Value =
         serde_json::from_str(&validation).map_err(|e| format!("校核 JSON 解析失败: {e}"))?;
     if validation_json["ok"] != serde_json::Value::Bool(true) {

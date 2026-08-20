@@ -66,15 +66,18 @@ export interface ValidationCheck {
   id: string;
   label: string;
   passed: boolean;
+  severity?: "mandatory" | "recommended" | "unverified";
 }
 
 export interface ElevatorValidation {
   ok: boolean;
   issues: string[];
+  warnings?: string[];
   checks: ValidationCheck[];
   material_table: {
     guard_door: string;
     toe_board_height: number;
+    door_bottom_gap?: number;
     warning_sign: boolean;
     material_table_included: boolean;
   };
