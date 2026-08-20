@@ -11,15 +11,29 @@ pub struct SafetySceneSpec {
     pub category: SafetySceneCategory,
     pub keywords: &'static [&'static str],
     pub required_params: &'static [&'static str],
+    /// 强制项：规范底线，违反应判 ok=false。只有知识卡核实过的数值才能放这里。
     pub mandatory_rules: &'static [&'static str],
+    /// 推荐项：公司标准化图册/构造图集等推荐做法，只进 warnings。
     pub recommended_rules: &'static [&'static str],
     pub prohibited_rules: &'static [&'static str],
     pub cad_components: &'static [&'static str],
     pub sources: &'static [&'static str],
     pub draw_tool: Option<&'static str>,
     pub validate_tool: Option<&'static str>,
-    pub auto_draw: bool,
+    /// 知识卡是否就绪（data/atlas 有对应卡且 sources 已核实）。
+    pub knowledge_card_ready: bool,
+    /// 确定性出图工具是否就绪。
+    pub deterministic_draw_ready: bool,
+    /// 确定性校核工具是否就绪。
+    pub deterministic_validate_ready: bool,
     pub requires_approval: bool,
+}
+
+impl SafetySceneSpec {
+    /// 完整闭环是否可用：出图 + 校核工具同时就绪。
+    pub fn is_full_loop_ready(&self) -> bool {
+        self.deterministic_draw_ready && self.deterministic_validate_ready
+    }
 }
 
 const SCENES: &[SafetySceneSpec] = &[
@@ -54,7 +68,9 @@ const SCENES: &[SafetySceneSpec] = &[
         sources: &["jgj-80-2016 4.2.2", "mohurd-2019-90 2.7.4"],
         draw_tool: Some("draw_elevator_shaft_protection"),
         validate_tool: Some("validate_elevator_shaft_protection"),
-        auto_draw: true,
+        knowledge_card_ready: true,
+        deterministic_draw_ready: true,
+        deterministic_validate_ready: true,
         requires_approval: false,
     },
     SafetySceneSpec {
@@ -71,12 +87,15 @@ const SCENES: &[SafetySceneSpec] = &[
             "护栏",
         ],
         required_params: &["edge_length", "edge_type"],
-        mandatory_rules: &[],
-        recommended_rules: &[
-            "top_rail_height = 1.2m",
-            "post_spacing <= 2.0m",
+        // 修正 2026-08-20 效力分级：4.3.1 的下杆位置、1.2m/2m/180mm 属规范底线（强制），
+        // 密目网是标准化图册做法（推荐），此前整组被误放在 recommended_rules。
+        mandatory_rules: &[
+            "top_rail_height >= 1200mm",
+            "mid_rail_between_top_rail_and_toe_board",
+            "post_spacing <= 2000mm",
             "toe_board_height >= 180mm",
         ],
+        recommended_rules: &["dense_mesh_net", "warning_sign"],
         prohibited_rules: &["do_not_route_to_elevator_shaft_protection"],
         cad_components: &[
             "top_rail",
@@ -88,7 +107,9 @@ const SCENES: &[SafetySceneSpec] = &[
         sources: &["jgj-80-2016 4.3.1", "mohurd-2019-90 2.7.2"],
         draw_tool: None,
         validate_tool: None,
-        auto_draw: false,
+        knowledge_card_ready: true,
+        deterministic_draw_ready: false,
+        deterministic_validate_ready: false,
         requires_approval: false,
     },
     SafetySceneSpec {
@@ -118,7 +139,9 @@ const SCENES: &[SafetySceneSpec] = &[
         sources: &["jgj-80-2016 4.2.1", "mohurd-2019-90 2.7.1"],
         draw_tool: None,
         validate_tool: None,
-        auto_draw: false,
+        knowledge_card_ready: false,
+        deterministic_draw_ready: false,
+        deterministic_validate_ready: false,
         requires_approval: false,
     },
     SafetySceneSpec {
@@ -134,7 +157,9 @@ const SCENES: &[SafetySceneSpec] = &[
         sources: &["jgj-80-2016 4.3.1"],
         draw_tool: None,
         validate_tool: None,
-        auto_draw: false,
+        knowledge_card_ready: false,
+        deterministic_draw_ready: false,
+        deterministic_validate_ready: false,
         requires_approval: false,
     },
     SafetySceneSpec {
@@ -150,7 +175,9 @@ const SCENES: &[SafetySceneSpec] = &[
         sources: &["mohurd-2019-90"],
         draw_tool: None,
         validate_tool: None,
-        auto_draw: false,
+        knowledge_card_ready: false,
+        deterministic_draw_ready: false,
+        deterministic_validate_ready: false,
         requires_approval: false,
     },
 ];
@@ -198,7 +225,7 @@ mod tests {
     fn matches_elevator_shaft_scene() {
         let scene = match_safety_scene("画一个电梯井口防护，井口宽 2000 高 1800").unwrap();
         assert_eq!(scene.scene, "elevator_shaft_protection");
-        assert!(scene.auto_draw);
+        assert!(scene.is_full_loop_ready());
         assert_eq!(scene.draw_tool, Some("draw_elevator_shaft_protection"));
     }
 
@@ -221,5 +248,65 @@ mod tests {
                     .mandatory_rules
                     .iter()
                     .any(|rule| *rule == "door_bottom_gap <= 50mm")));
+    }
+
+    /// 注册表一致性：标记 knowledge_card_ready 的场景必须有可加载的知识卡，
+    /// 未就绪的场景必须显式标 false（不允许"没标状态"的中间态）。
+    #[test]
+    fn ready_scenes_have_loadable_knowledge_cards() {
+        for scene in all_safety_scenes() {
+            let card = crate::knowledge::load_scene_card(scene.scene);
+            assert_eq!(
+                card.is_some(),
+                scene.knowledge_card_ready,
+                "场景 {} 的知识卡状态与 data/atlas 不一致",
+                scene.scene
+            );
+        }
+    }
+
+    /// 就绪标记与工具注册必须一致：声称出图/校核就绪却没有对应工具是配置错误。
+    #[test]
+    fn readiness_flags_match_registered_tools() {
+        for scene in all_safety_scenes() {
+            assert_eq!(
+                scene.deterministic_draw_ready,
+                scene.draw_tool.is_some(),
+                "场景 {} 的 draw 就绪标记与 draw_tool 不一致",
+                scene.scene
+            );
+            assert_eq!(
+                scene.deterministic_validate_ready,
+                scene.validate_tool.is_some(),
+                "场景 {} 的 validate 就绪标记与 validate_tool 不一致",
+                scene.scene
+            );
+        }
+    }
+
+    /// 效力分级修正回归：临边栏杆的 1.2m/2m/180mm 必须在强制项，密目网留在推荐项。
+    #[test]
+    fn edge_guardrail_mandatory_rules_are_classified_correctly() {
+        let scene = crate::scenes::scene_by_id("edge_guardrail").unwrap();
+        for rule in [
+            "top_rail_height >= 1200mm",
+            "post_spacing <= 2000mm",
+            "toe_board_height >= 180mm",
+        ] {
+            assert!(scene.mandatory_rules.contains(&rule), "{} 应为强制项", rule);
+        }
+        assert!(!scene.mandatory_rules.contains(&"dense_mesh_net"));
+        assert!(scene.recommended_rules.contains(&"dense_mesh_net"));
+    }
+
+    /// 现状快照：当前只有电梯井口场景具备完整闭环，其余场景是登记态。
+    #[test]
+    fn only_elevator_shaft_has_full_loop_for_now() {
+        let ready: Vec<&str> = all_safety_scenes()
+            .iter()
+            .filter(|scene| scene.is_full_loop_ready())
+            .map(|scene| scene.scene)
+            .collect();
+        assert_eq!(ready, vec!["elevator_shaft_protection"]);
     }
 }

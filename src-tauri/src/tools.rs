@@ -637,7 +637,7 @@ fn safety_scene_tooling_context(
         required_params
     )];
 
-    if scene.auto_draw {
+    if scene.is_full_loop_ready() {
         let draw_tool = scene.draw_tool.unwrap_or("未配置");
         let validate_tool = scene.validate_tool.unwrap_or("未配置");
         lines.push(format!(
@@ -1583,11 +1583,7 @@ mod tests {
 
     #[test]
     fn safety_demo_mode_keeps_generic_safety_requests_in_safe_context() {
-        let tooling = select_tooling_context(
-            "施工安全规范怎么梳理",
-            &[],
-            WorkMode::SafetyDemoMode,
-        );
+        let tooling = select_tooling_context("施工安全规范怎么梳理", &[], WorkMode::SafetyDemoMode);
 
         assert!(!tooling
             .tool_names
