@@ -32,6 +32,8 @@ button:disabled {
 
 .cadegg-app {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -221,11 +223,11 @@ button:disabled {
   position: relative;
   z-index: 1;
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: 240px minmax(0, 1fr) 320px;
   /* 行高锁定到容器高度：否则行高 auto 会被右栏内容撑破窗口，
      右栏自身 overflow-y:auto 因高度等于内容高度而永不触发滚动。 */
   grid-template-rows: minmax(0, 1fr);
-  height: calc(100vh - 63px);
   min-height: 0;
 }
 
@@ -1646,6 +1648,13 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.right-rail > .rail-card {
+  flex: 0 0 auto;
 }
 
 .rail-card {
