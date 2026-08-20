@@ -39,7 +39,7 @@ const AUTO_ATTACH_WAIT_ROUNDS: usize = 18;
 const AUTO_ATTACH_WAIT_MS: u64 = 750;
 const BRIDGE_PORT: u16 = 50471;
 const BRIDGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-const BRIDGE_VERSION: &str = "0.3.7.0";
+const BRIDGE_VERSION: &str = "0.3.8.0";
 const BRIDGE_BUNDLE_NAME: &str = "CADEggBridge.bundle";
 const BRIDGE_DLL_BASENAME: &str = "CADEggBridge";
 const BRIDGE_BUILD_STAMP: &str = "bridge-version.txt";
@@ -555,6 +555,7 @@ fn bridge_csproj_template(acad_dir: &Path) -> String {
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
@@ -566,6 +567,7 @@ fn bridge_csproj_template(acad_dir: &Path) -> String {
     <Reference Include="Acmgd"><HintPath>{acad}\acmgd.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Acdbmgd"><HintPath>{acad}\acdbmgd.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="accoremgd"><HintPath>{acad}\accoremgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AdWindows"><HintPath>{acad}\AdWindows.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
 </Project>
 "#

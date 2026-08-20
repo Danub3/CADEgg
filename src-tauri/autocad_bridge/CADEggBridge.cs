@@ -10,7 +10,9 @@ using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
+using Autodesk.Windows;
 using AcApp = Autodesk.AutoCAD.ApplicationServices.Core.Application;
+using System.Windows.Threading;
 
 [assembly: ExtensionApplication(typeof(CADEggBridge.BridgeEntry))]
 [assembly: CommandClass(typeof(CADEggBridge.BridgeEntry))]
@@ -20,7 +22,7 @@ namespace CADEggBridge
     public sealed class BridgeEntry : IExtensionApplication
     {
         private const int BridgePort = 50471;
-        private const string BridgeVersion = "0.3.7.0";
+        private const string BridgeVersion = "0.3.8.0";
         private const int ApplicationContextTimeoutMs = 15000;
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
@@ -32,10 +34,17 @@ namespace CADEggBridge
         private static TcpListener _listener;
         private static Thread _listenerThread;
         private static volatile bool _running;
+        private static Dispatcher _applicationDispatcher;
 
         public void Initialize()
         {
-            Log("Initialize called");
+            _applicationDispatcher = ResolveApplicationDispatcher();
+            Log(
+                "Initialize called on thread "
+                    + Thread.CurrentThread.ManagedThreadId
+                    + ", dispatcher thread "
+                    + _applicationDispatcher.Thread.ManagedThreadId
+            );
             StartListener();
         }
 
@@ -230,30 +239,40 @@ namespace CADEggBridge
         {
             lock (ApplicationContextGate)
             {
+                var dispatcher = _applicationDispatcher;
+                if (dispatcher == null || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+                {
+                    throw new InvalidOperationException(
+                        operationName + " AutoCAD UI dispatcher is not available"
+                    );
+                }
+
                 var completion = new System.Threading.Tasks.TaskCompletionSource<T>(
                     System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
                 );
                 var abandoned = 0;
                 try
                 {
-                    AcApp.DocumentManager.ExecuteInApplicationContext(
-                        delegate(object state)
-                        {
-                            if (System.Threading.Volatile.Read(ref abandoned) != 0)
+                    dispatcher.BeginInvoke(
+                        DispatcherPriority.Normal,
+                        new Action(
+                            delegate
                             {
-                                return;
-                            }
+                                if (System.Threading.Volatile.Read(ref abandoned) != 0)
+                                {
+                                    return;
+                                }
 
-                            try
-                            {
-                                completion.TrySetResult(operation());
+                                try
+                                {
+                                    completion.TrySetResult(operation());
+                                }
+                                catch (System.Exception ex)
+                                {
+                                    completion.TrySetException(ex);
+                                }
                             }
-                            catch (System.Exception ex)
-                            {
-                                completion.TrySetException(ex);
-                            }
-                        },
-                        null
+                        )
                     );
                 }
                 catch (System.Exception ex)
@@ -293,6 +312,12 @@ namespace CADEggBridge
                     );
                 }
             }
+        }
+
+        private static Dispatcher ResolveApplicationDispatcher()
+        {
+            var ribbon = ComponentManager.Ribbon;
+            return ribbon != null ? ribbon.Dispatcher : Dispatcher.CurrentDispatcher;
         }
 
         private static string FlattenExceptionMessage(System.Exception ex)
@@ -1059,40 +1084,15 @@ namespace CADEggBridge
         private static void SendStringToExecute(Document doc, string script, string opName)
         {
             Log(opName + " queue start");
-            System.Exception error = null;
-            using (var queued = new ManualResetEventSlim(false))
-            {
-                AcApp.DocumentManager.ExecuteInApplicationContext(
-                    delegate(object state)
-                    {
-                        try
-                        {
-                            doc.SendStringToExecute(script, true, false, false);
-                            Log(opName + " queued");
-                        }
-                        catch (System.Exception ex)
-                        {
-                            error = ex;
-                            Log(opName + " queue failed: " + ex);
-                        }
-                        finally
-                        {
-                            queued.Set();
-                        }
-                    },
-                    null
-                );
-
-                if (!queued.Wait(2000))
+            RunInApplicationContext(
+                delegate
                 {
-                    throw new InvalidOperationException(opName + " queue timed out");
-                }
-            }
-
-            if (error != null)
-            {
-                throw new InvalidOperationException(opName + " queue failed", error);
-            }
+                    doc.SendStringToExecute(script, true, false, false);
+                    Log(opName + " queued");
+                    return true;
+                },
+                opName
+            );
         }
 
         private static double DistanceToEntity(Entity entity, Point3d point)
