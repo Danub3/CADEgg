@@ -4372,13 +4372,58 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
     ))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn cad_smoke_test_elevator_shaft_safety_net() -> Result<String, String> {
+    let draw_result = cad_draw_elevator_shaft_safety_net(
+        5000.0, 2000.0, 2200.0, 1800.0, 3000.0, 20.0, true, true, 1.0,
+    )?;
+    if !draw_result.contains("安全平网") {
+        return Err(format!("平网绘图结果不符合预期: {draw_result}"));
+    }
+
+    let validation = cad_validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, 20.0, true)?;
+    let validation_json: serde_json::Value =
+        serde_json::from_str(&validation).map_err(|e| format!("平网校核 JSON 解析失败: {e}"))?;
+    if validation_json["ok"] != serde_json::Value::Bool(true) {
+        return Err(format!("平网校核未通过: {validation}"));
+    }
+
+    Ok(format!(
+        "电梯井内安全平网 smoke test 通过：draw={} validation=ok",
+        draw_result
+    ))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn cad_smoke_test_edge_guardrail() -> Result<String, String> {
+    let draw_result = cad_draw_edge_guardrail(
+        1000.0, -2000.0, 6000.0, 1200.0, 1500.0, 180.0, true, true, 1.0,
+    )?;
+    if !draw_result.contains("临边防护栏杆") {
+        return Err(format!("临边绘图结果不符合预期: {draw_result}"));
+    }
+
+    let validation = cad_validate_edge_guardrail(6000.0, 1200.0, 1500.0, 180.0, true)?;
+    let validation_json: serde_json::Value =
+        serde_json::from_str(&validation).map_err(|e| format!("临边校核 JSON 解析失败: {e}"))?;
+    if validation_json["ok"] != serde_json::Value::Bool(true) {
+        return Err(format!("临边校核未通过: {validation}"));
+    }
+
+    Ok(format!(
+        "普通临边防护栏杆 smoke test 通过：draw={} validation=ok",
+        draw_result
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         bridge_installed_dll_path, cad_draw_edge_guardrail, cad_draw_elevator_shaft_protection,
         cad_draw_elevator_shaft_safety_net, cad_draw_text, cad_erase_handle,
-        cad_modelspace_snapshot, cad_smoke_test_editing_tools,
-        cad_smoke_test_elevator_shaft_protection, ensure_bridge_installed_once,
+        cad_modelspace_snapshot, cad_smoke_test_edge_guardrail, cad_smoke_test_editing_tools,
+        cad_smoke_test_elevator_shaft_protection, cad_smoke_test_elevator_shaft_safety_net,
+        ensure_bridge_installed_once,
     };
 
     /// 门型参数校验在一切 CAD 调用之前完成，可在无 AutoCAD 环境下单测。
@@ -4533,6 +4578,20 @@ mod tests {
     #[ignore = "requires a running AutoCAD session"]
     fn elevator_shaft_protection_smoke_test_round_trip() {
         let result = cad_smoke_test_elevator_shaft_protection();
+        assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+    }
+
+    #[test]
+    #[ignore = "requires a running AutoCAD session"]
+    fn elevator_shaft_safety_net_smoke_test_round_trip() {
+        let result = cad_smoke_test_elevator_shaft_safety_net();
+        assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+    }
+
+    #[test]
+    #[ignore = "requires a running AutoCAD session"]
+    fn edge_guardrail_smoke_test_round_trip() {
+        let result = cad_smoke_test_edge_guardrail();
         assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
     }
 
