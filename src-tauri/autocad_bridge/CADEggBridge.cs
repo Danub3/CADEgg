@@ -20,12 +20,14 @@ namespace CADEggBridge
     public sealed class BridgeEntry : IExtensionApplication
     {
         private const int BridgePort = 50471;
-        private const string BridgeVersion = "0.3.6.0";
+        private const string BridgeVersion = "0.3.7.0";
+        private const int ApplicationContextTimeoutMs = 15000;
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             IncludeFields = true,
             PropertyNameCaseInsensitive = true
         };
+        private static readonly object ApplicationContextGate = new object();
 
         private static TcpListener _listener;
         private static Thread _listenerThread;
@@ -167,12 +169,19 @@ namespace CADEggBridge
                 catch (System.Exception ex)
                 {
                     Log("HandleClient error: " + ex);
-                    writer.WriteLine(JsonSerializer.Serialize(new BridgeResponse
+                    try
                     {
-                        ok = false,
-                        message = ex.Message,
-                        data = new Dictionary<string, object>()
-                    }, JsonOptions));
+                        writer.WriteLine(JsonSerializer.Serialize(new BridgeResponse
+                        {
+                            ok = false,
+                            message = ex.Message,
+                            data = new Dictionary<string, object>()
+                        }, JsonOptions));
+                    }
+                    catch (IOException writeError)
+                    {
+                        Log("HandleClient response write skipped: " + writeError.Message);
+                    }
                 }
             }
         }
@@ -181,7 +190,18 @@ namespace CADEggBridge
         {
             try
             {
-                var data = Dispatch(request);
+                var command = (request.command ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(command))
+                {
+                    command = "bridge request";
+                }
+                var data = RunInApplicationContext(
+                    delegate
+                    {
+                        return Dispatch(request);
+                    },
+                    command
+                );
                 var response = new BridgeResponse
                 {
                     ok = true,
@@ -197,10 +217,96 @@ namespace CADEggBridge
                 return new BridgeResponse
                 {
                     ok = false,
-                    message = ex.Message,
+                    message = FlattenExceptionMessage(ex),
                     data = new Dictionary<string, object>()
                 };
             }
+        }
+
+        // AutoCAD's managed API and its document/view model are owned by the
+        // application thread. Network callbacks must marshal the complete
+        // command there before touching a Document, Database, or system variable.
+        private static T RunInApplicationContext<T>(Func<T> operation, string operationName)
+        {
+            lock (ApplicationContextGate)
+            {
+                var completion = new System.Threading.Tasks.TaskCompletionSource<T>(
+                    System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var abandoned = 0;
+                try
+                {
+                    AcApp.DocumentManager.ExecuteInApplicationContext(
+                        delegate(object state)
+                        {
+                            if (System.Threading.Volatile.Read(ref abandoned) != 0)
+                            {
+                                return;
+                            }
+
+                            try
+                            {
+                                completion.TrySetResult(operation());
+                            }
+                            catch (System.Exception ex)
+                            {
+                                completion.TrySetException(ex);
+                            }
+                        },
+                        null
+                    );
+                }
+                catch (System.Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        operationName + " application-context queue failed",
+                        ex
+                    );
+                }
+
+                var deadline = DateTime.UtcNow.AddMilliseconds(ApplicationContextTimeoutMs);
+                while (!completion.Task.IsCompleted && DateTime.UtcNow < deadline)
+                {
+                    Thread.Sleep(10);
+                }
+
+                if (!completion.Task.IsCompleted)
+                {
+                    System.Threading.Interlocked.Exchange(ref abandoned, 1);
+                    throw new TimeoutException(
+                        operationName
+                            + " did not reach the AutoCAD application context within "
+                            + ApplicationContextTimeoutMs
+                            + " ms"
+                    );
+                }
+
+                try
+                {
+                    return completion.Task.GetAwaiter().GetResult();
+                }
+                catch (System.Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        operationName + " failed in the AutoCAD application context",
+                        ex
+                    );
+                }
+            }
+        }
+
+        private static string FlattenExceptionMessage(System.Exception ex)
+        {
+            var parts = new List<string>();
+            for (var current = ex; current != null; current = current.InnerException)
+            {
+                if (!string.IsNullOrWhiteSpace(current.Message))
+                {
+                    parts.Add(current.Message);
+                }
+            }
+
+            return string.Join(" :: ", parts.ToArray());
         }
 
         private static Dictionary<string, object> Dispatch(BridgeRequest request)

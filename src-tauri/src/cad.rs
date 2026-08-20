@@ -38,7 +38,8 @@ const COM_RETRY_DELAY_MS: u64 = 120;
 const AUTO_ATTACH_WAIT_ROUNDS: usize = 18;
 const AUTO_ATTACH_WAIT_MS: u64 = 750;
 const BRIDGE_PORT: u16 = 50471;
-const BRIDGE_VERSION: &str = "0.3.6.0";
+const BRIDGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const BRIDGE_VERSION: &str = "0.3.7.0";
 const BRIDGE_BUNDLE_NAME: &str = "CADEggBridge.bundle";
 const BRIDGE_DLL_BASENAME: &str = "CADEggBridge";
 const BRIDGE_BUILD_STAMP: &str = "bridge-version.txt";
@@ -700,8 +701,8 @@ fn ensure_bridge_installed_once() -> Result<PathBuf, String> {
 fn bridge_send_request(command: &str, args: serde_json::Value) -> Result<BridgeResponse, String> {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", BRIDGE_PORT))
         .map_err(|e| format!("连接 CADEgg bridge 失败: {e}"))?;
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_read_timeout(Some(BRIDGE_REQUEST_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(BRIDGE_REQUEST_TIMEOUT));
 
     let request = BridgeRequest { command, args };
     let payload =

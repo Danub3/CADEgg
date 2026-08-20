@@ -29,6 +29,9 @@ test/
 # 提取的结构化摘录在 data/sources/，知识卡在 data/atlas/，随代码提交
 resources/
 
+# Local-only demo and planning documents.
+docs/
+
 # Local-only planning and handoff notes. Keep these out of GitHub.
 session-log/
 /后续计划*.md
