@@ -5,6 +5,7 @@ cd /d "%~dp0"
 title CADEgg Launcher
 
 set "ROOT=%CD%"
+set "SCRIPT_PATH=%~f0"
 set "LOG=%ROOT%\cadegg-launch.log"
 set "MODE=app"
 set "CAD_PREFLIGHT=1"
@@ -22,7 +23,7 @@ goto PARSE_ARGS
 
 > "%LOG%" (
   echo ==== CADEgg launcher %DATE% %TIME% ====
-  echo Script: %~f0
+  echo Script: %SCRIPT_PATH%
   echo Working directory: %ROOT%
   echo Mode: %MODE%
   echo AutoCAD preflight: %CAD_PREFLIGHT%
@@ -97,10 +98,10 @@ if "%REBUILD_NEEDED%"=="1" (
   )
 ) else (
   call :TRY_RESTORE_EXISTING_APP
-  set "RESTORE_CODE=%ERRORLEVEL%"
-  if "%RESTORE_CODE%"=="0" exit /b 0
-  if "%RESTORE_CODE%"=="1" goto FAIL
 )
+set "RESTORE_CODE=%ERRORLEVEL%"
+if "%RESTORE_CODE%"=="0" exit /b 0
+if "%RESTORE_CODE%"=="1" goto FAIL
 
 call :ENSURE_BUILT_APP
 if errorlevel 1 goto FAIL
