@@ -377,7 +377,19 @@ fn params_validate_elevator_shaft_protection() -> Value {
             "door_bottom_gap": {"type": "number", "description": "防护门底端距地面高度，毫米，须不大于 50"},
             "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，推荐 200"},
             "include_warning_sign": {"type": "boolean", "description": "是否包含警示牌"},
-            "include_material_table": {"type": "boolean", "description": "是否包含材料表"}
+            "include_material_table": {"type": "boolean", "description": "是否包含材料表"},
+            "lifecycle": {
+                "type": "object",
+                "description": "施工生命周期状态（可选）。装饰阶段临时拆除防护门时 state=temporarily_removed，必须同时提供 removal_reason、replacement_protection、responsible_person、restore_time；恢复后 state=restored，acceptance_status 为 pending 或 accepted。",
+                "properties": {
+                    "state": {"type": "string", "enum": ["in_use", "temporarily_removed", "restored"]},
+                    "removal_reason": {"type": "string", "description": "临时拆除原因"},
+                    "replacement_protection": {"type": "string", "description": "拆除期间的替代防护措施"},
+                    "responsible_person": {"type": "string", "description": "拆除责任人"},
+                    "restore_time": {"type": "string", "description": "恢复时间"},
+                    "acceptance_status": {"type": "string", "enum": ["pending", "accepted"], "description": "恢复后验收状态"}
+                }
+            }
         },
         "required": [
             "opening_width",
@@ -1379,6 +1391,7 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .get("include_material_table")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            crate::safety::parse_lifecycle(call.args.get("lifecycle")),
         ),
         #[cfg(windows)]
         "draw_text" => crate::cad::cad_draw_text(

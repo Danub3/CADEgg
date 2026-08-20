@@ -2576,6 +2576,7 @@ pub fn cad_validate_elevator_shaft_protection(
     door_bottom_gap: f64,
     include_warning_sign: bool,
     include_material_table: bool,
+    lifecycle: Option<safety::LifecycleInfo>,
 ) -> Result<String, String> {
     let validation = safety::validate_elevator_shaft_protection(
         opening_width,
@@ -2585,6 +2586,7 @@ pub fn cad_validate_elevator_shaft_protection(
         door_bottom_gap,
         include_warning_sign,
         include_material_table,
+        lifecycle,
     );
     safety::validation_to_pretty_json(&validation)
 }
@@ -3437,8 +3439,9 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
         return Err(format!("绘图结果不符合预期: {draw_result}"));
     }
 
-    let validation =
-        cad_validate_elevator_shaft_protection(2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true)?;
+    let validation = cad_validate_elevator_shaft_protection(
+        2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, None,
+    )?;
     let validation_json: serde_json::Value =
         serde_json::from_str(&validation).map_err(|e| format!("校核 JSON 解析失败: {e}"))?;
     if validation_json["ok"] != serde_json::Value::Bool(true) {

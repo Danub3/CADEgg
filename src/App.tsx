@@ -4460,27 +4460,61 @@ function parseValidationPayload(content: string): ElevatorValidation | null {
   return null;
 }
 
+function lifecycleSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
+  const lc = validation.lifecycle;
+  if (!lc) return "";
+  if (lc.state === "temporarily_removed") {
+    const missing = [
+      !lc.removal_reason && (language === "en-US" ? "removal reason" : "拆除原因"),
+      !lc.replacement_protection && (language === "en-US" ? "replacement protection" : "替代防护"),
+      !lc.responsible_person && (language === "en-US" ? "responsible person" : "责任人"),
+      !lc.restore_time && (language === "en-US" ? "restore time" : "恢复时间"),
+    ].filter(Boolean);
+    if (language === "en-US") {
+      return missing.length > 0
+        ? `Temporary removal: missing records (${missing.join(", ")}).`
+        : `Temporary removal: replacement protection recorded, responsible ${lc.responsible_person}, restore by ${lc.restore_time}.`;
+    }
+    return missing.length > 0
+      ? `临时拆除：缺少管理记录（${missing.join("、")}）。`
+      : `临时拆除：替代防护 ${lc.replacement_protection}，责任人 ${lc.responsible_person}，恢复时间 ${lc.restore_time}。`;
+  }
+  if (lc.state === "restored") {
+    return language === "en-US"
+      ? `Restored${lc.acceptance_status === "accepted" ? " and accepted" : ", acceptance pending"}.`
+      : `已恢复${lc.acceptance_status === "accepted" ? "并已验收" : "，待验收"}。`;
+  }
+  return "";
+}
+
 function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
   const warnings = validation.warnings ?? [];
+  const lifecycle = lifecycleSummary(validation, language);
   if (language === "en-US") {
     if (validation.ok) {
-      if (warnings.length > 0) {
-        return `Mandatory checks passed; recommendations: ${warnings.slice(0, 3).join(", ")}.`;
-      }
-      return "Validation passed: dimensions, guard height, toe board, warning sign, and material table are checked.";
+      const parts = [
+        "Validation passed",
+        lifecycle,
+        warnings.length > 0
+          ? `recommendations: ${warnings.slice(0, 3).join(", ")}`
+          : null,
+      ].filter(Boolean);
+      return parts.join(" · ") + ".";
     }
     const issues = validation.issues.slice(0, 3).join(", ");
-    return `Validation failed: ${issues || "see safety panel"}.`;
+    return `Validation failed: ${issues || "see safety panel"}${lifecycle ? " · " + lifecycle : ""}.`;
   }
 
   if (validation.ok) {
-    if (warnings.length > 0) {
-      return `强制项通过，建议项提醒：${warnings.slice(0, 3).join("、")}。`;
-    }
-    return "校核通过：井口尺寸、防护门高度、踢脚板、警示牌和材料表已检查。";
+    const parts = [
+      "校核通过",
+      lifecycle,
+      warnings.length > 0 ? `建议项提醒：${warnings.slice(0, 3).join("、")}` : null,
+    ].filter(Boolean);
+    return parts.join(" · ") + "。";
   }
   const issues = validation.issues.slice(0, 3).join("、");
-  return `校核未通过：${issues || "请查看右侧安全校核面板"}。`;
+  return `校核未通过：${issues || "请查看右侧安全校核面板"}${lifecycle ? " · " + lifecycle : ""}。`;
 }
 
 function toolCallArgsPreview(call: ToolCall, language: "zh-CN" | "en-US") {

@@ -81,6 +81,14 @@ export interface ElevatorValidation {
     warning_sign: boolean;
     material_table_included: boolean;
   };
+  lifecycle?: {
+    state: "in_use" | "temporarily_removed" | "restored";
+    removal_reason?: string;
+    replacement_protection?: string;
+    responsible_person?: string;
+    restore_time?: string;
+    acceptance_status?: string;
+  } | null;
 }
 
 export interface DemoLogEntry {
