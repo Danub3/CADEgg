@@ -2950,25 +2950,27 @@ export default function App() {
               onOpenSettings={() => openSettingsForProvider(activeProvider, !currentKeySet)}
               language={appPreferences.language}
             />
-            <div className="composer-hint">{t("composerHint", appPreferences.language)}</div>
-            {carryMemory &&
-              memoryBundle?.global_memory.trim() &&
-              (() => {
-                const injection = buildMemoryInjection(
-                  memoryBundle.global_memory,
-                  clampNumber(settings.memory_carry_token_budget, 200, 8000)
-                );
-                return (
-                  <div className="memory-carry-badge">
-                    {t("memoryCarriedBadge", appPreferences.language, {
-                      tokens: String(injection.tokens),
-                    })}
-                    {injection.truncated
-                      ? ` · ${t("memoryTruncated", appPreferences.language)}`
-                      : ""}
-                  </div>
-                );
-              })()}
+            <div className="composer-meta">
+              <div className="composer-hint">{t("composerHint", appPreferences.language)}</div>
+              {carryMemory &&
+                memoryBundle?.global_memory.trim() &&
+                (() => {
+                  const injection = buildMemoryInjection(
+                    memoryBundle.global_memory,
+                    clampNumber(settings.memory_carry_token_budget, 200, 8000)
+                  );
+                  return (
+                    <div className="memory-carry-badge">
+                      {t("memoryCarriedBadge", appPreferences.language, {
+                        tokens: String(injection.tokens),
+                      })}
+                      {injection.truncated
+                        ? ` · ${t("memoryTruncated", appPreferences.language)}`
+                        : ""}
+                    </div>
+                  );
+                })()}
+            </div>
             <textarea
               rows={2}
               placeholder={

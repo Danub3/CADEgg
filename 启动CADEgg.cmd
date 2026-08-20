@@ -182,7 +182,15 @@ if errorlevel 1 exit /b 1
 
 echo [STEP] Running npm.cmd run tauri -- build --debug --no-bundle... >> "%LOG%"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& npm.cmd run tauri -- build --debug --no-bundle 2>&1 | Tee-Object -FilePath '%LOG%' -Append; exit $LASTEXITCODE"
-exit /b %ERRORLEVEL%
+set "BUILD_EXIT=%ERRORLEVEL%"
+if not "%BUILD_EXIT%"=="0" exit /b %BUILD_EXIT%
+for %%F in ("%APP_EXE%") do (
+  echo [INFO] Built app: %%~fF
+  echo [INFO] Built app timestamp: %%~tF
+  echo [INFO] Built app: %%~fF >> "%LOG%"
+  echo [INFO] Built app timestamp: %%~tF >> "%LOG%"
+)
+exit /b 0
 
 :APP_REBUILD_NEEDED
 set "APP_BUILD_REASON="
