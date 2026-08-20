@@ -224,9 +224,18 @@ fn provider_models(settings: &Settings, provider: &str) -> (String, String) {
             settings.deepseek_model.clone(),
             settings.deepseek_strong_model.clone(),
         ),
-        "qwen" => (settings.qwen_model.clone(), settings.qwen_strong_model.clone()),
-        "kimi" => (settings.kimi_model.clone(), settings.kimi_strong_model.clone()),
-        _ => (settings.glm_model.clone(), settings.glm_strong_model.clone()),
+        "qwen" => (
+            settings.qwen_model.clone(),
+            settings.qwen_strong_model.clone(),
+        ),
+        "kimi" => (
+            settings.kimi_model.clone(),
+            settings.kimi_strong_model.clone(),
+        ),
+        _ => (
+            settings.glm_model.clone(),
+            settings.glm_strong_model.clone(),
+        ),
     }
 }
 
@@ -369,7 +378,10 @@ async fn chat_once(
         let status = resp.status();
         let raw = resp.text().await.map_err(|e| format!("读响应失败: {e}"))?;
         if !status.is_success() {
-            let err = format!("API {status}: {}", raw.chars().take(300).collect::<String>());
+            let err = format!(
+                "API {status}: {}",
+                raw.chars().take(300).collect::<String>()
+            );
             if temperature.is_some() && err.to_ascii_lowercase().contains("temperature") {
                 continue; // 去掉 temperature 字段重试一次
             }
@@ -381,15 +393,21 @@ async fn chat_once(
 }
 
 fn parse_chat_response(raw: &str, model: &str) -> Result<ChatResponse, String> {
-
-    let parsed: Value =
-        serde_json::from_str(&raw).map_err(|e| format!("解析响应失败: {e}"))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|e| format!("解析响应失败: {e}"))?;
     let usage = parse_openai_usage(parsed.get("usage"), "", model);
     let choice = parsed["choices"]
         .as_array()
         .and_then(|a| a.first())
-        .ok_or_else(|| format!("响应缺少 choices: {}", raw.chars().take(200).collect::<String>()))?;
-    let text = choice["message"]["content"].as_str().unwrap_or("").to_string();
+        .ok_or_else(|| {
+            format!(
+                "响应缺少 choices: {}",
+                raw.chars().take(200).collect::<String>()
+            )
+        })?;
+    let text = choice["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     let mut tool_calls: Vec<(String, Value)> = Vec::new();
     let mut tool_args_valid = true;
     if let Some(list) = choice["message"]["tool_calls"].as_array() {
@@ -612,13 +630,13 @@ async fn run_case(
                                 model: Some(cand.model.clone()),
                                 message: format!(
                                     "{} / {} · {} 请求失败，{}s 后重试（第 {} 次）",
-                                cand.provider_label,
-                                cand.model,
-                                case_label,
-                                wait_ms / 1000,
-                                attempt
-                            ),
-                        },
+                                    cand.provider_label,
+                                    cand.model,
+                                    case_label,
+                                    wait_ms / 1000,
+                                    attempt
+                                ),
+                            },
                         );
                     }
                     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
@@ -638,7 +656,10 @@ async fn run_case(
                 total,
                 provider: Some(cand.provider.clone()),
                 model: Some(cand.model.clone()),
-                message: format!("{} / {} · {} · {}ms", cand.provider_label, cand.model, case_label, last_elapsed),
+                message: format!(
+                    "{} / {} · {} · {}ms",
+                    cand.provider_label, cand.model, case_label, last_elapsed
+                ),
             },
         );
     }
@@ -696,24 +717,57 @@ async fn run_model_suite(
     // p1 简单绘图意图：固定参数直线。
     cases.push(
         run_case(
-            client, app, cand, settings, "p1", "简单绘图意图", &[json!({"role": "user", "content": "画一条从原点出发、长 1000mm 的水平直线"})],
-            true, score_p1_draw, &mut metrics, budget, current, total,
+            client,
+            app,
+            cand,
+            settings,
+            "p1",
+            "简单绘图意图",
+            &[json!({"role": "user", "content": "画一条从原点出发、长 1000mm 的水平直线"})],
+            true,
+            score_p1_draw,
+            &mut metrics,
+            budget,
+            current,
+            total,
         )
         .await,
     );
     // p2 缺参澄清：不提供尺寸，看模型是否追问而不是直接出图。
     cases.push(
         run_case(
-            client, app, cand, settings, "p2", "缺参澄清", &[json!({"role": "user", "content": "画一个电梯井口防护门"})],
-            true, score_p2_clarify, &mut metrics, budget, current, total,
+            client,
+            app,
+            cand,
+            settings,
+            "p2",
+            "缺参澄清",
+            &[json!({"role": "user", "content": "画一个电梯井口防护门"})],
+            true,
+            score_p2_clarify,
+            &mut metrics,
+            budget,
+            current,
+            total,
         )
         .await,
     );
     // p3 规范问答：踢脚板 200mm（知识卡底线）。
     cases.push(
         run_case(
-            client, app, cand, settings, "p3", "规范问答", &[json!({"role": "user", "content": "电梯井口防护门的踢脚板高度应为多少？"})],
-            false, score_p3_safety, &mut metrics, budget, current, total,
+            client,
+            app,
+            cand,
+            settings,
+            "p3",
+            "规范问答",
+            &[json!({"role": "user", "content": "电梯井口防护门的踢脚板高度应为多少？"})],
+            false,
+            score_p3_safety,
+            &mut metrics,
+            budget,
+            current,
+            total,
         )
         .await,
     );
@@ -736,19 +790,41 @@ async fn run_model_suite(
     // p6 长上下文接续：两轮。
     cases.push(
         run_case(
-            client, app, cand, settings, "p6_turn1", "多轮接续-首轮", &[json!({"role": "user", "content": "画一条长 3000mm 的竖直线"})],
-            true, score_p1_draw, &mut metrics, budget, current, total,
+            client,
+            app,
+            cand,
+            settings,
+            "p6_turn1",
+            "多轮接续-首轮",
+            &[json!({"role": "user", "content": "画一条长 3000mm 的竖直线"})],
+            true,
+            score_p1_draw,
+            &mut metrics,
+            budget,
+            current,
+            total,
         )
         .await,
     );
     cases.push(
         run_case(
-            client, app, cand, settings, "p6_turn2", "多轮接续-次轮", &[
+            client,
+            app,
+            cand,
+            settings,
+            "p6_turn2",
+            "多轮接续-次轮",
+            &[
                 json!({"role": "user", "content": "画一条长 3000mm 的竖直线"}),
                 json!({"role": "assistant", "content": "已调用 draw_line 绘制 3000mm 竖直线。"}),
                 json!({"role": "user", "content": "把刚才那条线改成 5000mm"}),
             ],
-            true, score_p6_turn2, &mut metrics, budget, current, total,
+            true,
+            score_p6_turn2,
+            &mut metrics,
+            budget,
+            current,
+            total,
         )
         .await,
     );
@@ -764,8 +840,8 @@ async fn run_model_suite(
     let avg_duration_ms = if metrics.durations.is_empty() {
         0
     } else {
-        (metrics.durations.iter().map(|d| *d as u128).sum::<u128>() / metrics.durations.len() as u128)
-            as u64
+        (metrics.durations.iter().map(|d| *d as u128).sum::<u128>()
+            / metrics.durations.len() as u128) as u64
     };
     let avg_output_tokens = if metrics.outputs.is_empty() {
         None
@@ -804,7 +880,8 @@ pub(crate) async fn run_headless_model_retest(
     provider: &str,
     model: &str,
 ) -> Result<BenchmarkModelResult, String> {
-    let settings = crate::settings::load_from_default_path().map_err(|e| format!("读取设置失败: {e}"))?;
+    let settings =
+        crate::settings::load_from_default_path().map_err(|e| format!("读取设置失败: {e}"))?;
     let (label, key, _base_url) = provider_creds(&settings, provider);
     if key.trim().is_empty() {
         return Err(format!("{label} API Key 未配置"));
@@ -819,7 +896,16 @@ pub(crate) async fn run_headless_model_retest(
         model: model.to_string(),
         skip_reason: None,
     };
-    Ok(run_model_suite(&client, None, &cand, &settings, MAX_BENCHMARK_REQUESTS, 1, 1).await)
+    Ok(run_model_suite(
+        &client,
+        None,
+        &cand,
+        &settings,
+        MAX_BENCHMARK_REQUESTS,
+        1,
+        1,
+    )
+    .await)
 }
 
 // ---------------- 结果保存 ----------------
@@ -833,9 +919,10 @@ fn save_benchmark_results(
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建记忆目录失败: {e}"))?;
     let json_path = dir.join("benchmark-results.json");
     let md_path = dir.join("benchmark-results.md");
-    let json_text = serde_json::to_string_pretty(summary)
-        .map_err(|e| format!("序列化基准结果失败: {e}"))?;
-    std::fs::write(&json_path, &json_text).map_err(|e| format!("写入 benchmark-results.json 失败: {e}"))?;
+    let json_text =
+        serde_json::to_string_pretty(summary).map_err(|e| format!("序列化基准结果失败: {e}"))?;
+    std::fs::write(&json_path, &json_text)
+        .map_err(|e| format!("写入 benchmark-results.json 失败: {e}"))?;
     // 按时间戳归档，避免每次运行互相覆盖历史结果
     let stamp = utc_file_stamp(summary.started_at_ms);
     let archive_json = dir.join(format!("benchmark-results-{stamp}.json"));
@@ -854,10 +941,14 @@ fn save_benchmark_results(
 ",
         summary.models_tested, summary.cancelled
     ));
-    md.push_str("| 模型 | 评分(0-1) | 星级(1-5) | 成功/请求 | 平均耗时 | 平均输出 token |
-");
-    md.push_str("| --- | --- | --- | --- | --- | --- |
-");
+    md.push_str(
+        "| 模型 | 评分(0-1) | 星级(1-5) | 成功/请求 | 平均耗时 | 平均输出 token |
+",
+    );
+    md.push_str(
+        "| --- | --- | --- | --- | --- | --- |
+",
+    );
     for m in &summary.models {
         md.push_str(&format!(
             "| {} / {} | {:.3} | {:.1} | {}/{} | {}ms | {} |
@@ -874,27 +965,39 @@ fn save_benchmark_results(
                 .unwrap_or_else(|| "未返回".to_string())
         ));
     }
-    md.push_str("
+    md.push_str(
+        "
 ## 权重（可解释）
 
 工具调用可靠性 25% · CAD/规范准确性 25% · 稳定性 15% · 速度 15% · 成本 10% · 长上下文 10%
-");
-    md.push_str("
+",
+    );
+    md.push_str(
+        "
 ## 用例明细
 
-");
+",
+    );
     for m in &summary.models {
-        md.push_str(&format!("
+        md.push_str(&format!(
+            "
 ### {} / {}
 
-", m.provider_label, m.model));
+",
+            m.provider_label, m.model
+        ));
         for c in &m.cases {
-            md.push_str(&format!("- {}（{}）：{:.2} — {}
-", c.id, c.label, c.score, c.note));
+            md.push_str(&format!(
+                "- {}（{}）：{:.2} — {}
+",
+                c.id, c.label, c.score, c.note
+            ));
         }
         for e in &m.errors {
-            md.push_str(&format!("- 错误：{e}
-"));
+            md.push_str(&format!(
+                "- 错误：{e}
+"
+            ));
         }
     }
     std::fs::write(&md_path, &md).map_err(|e| format!("写入 benchmark-results.md 失败: {e}"))?;
@@ -930,7 +1033,9 @@ pub fn read_benchmark_results(
         return Ok(None);
     }
     let raw = std::fs::read_to_string(&json_path).map_err(|e| format!("读取基准结果失败: {e}"))?;
-    serde_json::from_str::<BenchmarkSummary>(&raw).map(Some).map_err(|e| format!("解析基准结果失败: {e}"))
+    serde_json::from_str::<BenchmarkSummary>(&raw)
+        .map(Some)
+        .map_err(|e| format!("解析基准结果失败: {e}"))
 }
 
 #[tauri::command]
@@ -966,8 +1071,10 @@ async fn run_benchmark_inner(
         Some(specs) => benchmark_candidates_from_specs(&settings, specs),
         None => benchmark_candidates_from_settings(&settings),
     };
-    let runnable: Vec<&BenchmarkCandidate> =
-        candidates.iter().filter(|c| c.skip_reason.is_none()).collect();
+    let runnable: Vec<&BenchmarkCandidate> = candidates
+        .iter()
+        .filter(|c| c.skip_reason.is_none())
+        .collect();
     let total_models = runnable.len();
     let estimate = total_models * REQUESTS_PER_MODEL;
     let _ = app.emit(
@@ -978,7 +1085,10 @@ async fn run_benchmark_inner(
             total: total_models,
             provider: None,
             model: None,
-            message: format!("预计 {} 个模型 × {} 次请求 ≈ {} 次（上限 {}）", total_models, REQUESTS_PER_MODEL, estimate, budget),
+            message: format!(
+                "预计 {} 个模型 × {} 次请求 ≈ {} 次（上限 {}）",
+                total_models, REQUESTS_PER_MODEL, estimate, budget
+            ),
         },
     );
 
@@ -1003,7 +1113,16 @@ async fn run_benchmark_inner(
                 message: format!("开始测试 {} / {}", cand.provider_label, cand.model),
             },
         );
-        let result = run_model_suite(&client, Some(app), cand, &settings, budget, index + 1, total_models).await;
+        let result = run_model_suite(
+            &client,
+            Some(app),
+            cand,
+            &settings,
+            budget,
+            index + 1,
+            total_models,
+        )
+        .await;
         let _ = app.emit(
             "benchmark:event",
             BenchmarkEvent {
@@ -1039,7 +1158,11 @@ async fn run_benchmark_inner(
     let _ = app.emit(
         "benchmark:event",
         BenchmarkEvent {
-            kind: if cancelled { "cancelled".to_string() } else { "finished".to_string() },
+            kind: if cancelled {
+                "cancelled".to_string()
+            } else {
+                "finished".to_string()
+            },
             current: summary.models_tested,
             total: total_models,
             provider: None,
@@ -1061,7 +1184,12 @@ mod tests {
             text: text.to_string(),
             tool_calls: calls
                 .into_iter()
-                .map(|(n, a)| (n.to_string(), serde_json::from_str(a).unwrap_or(Value::String(a.to_string()))))
+                .map(|(n, a)| {
+                    (
+                        n.to_string(),
+                        serde_json::from_str(a).unwrap_or(Value::String(a.to_string())),
+                    )
+                })
                 .collect(),
             tool_args_valid: args_valid,
             usage: None,
@@ -1070,9 +1198,23 @@ mod tests {
 
     #[test]
     fn score_weights_and_rating_mapping() {
-        let perfect = ScoreInputs { tool_rel: 1.0, accuracy: 1.0, stability: 1.0, speed: 1.0, cost: 1.0, long_context: 1.0 };
+        let perfect = ScoreInputs {
+            tool_rel: 1.0,
+            accuracy: 1.0,
+            stability: 1.0,
+            speed: 1.0,
+            cost: 1.0,
+            long_context: 1.0,
+        };
         assert!((compute_model_score(&perfect) - 1.0).abs() < 1e-9);
-        let zero = ScoreInputs { tool_rel: 0.0, accuracy: 0.0, stability: 0.0, speed: 0.0, cost: 0.0, long_context: 0.0 };
+        let zero = ScoreInputs {
+            tool_rel: 0.0,
+            accuracy: 0.0,
+            stability: 0.0,
+            speed: 0.0,
+            cost: 0.0,
+            long_context: 0.0,
+        };
         assert!((compute_model_score(&zero) - 0.0).abs() < 1e-9);
         assert_eq!(score_to_rating(1.0), 5.0);
         assert_eq!(score_to_rating(0.5), 3.0);
@@ -1081,7 +1223,11 @@ mod tests {
 
     #[test]
     fn p1_scorer_rewards_draw_line_with_valid_json() {
-        let ok = fake_response("我来画线", vec![("draw_line", "{\"start\":[0,0],\"end\":[1000,0]}")], true);
+        let ok = fake_response(
+            "我来画线",
+            vec![("draw_line", "{\"start\":[0,0],\"end\":[1000,0]}")],
+            true,
+        );
         assert_eq!(score_p1_draw(&ok).0, 1.0);
         let invalid = fake_response("我来画线", vec![("draw_line", "not-json")], false);
         assert_eq!(score_p1_draw(&invalid).0, 0.5);
@@ -1093,27 +1239,49 @@ mod tests {
     fn p2_scorer_penalizes_silent_default_draw() {
         let asks = fake_response("请提供井口尺寸和高度", vec![], true);
         assert_eq!(score_p2_clarify(&asks).0, 1.0);
-        let silent_draw = fake_response("好的", vec![("draw_elevator_shaft_protection", "{}")], true);
+        let silent_draw =
+            fake_response("好的", vec![("draw_elevator_shaft_protection", "{}")], true);
         assert_eq!(score_p2_clarify(&silent_draw).0, 0.0);
     }
 
     #[test]
     fn p3_scorer_accepts_200mm() {
-        assert_eq!(score_p3_safety(&fake_response("踢脚板高度应为 200mm", vec![], true)).0, 1.0);
-        assert_eq!(score_p3_safety(&fake_response("应该是 150mm", vec![], true)).0, 0.5);
-        assert_eq!(score_p3_safety(&fake_response("不清楚", vec![], true)).0, 0.0);
+        assert_eq!(
+            score_p3_safety(&fake_response("踢脚板高度应为 200mm", vec![], true)).0,
+            1.0
+        );
+        assert_eq!(
+            score_p3_safety(&fake_response("应该是 150mm", vec![], true)).0,
+            0.5
+        );
+        assert_eq!(
+            score_p3_safety(&fake_response("不清楚", vec![], true)).0,
+            0.0
+        );
     }
 
     #[test]
     fn p4_scorer_requires_7000() {
-        assert_eq!(score_p4_context(&fake_response("A1 的长度是 7000mm", vec![], true)).0, 1.0);
-        assert_eq!(score_p4_context(&fake_response("A1 是直线", vec![], true)).0, 0.0);
+        assert_eq!(
+            score_p4_context(&fake_response("A1 的长度是 7000mm", vec![], true)).0,
+            1.0
+        );
+        assert_eq!(
+            score_p4_context(&fake_response("A1 是直线", vec![], true)).0,
+            0.0
+        );
     }
 
     #[test]
     fn p6_turn2_scorer_checks_new_value() {
-        assert_eq!(score_p6_turn2(&fake_response("已把该线改成 5000mm", vec![], true)).0, 1.0);
-        assert_eq!(score_p6_turn2(&fake_response("该线长 3000mm", vec![], true)).0, 0.5);
+        assert_eq!(
+            score_p6_turn2(&fake_response("已把该线改成 5000mm", vec![], true)).0,
+            1.0
+        );
+        assert_eq!(
+            score_p6_turn2(&fake_response("该线长 3000mm", vec![], true)).0,
+            0.5
+        );
         assert_eq!(score_p6_turn2(&fake_response("好的", vec![], true)).0, 0.0);
     }
 
@@ -1125,16 +1293,28 @@ mod tests {
             ..Default::default()
         };
         let specs = vec![
-            BenchmarkModelSpec { provider: "glm".to_string(), model: "glm-5.2".to_string() },
-            BenchmarkModelSpec { provider: "glm".to_string(), model: "glm-5.2".to_string() },
-            BenchmarkModelSpec { provider: "deepseek".to_string(), model: "deepseek-v4-pro".to_string() },
+            BenchmarkModelSpec {
+                provider: "glm".to_string(),
+                model: "glm-5.2".to_string(),
+            },
+            BenchmarkModelSpec {
+                provider: "glm".to_string(),
+                model: "glm-5.2".to_string(),
+            },
+            BenchmarkModelSpec {
+                provider: "deepseek".to_string(),
+                model: "deepseek-v4-pro".to_string(),
+            },
         ];
         let candidates = benchmark_candidates_from_specs(&settings, &specs);
         assert_eq!(candidates.len(), 2, "同 provider+model 应去重");
         assert!(candidates.iter().all(|c| c.provider_label.len() > 0));
         let glm = candidates.iter().find(|c| c.provider == "glm").unwrap();
         assert!(glm.skip_reason.is_none());
-        let ds = candidates.iter().find(|c| c.provider == "deepseek").unwrap();
+        let ds = candidates
+            .iter()
+            .find(|c| c.provider == "deepseek")
+            .unwrap();
         assert!(ds.skip_reason.as_deref().unwrap_or("").contains("未配置"));
     }
 
@@ -1144,7 +1324,8 @@ mod tests {
     #[test]
     #[ignore = "requires live API credentials — 按需错峰补测"]
     fn retest_model_headless() {
-        let model = std::env::var("CADEGG_RETEST_MODEL").unwrap_or_else(|_| "glm-4.5-flash".to_string());
+        let model =
+            std::env::var("CADEGG_RETEST_MODEL").unwrap_or_else(|_| "glm-4.5-flash".to_string());
         let provider = if model.starts_with("glm") {
             "glm"
         } else if model.starts_with("deepseek") {
@@ -1172,6 +1353,22 @@ mod tests {
         }
     }
 
+    /// 诊断：Rust 端能否解析磁盘上的 benchmark-results.json（camelCase 格式）。
+    #[test]
+    #[ignore = "读取本机 AppData 基准结果，诊断用"]
+    fn parse_disk_benchmark_results() {
+        let raw = std::fs::read_to_string(
+            "C:\\Users\\dani3\\AppData\\Roaming\\io.github.danub3.cadegg\\sessions\\memory\\benchmark-results.json",
+        )
+        .expect("read benchmark-results.json");
+        let summary: super::BenchmarkSummary = serde_json::from_str(&raw).expect("parse summary");
+        println!("parsed {} models", summary.models.len());
+        for m in &summary.models {
+            println!("  {}/{} rating={}", m.provider, m.model, m.rating);
+        }
+        assert!(!summary.models.is_empty());
+    }
+
     #[test]
     fn candidates_dedupe_and_skip_unconfigured() {
         let settings = Settings::default();
@@ -1187,17 +1384,29 @@ mod tests {
             ..Default::default()
         };
         let candidates = benchmark_candidates_from_settings(&settings);
-        let runnable: Vec<_> = candidates.iter().filter(|c| c.skip_reason.is_none()).collect();
+        let runnable: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.skip_reason.is_none())
+            .collect();
         assert_eq!(runnable.len(), 1, "glm 双档位相同模型应去重");
         assert_eq!(runnable[0].model, "glm-4.5");
     }
 
     #[test]
     fn rate_limit_wait_without_retry_after_uses_long_backoff() {
-        assert_eq!(rate_limit_wait_ms("该模型当前访问量过大，请您稍后再试", 2_500), 30_000);
-        assert_eq!(rate_limit_wait_ms("please try again after 12 seconds", 2_500), 12_000);
+        assert_eq!(
+            rate_limit_wait_ms("该模型当前访问量过大，请您稍后再试", 2_500),
+            30_000
+        );
+        assert_eq!(
+            rate_limit_wait_ms("please try again after 12 seconds", 2_500),
+            12_000
+        );
         // Retry-After 秒数小于供应商间隔时，仍遵守供应商间隔下限
-        assert_eq!(rate_limit_wait_ms("try again after 5 seconds", 21_000), 21_000);
+        assert_eq!(
+            rate_limit_wait_ms("try again after 5 seconds", 21_000),
+            21_000
+        );
     }
 
     #[test]
