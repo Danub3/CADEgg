@@ -404,6 +404,38 @@ fn params_validate_elevator_shaft_protection() -> Value {
     })
 }
 
+fn params_draw_elevator_shaft_safety_net() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "x": {"type": "number", "description": "井道中心 X"},
+            "y": {"type": "number", "description": "井道中心 Y"},
+            "shaft_width": {"type": "number", "description": "井道长（较大截面尺寸），毫米，须大于 0"},
+            "shaft_depth": {"type": "number", "description": "井道宽（较小截面尺寸），毫米，须大于 0"},
+            "floor_height": {"type": "number", "description": "层高，毫米，须大于 0；平网按每隔 2 层布置，间距 = 2×层高 且不大于 10m"},
+            "net_to_wall_gap": {"type": "number", "description": "网体与井壁空隙，毫米，宜不大于 25，默认 25"},
+            "include_upper_isolation": {"type": "boolean", "description": "施工层上部是否设置隔离防护设施，默认 true"},
+            "include_dimensions": {"type": "boolean", "description": "是否绘制尺寸标注，默认 true"},
+            "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"}
+        },
+        "required": ["x", "y", "shaft_width", "shaft_depth", "floor_height"]
+    })
+}
+
+fn params_validate_elevator_shaft_safety_net() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "shaft_width": {"type": "number", "description": "井道长，毫米，须大于 0"},
+            "shaft_depth": {"type": "number", "description": "井道宽，毫米，须大于 0"},
+            "floor_height": {"type": "number", "description": "层高，毫米，须大于 0"},
+            "net_to_wall_gap": {"type": "number", "description": "网体与井壁空隙，毫米，宜不大于 25"},
+            "include_upper_isolation": {"type": "boolean", "description": "施工层上部是否设置隔离防护设施"}
+        },
+        "required": ["shaft_width", "shaft_depth", "floor_height"]
+    })
+}
+
 fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -453,6 +485,18 @@ fn all_tool_specs() -> Vec<ToolSpec> {
             layer: ToolLayer::Query,
             description: "按确定性规则校核室内电梯井口防护门参数，返回 JSON：ok、issues、checks、material_table。",
             parameters: params_validate_elevator_shaft_protection,
+        },
+        ToolSpec {
+            name: "draw_elevator_shaft_safety_net",
+            layer: ToolLayer::SemanticGeometry,
+            description: "绘制电梯井内安全平网平面布置：井道轮廓、平网（按与井壁空隙内缩）、周边固定标记、尺寸标注和材料表。依据 JGJ 80-2016 4.2.3：每隔2层且不大于10m 一道，施工层上部设置隔离防护。",
+            parameters: params_draw_elevator_shaft_safety_net,
+        },
+        ToolSpec {
+            name: "validate_elevator_shaft_safety_net",
+            layer: ToolLayer::Query,
+            description: "按确定性规则校核电梯井内安全平网参数（JGJ 80-2016 4.2.3），返回 JSON：ok、issues、warnings、checks、material_table、net_summary。",
+            parameters: params_validate_elevator_shaft_safety_net,
         },
         ToolSpec {
             name: "draw_text",
@@ -581,28 +625,42 @@ pub fn is_safety_request(user_input: &str) -> bool {
 }
 
 pub fn safety_context_scene(user_input: &str) -> Option<&'static str> {
+    // 注册表优先：命中具体场景（如井内安全平网）就返回该场景；
+    // 未命中时才用电梯井口旧识别兜底，避免「电梯井内平网」被兜底误路由到防护门。
+    if let Some(scene) = crate::scenes::match_safety_scene(user_input) {
+        return Some(scene.scene);
+    }
     if crate::safety::is_elevator_shaft_request(user_input) {
         return Some("elevator_shaft_protection");
     }
-    crate::scenes::match_safety_scene(user_input).map(|scene| scene.scene)
+    None
 }
 
-/// 电梯井口防护门的必填关键参数。返回缺参列表，用于追问闭环。
-/// 仅对「要画防护图」但缺关键尺寸的请求返回缺项；若用户已在同一句里给出尺寸则视为已提供。
+/// 按命中场景返回缺参列表，用于追问闭环（仅对要画图但缺关键尺寸的请求）。
 pub fn safety_missing_params(user_input: &str) -> Vec<&'static str> {
-    if crate::safety::is_elevator_shaft_request(user_input) {
-        crate::safety::missing_elevator_shaft_params(user_input)
-    } else {
-        Vec::new()
+    match safety_context_scene(user_input) {
+        Some("elevator_shaft_protection") => {
+            crate::safety::missing_elevator_shaft_params(user_input)
+        }
+        Some("elevator_shaft_safety_net") => crate::safety::missing_safety_net_params(user_input),
+        _ => Vec::new(),
     }
 }
 
 /// 生成缺参追问提示文案，供系统提示注入或前端直接展示。
 pub fn safety_clarification_prompt(user_input: &str) -> Option<String> {
-    if safety_missing_params(user_input).is_empty() {
-        return None;
+    match safety_context_scene(user_input) {
+        Some("elevator_shaft_protection") => {
+            if safety_missing_params(user_input).is_empty() {
+                return None;
+            }
+            crate::safety::elevator_shaft_clarification_prompt(user_input)
+        }
+        Some("elevator_shaft_safety_net") => {
+            crate::safety::safety_net_clarification_prompt(user_input)
+        }
+        _ => None,
     }
-    crate::safety::elevator_shaft_clarification_prompt(user_input)
 }
 
 fn scene_category_label(category: crate::scenes::SafetySceneCategory) -> &'static str {
@@ -1399,6 +1457,44 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
             crate::safety::parse_lifecycle(call.args.get("lifecycle")),
         ),
         #[cfg(windows)]
+        "draw_elevator_shaft_safety_net" => crate::cad::cad_draw_elevator_shaft_safety_net(
+            num(&call.args, "x")?,
+            num(&call.args, "y")?,
+            num(&call.args, "shaft_width")?,
+            num(&call.args, "shaft_depth")?,
+            num(&call.args, "floor_height")?,
+            call.args
+                .get("net_to_wall_gap")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::SAFETY_NET_MAX_WALL_GAP_MM),
+            call.args
+                .get("include_upper_isolation")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("include_dimensions")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
+        ),
+        #[cfg(windows)]
+        "validate_elevator_shaft_safety_net" => crate::cad::cad_validate_elevator_shaft_safety_net(
+            num(&call.args, "shaft_width")?,
+            num(&call.args, "shaft_depth")?,
+            num(&call.args, "floor_height")?,
+            call.args
+                .get("net_to_wall_gap")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::SAFETY_NET_MAX_WALL_GAP_MM),
+            call.args
+                .get("include_upper_isolation")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        ),
+        #[cfg(windows)]
         "draw_text" => crate::cad::cad_draw_text(
             num(&call.args, "x")?,
             num(&call.args, "y")?,
@@ -1521,6 +1617,39 @@ mod tests {
         assert!(result.confirmation_required);
         assert!(result.object_updates.is_empty());
         assert!(result.content.contains("人工确认"));
+    }
+
+    #[test]
+    fn safety_net_requests_select_safety_net_tools_not_guard_door() {
+        let tooling = select_tooling_context(
+            "画电梯井内安全平网，井道 2000x1800，层高 3000",
+            &[],
+            WorkMode::SafetyDemoMode,
+        );
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_elevator_shaft_safety_net"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "validate_elevator_shaft_safety_net"));
+        assert!(!tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_elevator_shaft_protection"));
+    }
+
+    #[test]
+    fn safety_net_missing_params_routes_to_own_detector() {
+        let missing = safety_missing_params("画电梯井内安全平网");
+        assert_eq!(missing, vec!["层高/楼层间距", "井道长×宽"]);
+        assert!(
+            safety_clarification_prompt("画电梯井内安全平网，井道 2000x1800，层高 3000").is_none()
+        );
+        // 防护门场景仍走原检测
+        let missing = safety_missing_params("画电梯井口防护门");
+        assert!(missing.contains(&"井口宽度"));
     }
 
     #[test]

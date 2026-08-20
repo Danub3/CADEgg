@@ -2694,6 +2694,382 @@ pub fn cad_validate_elevator_shaft_protection(
     safety::validation_to_pretty_json(&validation)
 }
 
+pub fn cad_draw_elevator_shaft_safety_net(
+    x: f64,
+    y: f64,
+    shaft_width: f64,
+    shaft_depth: f64,
+    floor_height: f64,
+    net_to_wall_gap: f64,
+    include_upper_isolation: bool,
+    include_dimensions: bool,
+    scale: f64,
+) -> Result<String, String> {
+    if shaft_width <= 0.0 || shaft_depth <= 0.0 {
+        return Err(format!(
+            "shaft_width 和 shaft_depth 必须为正数，收到 {} x {}",
+            shaft_width, shaft_depth
+        ));
+    }
+    if floor_height <= 0.0 {
+        return Err(format!("floor_height 必须为正数，收到 {floor_height}"));
+    }
+    if net_to_wall_gap < 0.0 {
+        return Err(format!("net_to_wall_gap 不能为负，收到 {net_to_wall_gap}"));
+    }
+    if scale <= 0.0 {
+        return Err(format!("scale 必须为正数，收到 {scale}"));
+    }
+
+    let mut line_list: Vec<[f64; 4]> = Vec::new();
+    fn push_line(cmd: &mut String, lines: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
+        cmd.push_str(&format!(
+            "_.LINE\n{},{}\n{},{}\n\n",
+            fmt_num(x1),
+            fmt_num(y1),
+            fmt_num(x2),
+            fmt_num(y2)
+        ));
+        lines.push([x1, y1, x2, y2]);
+    }
+    fn push_rect(cmd: &mut String, rects: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
+        cmd.push_str("_.PLINE\n");
+        cmd.push_str(&format!("{},{}\n", fmt_num(x1), fmt_num(y1)));
+        cmd.push_str(&format!("{},{}\n", fmt_num(x2), fmt_num(y1)));
+        cmd.push_str(&format!("{},{}\n", fmt_num(x2), fmt_num(y2)));
+        cmd.push_str(&format!("{},{}\n", fmt_num(x1), fmt_num(y2)));
+        cmd.push_str("C\n");
+        rects.push([x1, y1, x2, y2]);
+    }
+
+    let w = shaft_width * scale;
+    let d = shaft_depth * scale;
+    let gap = net_to_wall_gap * scale;
+    let left = x - w / 2.0;
+    let right = x + w / 2.0;
+    let bottom = y - d / 2.0;
+    let top = y + d / 2.0;
+    // 平网轮廓：井道截面四周内缩 net_to_wall_gap
+    let net_l = left + gap;
+    let net_r = right - gap;
+    let net_b = bottom + gap;
+    let net_t = top - gap;
+
+    let title_h = (200.0 * scale).max(120.0);
+    let note_h = (120.0 * scale).max(72.0);
+    let dim_h = (100.0 * scale).max(60.0);
+    let header_h = (110.0 * scale).max(64.0);
+    let cell_h = (95.0 * scale).max(56.0);
+
+    // ── 批 1：矩形 ──
+    let mut cmd_rects = String::new();
+    let mut rect_list: Vec<[f64; 4]> = Vec::new();
+    // 井道轮廓
+    push_rect(&mut cmd_rects, &mut rect_list, left, bottom, right, top);
+    // 平网（内缩）
+    push_rect(&mut cmd_rects, &mut rect_list, net_l, net_b, net_r, net_t);
+
+    // ── 批 2：直线 ──
+    let mut cmd_lines = String::new();
+    let mark = 80.0 * scale;
+    // 平网四边中点向井壁方向的固定标记
+    push_line(&mut cmd_lines, &mut line_list, x, net_t, x, top);
+    push_line(&mut cmd_lines, &mut line_list, x, net_b, x, bottom);
+    push_line(&mut cmd_lines, &mut line_list, net_l, y, left, y);
+    push_line(&mut cmd_lines, &mut line_list, net_r, y, right, y);
+    // 固定装置短标记（四边中点处的小横线）
+    for (fx, fy) in [(x, net_t), (x, net_b), (net_l, y), (net_r, y)] {
+        push_line(&mut cmd_lines, &mut line_list, fx - mark, fy, fx + mark, fy);
+    }
+
+    if include_dimensions {
+        let dim_y = bottom - 300.0 * scale;
+        let dim_x = right + 300.0 * scale;
+        let ext = 100.0 * scale;
+        let gap_d = 50.0 * scale;
+        let tick = 50.0 * scale;
+        // 水平尺寸（井道长）
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            left,
+            bottom - gap_d,
+            left,
+            dim_y - ext,
+        );
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            right,
+            bottom - gap_d,
+            right,
+            dim_y - ext,
+        );
+        push_line(&mut cmd_lines, &mut line_list, left, dim_y, right, dim_y);
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            left,
+            dim_y,
+            left + tick,
+            dim_y - tick,
+        );
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            right,
+            dim_y,
+            right - tick,
+            dim_y - tick,
+        );
+        // 垂直尺寸（井道宽）
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            right + gap_d,
+            bottom,
+            dim_x + ext,
+            bottom,
+        );
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            right + gap_d,
+            top,
+            dim_x + ext,
+            top,
+        );
+        push_line(&mut cmd_lines, &mut line_list, dim_x, bottom, dim_x, top);
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            dim_x,
+            bottom,
+            dim_x + tick,
+            bottom + tick,
+        );
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            dim_x,
+            top,
+            dim_x + tick,
+            top - tick,
+        );
+    }
+
+    // ── 材料表（右侧，3 数据行）──
+    let table_x = right + 1300.0 * scale;
+    let table_y = top;
+    let table_rows: usize = 4;
+    let row_h = 240.0 * scale;
+    let col_w0 = 720.0 * scale;
+    let col_w1 = 1450.0 * scale;
+    let cell_pad_x = 90.0 * scale;
+    let min_table_text_h = (70.0 * scale).max(42.0);
+    for row in 0..=table_rows {
+        let y0 = table_y - row_h * row as f64;
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            table_x,
+            y0,
+            table_x + col_w0 + col_w1,
+            y0,
+        );
+    }
+    let table_bottom = table_y - row_h * table_rows as f64;
+    for xcol in [table_x, table_x + col_w0, table_x + col_w0 + col_w1] {
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            xcol,
+            table_y,
+            xcol,
+            table_bottom,
+        );
+    }
+    let cell_center_x = |col: usize| -> f64 {
+        if col == 0 {
+            table_x + col_w0 / 2.0
+        } else {
+            table_x + col_w0 + col_w1 / 2.0
+        }
+    };
+    let cell_center_y = |row: usize| -> f64 { table_y - row_h * (row as f64 + 0.5) };
+
+    // ── 批 3：文字 ──
+    let mut text_items: Vec<(f64, f64, f64, String)> = Vec::new();
+
+    let net_spacing = floor_height * 2.0;
+    let title_text = "电梯井内安全平网".to_string();
+    let title_y = top + 260.0 * scale;
+    let title_x = (x - estimate_text_width(&title_text, title_h) / 2.0).max(left + 80.0 * scale);
+    text_items.push((title_x, title_y, title_h, title_text));
+
+    let note_text = format!(
+        "井道 {}x{}  层高 {}  平网间距 {}（每隔2层且不大于10m）  网体与井壁空隙 {}  施工层上部隔离防护：{}",
+        fmt_num(shaft_width),
+        fmt_num(shaft_depth),
+        fmt_num(floor_height),
+        fmt_num(net_spacing),
+        fmt_num(net_to_wall_gap),
+        if include_upper_isolation { "已设置" } else { "未设置" }
+    );
+    let note_y = title_y + title_h + 160.0 * scale;
+    let note_draw_h =
+        fit_text_height_to_width(&note_text, note_h, w * 1.9, (72.0 * scale).max(56.0));
+    let note_x = (x - estimate_text_width(&note_text, note_draw_h) / 2.0).max(left + 80.0 * scale);
+    text_items.push((note_x, note_y, note_draw_h, note_text));
+
+    if include_dimensions {
+        let dim_width_text = format!("{}", fmt_num(shaft_width));
+        let dim_height_text = format!("{}", fmt_num(shaft_depth));
+        text_items.push((
+            x - estimate_text_width(&dim_width_text, dim_h) / 2.0,
+            bottom - 270.0 * scale,
+            dim_h,
+            dim_width_text,
+        ));
+        text_items.push((
+            right + 330.0 * scale,
+            y - dim_h / 2.0,
+            dim_h,
+            dim_height_text,
+        ));
+    }
+
+    // 材料表文字
+    let header_rows: [(String, String); 4] = [
+        ("材料".to_string(), "数量/规格".to_string()),
+        (
+            "安全平网".to_string(),
+            format!("{}x{}", fmt_num(shaft_width), fmt_num(shaft_depth)),
+        ),
+        ("固定装置".to_string(), "周边固定".to_string()),
+        (
+            "上部隔离".to_string(),
+            if include_upper_isolation {
+                "已设置".to_string()
+            } else {
+                "未设置".to_string()
+            },
+        ),
+    ];
+    for (row, (label, value)) in header_rows.iter().enumerate() {
+        let (lh, vh) = if row == 0 {
+            (header_h, header_h)
+        } else {
+            (cell_h, cell_h)
+        };
+        let label_h =
+            fit_text_height_to_width(label, lh, col_w0 - cell_pad_x * 2.0, min_table_text_h);
+        let value_h =
+            fit_text_height_to_width(value, vh, col_w1 - cell_pad_x * 2.0, min_table_text_h);
+        text_items.push((
+            cell_center_x(0) - estimate_text_width(label, label_h) / 2.0,
+            cell_center_y(row) - label_h / 2.0,
+            label_h,
+            label.clone(),
+        ));
+        text_items.push((
+            cell_center_x(1) - estimate_text_width(value, value_h) / 2.0,
+            cell_center_y(row) - value_h / 2.0,
+            value_h,
+            value.clone(),
+        ));
+    }
+
+    // ── 几何绘制（bridge 事务通道优先，COM 回退）──
+    let rects_bridge_ok = {
+        let mut ok = true;
+        for rect in &rect_list {
+            let points = [
+                rect[0], rect[1], rect[2], rect[1], rect[2], rect[3], rect[0], rect[3],
+            ];
+            if draw_polyline_via_bridge(&points, true).is_err() {
+                ok = false;
+                break;
+            }
+        }
+        ok
+    };
+    let lines_bridge_ok = {
+        let mut ok = true;
+        for line in &line_list {
+            if draw_line_via_bridge(line[0], line[1], line[2], line[3]).is_err() {
+                ok = false;
+                break;
+            }
+        }
+        ok
+    };
+    if !rects_bridge_ok {
+        let cmd_rects_owned = cmd_rects.clone();
+        run_sta_with_timeout(
+            move || unsafe {
+                let app = get_autocad()?;
+                let doc = get_active_document(&app)?;
+                send_command_to_doc(&doc, &cmd_rects_owned)?;
+                Ok(())
+            },
+            Duration::from_secs(60),
+        )?;
+    }
+    if !lines_bridge_ok {
+        let cmd_lines_owned = cmd_lines.clone();
+        run_sta_with_timeout(
+            move || unsafe {
+                let app = get_autocad()?;
+                let doc = get_active_document(&app)?;
+                send_command_to_doc(&doc, &cmd_lines_owned)?;
+                Ok(())
+            },
+            Duration::from_secs(60),
+        )?;
+    }
+    for (tx, ty, th, tt) in &text_items {
+        cad_draw_text(*tx, *ty, tt, *th, 0.0)?;
+    }
+    let _ = run_sta_with_timeout(
+        move || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            send_command_to_doc(&doc, "_.REGEN\n")?;
+            send_command_to_doc(&doc, "_.ZOOM\n_E\n")?;
+            Ok(())
+        },
+        Duration::from_secs(30),
+    );
+
+    Ok(format!(
+        "已生成电梯井内安全平网（平面布置）：井道 {}x{}，层高 {}，平网间距 {}（每隔2层且不大于10m），网体与井壁空隙 {}，施工层上部隔离防护={}。依据：JGJ 80-2016 4.2.3。",
+        fmt_num(shaft_width),
+        fmt_num(shaft_depth),
+        fmt_num(floor_height),
+        fmt_num(net_spacing),
+        fmt_num(net_to_wall_gap),
+        if include_upper_isolation { "已设置" } else { "未设置" }
+    ))
+}
+
+pub fn cad_validate_elevator_shaft_safety_net(
+    shaft_width: f64,
+    shaft_depth: f64,
+    floor_height: f64,
+    net_to_wall_gap: f64,
+    include_upper_isolation: bool,
+) -> Result<String, String> {
+    let validation = safety::validate_elevator_shaft_safety_net(
+        shaft_width,
+        shaft_depth,
+        floor_height,
+        net_to_wall_gap,
+        include_upper_isolation,
+    );
+    serde_json::to_string_pretty(&validation).map_err(|e| format!("序列化平网校核结果失败: {e}"))
+}
+
 pub fn cad_draw_text(
     x: f64,
     y: f64,
@@ -3560,8 +3936,9 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_draw_elevator_shaft_protection, cad_draw_text,
-        cad_erase_handle, cad_modelspace_snapshot, cad_smoke_test_editing_tools,
+        bridge_installed_dll_path, cad_draw_elevator_shaft_protection,
+        cad_draw_elevator_shaft_safety_net, cad_draw_text, cad_erase_handle,
+        cad_modelspace_snapshot, cad_smoke_test_editing_tools,
         cad_smoke_test_elevator_shaft_protection, ensure_bridge_installed_once,
     };
 
@@ -3591,6 +3968,32 @@ mod tests {
                 ),
                 Ok(_) => {}
             }
+        }
+    }
+
+    /// 平网绘图参数校验在 CAD 调用之前完成，可无 AutoCAD 单测。
+    #[test]
+    fn safety_net_draw_rejects_invalid_params() {
+        let cases: [(f64, f64, f64, f64); 3] = [
+            (0.0, 1800.0, 3000.0, 20.0),    // 井道长非正
+            (2200.0, 0.0, 3000.0, 20.0),    // 井道宽非正
+            (2200.0, 1800.0, 3000.0, -5.0), // 空隙为负
+        ];
+        for (w, d, fh, gap) in cases {
+            let result =
+                cad_draw_elevator_shaft_safety_net(0.0, 0.0, w, d, fh, gap, true, true, 1.0);
+            assert!(result.is_err(), "参数 ({w},{d},{fh},{gap}) 应被拒绝");
+        }
+        // 合法参数通过校验阶段（后续 CAD 调用才可能因无 AutoCAD 失败）
+        let result = cad_draw_elevator_shaft_safety_net(
+            0.0, 0.0, 2200.0, 1800.0, 3000.0, 20.0, true, true, 1.0,
+        );
+        match result {
+            Err(e) => assert!(
+                !e.contains("必须为正数") && !e.contains("不能为负"),
+                "合法参数不应在校验阶段失败: {e}"
+            ),
+            Ok(_) => {}
         }
     }
 

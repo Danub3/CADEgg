@@ -26,6 +26,8 @@ use std::path::Path;
 /// 内置兜底卡片：把 `data/atlas/` 下已收录的卡片编译进二进制。
 /// 相对路径以本文件（`src-tauri/src/knowledge.rs`）为基准：`../` → `src-tauri/`。
 const ELEVATOR_SHAFT_CARD: &str = include_str!("../../data/atlas/elevator_shaft_protection.json");
+const ELEVATOR_SHAFT_SAFETY_NET_CARD: &str =
+    include_str!("../../data/atlas/elevator_shaft_safety_net.json");
 const EDGE_GUARDRAIL_CARD: &str = include_str!("../../data/atlas/edge_guardrail.json");
 const DRAFTING_STANDARD_CARD: &str = include_str!("../../data/atlas/cad_drafting_standard.json");
 
@@ -37,6 +39,7 @@ const ATLAS_DIR_CANDIDATES: [&str; 2] = ["data/atlas", "src-tauri/../data/atlas"
 fn builtin_cards() -> Vec<(&'static str, &'static str)> {
     vec![
         ("elevator_shaft_protection", ELEVATOR_SHAFT_CARD),
+        ("elevator_shaft_safety_net", ELEVATOR_SHAFT_SAFETY_NET_CARD),
         ("edge_guardrail", EDGE_GUARDRAIL_CARD),
         ("cad_drafting_standard", DRAFTING_STANDARD_CARD),
     ]

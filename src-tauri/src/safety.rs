@@ -362,6 +362,161 @@ pub fn validation_to_pretty_json(validation: &ElevatorShaftValidation) -> Result
     serde_json::to_string_pretty(validation).map_err(|e| format!("序列化校核结果失败: {e}"))
 }
 
+// ── 电梯井内安全平网（JGJ 80-2016 4.2.3）──
+
+pub const SAFETY_NET_MAX_SPACING_MM: f64 = 10000.0;
+pub const SAFETY_NET_MAX_WALL_GAP_MM: f64 = 25.0;
+
+#[derive(Serialize, Debug, Clone)]
+pub struct SafetyNetSummary {
+    pub shaft_width: f64,
+    pub shaft_depth: f64,
+    pub floor_height: f64,
+    /// 实际平网垂直间距 = 2 层层高
+    pub net_spacing: f64,
+    pub net_to_wall_gap: f64,
+    pub upper_isolation: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct SafetyNetMaterialTable {
+    pub safety_net: String,
+    pub net_to_wall_gap: f64,
+    pub fixing: bool,
+    pub upper_isolation: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ElevatorShaftSafetyNetValidation {
+    pub ok: bool,
+    pub issues: Vec<&'static str>,
+    pub warnings: Vec<&'static str>,
+    pub checks: Vec<ValidationCheck>,
+    pub material_table: SafetyNetMaterialTable,
+    pub net_summary: SafetyNetSummary,
+}
+
+pub fn validate_elevator_shaft_safety_net(
+    shaft_width: f64,
+    shaft_depth: f64,
+    floor_height: f64,
+    net_to_wall_gap: f64,
+    include_upper_isolation: bool,
+) -> ElevatorShaftSafetyNetValidation {
+    let mut checks = Vec::new();
+    let mut issues = Vec::new();
+    let mut warnings = Vec::new();
+
+    let mut add_check =
+        |id: &'static str, label: &'static str, severity: ValidationSeverity, passed: bool| {
+            checks.push(ValidationCheck {
+                id,
+                label,
+                passed,
+                severity,
+            });
+            if !passed {
+                match severity {
+                    ValidationSeverity::Mandatory => issues.push(label),
+                    ValidationSeverity::Recommended | ValidationSeverity::Unverified => {
+                        warnings.push(label)
+                    }
+                }
+            }
+        };
+
+    let net_spacing = floor_height * 2.0;
+
+    add_check(
+        "shaft_dimensions_valid",
+        "井道长度和宽度已提供且为正数",
+        ValidationSeverity::Mandatory,
+        shaft_width > 0.0 && shaft_depth > 0.0,
+    );
+    add_check(
+        "floor_height_valid",
+        "层高已提供且为正数",
+        ValidationSeverity::Mandatory,
+        floor_height > 0.0,
+    );
+    add_check(
+        "net_spacing_valid",
+        "平网垂直间距不大于 10m（每隔 2 层一道）",
+        ValidationSeverity::Mandatory,
+        floor_height > 0.0 && net_spacing <= SAFETY_NET_MAX_SPACING_MM + 0.5,
+    );
+    add_check(
+        "net_to_wall_gap_nonnegative",
+        "平网不大于井道截面（网体与井壁空隙不为负）",
+        ValidationSeverity::Mandatory,
+        net_to_wall_gap >= 0.0,
+    );
+    add_check(
+        "net_to_wall_gap_recommended",
+        "网体与井壁空隙不大于 25mm（指导图册做法）",
+        ValidationSeverity::Recommended,
+        net_to_wall_gap <= SAFETY_NET_MAX_WALL_GAP_MM + 0.5,
+    );
+    add_check(
+        "upper_isolation_present",
+        "施工层上部已设置隔离防护设施",
+        ValidationSeverity::Mandatory,
+        include_upper_isolation,
+    );
+
+    ElevatorShaftSafetyNetValidation {
+        ok: issues.is_empty(),
+        issues,
+        warnings,
+        checks,
+        material_table: SafetyNetMaterialTable {
+            safety_net: format!("安全平网 {}x{}", fmt_dim(shaft_width), fmt_dim(shaft_depth)),
+            net_to_wall_gap,
+            fixing: true,
+            upper_isolation: include_upper_isolation,
+        },
+        net_summary: SafetyNetSummary {
+            shaft_width,
+            shaft_depth,
+            floor_height,
+            net_spacing,
+            net_to_wall_gap,
+            upper_isolation: include_upper_isolation,
+        },
+    }
+}
+
+fn fmt_dim(v: f64) -> String {
+    let s = format!("{v}");
+    let s = s.strip_suffix(".0").unwrap_or(&s);
+    format!("{s}mm")
+}
+
+pub fn missing_safety_net_params(user_input: &str) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if !user_input.contains("层高") {
+        missing.push("层高/楼层间距");
+    }
+    let has_cross = user_input.contains('×')
+        || user_input.contains('*')
+        || user_input.to_lowercase().contains('x');
+    if !has_cross {
+        missing.push("井道长×宽");
+    }
+    missing
+}
+
+pub fn safety_net_clarification_prompt(user_input: &str) -> Option<String> {
+    let missing = missing_safety_net_params(user_input);
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "请补充电梯井内安全平网布置信息：{}（单位 mm）。平网按每隔 2 层且不大于 10m 布置一道，施工层上部应设置隔离防护，网体与井壁空隙宜不大于 25mm（JGJ 80-2016 4.2.3）。",
+        missing.join("、")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +728,62 @@ mod tests {
         let v = serde_json::json!({ "no_state": true });
         let l = parse_lifecycle(Some(&v)).unwrap();
         assert_eq!(l.state, LifecycleState::InUse);
+    }
+
+    #[test]
+    fn safety_net_validation_passes_standard_values() {
+        let v = validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, 20.0, true);
+        assert!(v.ok);
+        assert!(v.issues.is_empty());
+        assert!(v.warnings.is_empty());
+        assert_eq!(v.net_summary.net_spacing, 6000.0);
+    }
+
+    #[test]
+    fn safety_net_spacing_over_10m_fails() {
+        // 层高 5500 → 2 层 = 11m > 10m，违反 4.2.3
+        let v = validate_elevator_shaft_safety_net(2200.0, 1800.0, 5500.0, 20.0, true);
+        assert!(!v.ok);
+        assert!(v.issues.iter().any(|i| i.contains("10m")));
+    }
+
+    #[test]
+    fn safety_net_requires_upper_isolation() {
+        let v = validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, 20.0, false);
+        assert!(!v.ok);
+        assert!(v.issues.iter().any(|i| i.contains("隔离防护")));
+    }
+
+    #[test]
+    fn safety_net_wall_gap_25mm_is_recommended_only() {
+        let v = validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, 40.0, true);
+        assert!(v.ok, "空隙 40mm 超过图册推荐值，但不应判失败");
+        assert!(v.warnings.iter().any(|w| w.contains("25mm")));
+    }
+
+    #[test]
+    fn safety_net_negative_gap_fails() {
+        let v = validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, -10.0, true);
+        assert!(!v.ok);
+        assert!(v.issues.iter().any(|i| i.contains("空隙不为负")));
+    }
+
+    #[test]
+    fn safety_net_missing_params_detection() {
+        assert_eq!(
+            missing_safety_net_params("画电梯井内安全平网"),
+            vec!["层高/楼层间距", "井道长×宽"]
+        );
+        assert_eq!(
+            missing_safety_net_params("画电梯井内安全平网，层高 3000"),
+            vec!["井道长×宽"]
+        );
+        assert!(
+            missing_safety_net_params("画电梯井内安全平网，井道 2000×1800，层高 3000").is_empty()
+        );
+        assert!(
+            safety_net_clarification_prompt("画电梯井内安全平网，井道 2000×1800，层高 3000")
+                .is_none()
+        );
     }
 }

@@ -2164,7 +2164,10 @@ export default function App() {
         const pendingCall = e.result.confirmation_required
           ? pendingToolCallsRef.current[e.result.id]
           : undefined;
-        if (e.result.name === "validate_elevator_shaft_protection") {
+        if (
+          e.result.name === "validate_elevator_shaft_protection" ||
+          e.result.name === "validate_elevator_shaft_safety_net"
+        ) {
           const validation = tryParseValidation(e.result.content);
           if (validation) {
             setLastValidationNow(validation);
@@ -4450,7 +4453,8 @@ function parseValidationPayload(content: string): ElevatorValidation | null {
       parsed &&
       typeof parsed.ok === "boolean" &&
       Array.isArray(parsed.checks) &&
-      typeof parsed.material_table === "object"
+      (typeof parsed.material_table === "object" ||
+        typeof parsed.net_summary === "object")
     ) {
       return parsed as ElevatorValidation;
     }
@@ -4486,8 +4490,27 @@ function lifecycleSummary(validation: ElevatorValidation, language: "zh-CN" | "e
   }
   return "";
 }
+function netSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
+  const n = validation.net_summary;
+  if (!n) return "";
+  const warnings = validation.warnings ?? [];
+  if (language === "en-US") {
+    const desc = `Shaft ${n.shaft_width}x${n.shaft_depth}, floor height ${n.floor_height}, net spacing ${n.net_spacing} (2 floors), wall gap ${n.net_to_wall_gap} mm, upper isolation ${n.upper_isolation ? "set" : "missing"}.`;
+    if (!validation.ok) {
+      return `Net validation failed: ${validation.issues.slice(0, 3).join(", ") || "see safety panel"} · ${desc}`;
+    }
+    return `Net validation passed · ${desc}${warnings.length > 0 ? " · recommendations: " + warnings.slice(0, 3).join(", ") : ""}`;
+  }
+  const desc = `井道 ${n.shaft_width}x${n.shaft_depth}，层高 ${n.floor_height}，平网间距 ${n.net_spacing}（每隔2层），与井壁空隙 ${n.net_to_wall_gap}mm，施工层上部隔离防护${n.upper_isolation ? "已设置" : "未设置"}`;
+  if (!validation.ok) {
+    return `平网校核未通过：${validation.issues.slice(0, 3).join("、") || "请查看右侧安全校核面板"} · ${desc}。`;
+  }
+  return `平网校核通过 · ${desc}${warnings.length > 0 ? " · 建议项提醒：" + warnings.slice(0, 3).join("、") : ""}。`;
+}
 
 function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
+  const net = netSummary(validation, language);
+  if (net) return net;
   const warnings = validation.warnings ?? [];
   const lifecycle = lifecycleSummary(validation, language);
   if (language === "en-US") {
@@ -4518,14 +4541,20 @@ function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "
 }
 
 function toolCallArgsPreview(call: ToolCall, language: "zh-CN" | "en-US") {
-  if (call.name === "validate_elevator_shaft_protection") {
+  if (
+    call.name === "validate_elevator_shaft_protection" ||
+    call.name === "validate_elevator_shaft_safety_net"
+  ) {
     return language === "en-US" ? "Validation parameters collapsed" : "校核参数已折叠";
   }
   return compactToolArgs(call.args);
 }
 
 function toolResultDisplayText(message: Extract<Message, { role: "tool" }>, language: "zh-CN" | "en-US") {
-  if (message.name === "validate_elevator_shaft_protection") {
+  if (
+    message.name === "validate_elevator_shaft_protection" ||
+    message.name === "validate_elevator_shaft_safety_net"
+  ) {
     const validation = parseValidationPayload(message.content);
     if (validation) return validationSummary(validation, language);
     return message.ok

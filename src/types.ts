@@ -89,6 +89,14 @@ export interface ElevatorValidation {
     restore_time?: string;
     acceptance_status?: string;
   } | null;
+  net_summary?: {
+    shaft_width: number;
+    shaft_depth: number;
+    floor_height: number;
+    net_spacing: number;
+    net_to_wall_gap: number;
+    upper_isolation: boolean;
+  };
 }
 
 export interface DemoLogEntry {

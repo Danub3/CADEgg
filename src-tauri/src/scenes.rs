@@ -163,6 +163,46 @@ const SCENES: &[SafetySceneSpec] = &[
         requires_approval: false,
     },
     SafetySceneSpec {
+        scene: "elevator_shaft_safety_net",
+        name: "电梯井内安全平网",
+        category: SafetySceneCategory::FallProtection,
+        keywords: &[
+            "安全平网",
+            "井内平网",
+            "井道平网",
+            "平网防护",
+            "电梯井内",
+            "隔离防护",
+        ],
+        required_params: &["shaft_width", "shaft_depth", "floor_height"],
+        // 4.2.3 原文两条为规范底线；网体与井壁空隙 25mm 出处待核，暂列推荐。
+        mandatory_rules: &[
+            "net_spacing_every_2_floors_and_max_10m",
+            "upper_isolation_at_construction_level",
+            "net_dimensions_positive",
+        ],
+        recommended_rules: &[
+            "net_to_wall_gap <= 25mm",
+            "fixing_around_perimeter",
+            "acceptance_records",
+        ],
+        prohibited_rules: &["do_not_mix_into_guard_door_params"],
+        cad_components: &[
+            "shaft_outline",
+            "safety_net",
+            "fixing_marks",
+            "elevation_note",
+            "upper_isolation_note",
+        ],
+        sources: &["jgj-80-2016 4.2.3"],
+        draw_tool: Some("draw_elevator_shaft_safety_net"),
+        validate_tool: Some("validate_elevator_shaft_safety_net"),
+        knowledge_card_ready: true,
+        deterministic_draw_ready: true,
+        deterministic_validate_ready: true,
+        requires_approval: false,
+    },
+    SafetySceneSpec {
         scene: "safety_passage_shed",
         name: "安全通道/防护棚",
         category: SafetySceneCategory::AccessProtection,
@@ -299,14 +339,27 @@ mod tests {
         assert!(scene.recommended_rules.contains(&"dense_mesh_net"));
     }
 
-    /// 现状快照：当前只有电梯井口场景具备完整闭环，其余场景是登记态。
+    /// 现状快照：完整闭环场景随功能落地逐场景显式更新（变化可见）。
     #[test]
-    fn only_elevator_shaft_has_full_loop_for_now() {
+    fn full_loop_ready_scenes_snapshot() {
         let ready: Vec<&str> = all_safety_scenes()
             .iter()
             .filter(|scene| scene.is_full_loop_ready())
             .map(|scene| scene.scene)
             .collect();
-        assert_eq!(ready, vec!["elevator_shaft_protection"]);
+        assert_eq!(
+            ready,
+            vec!["elevator_shaft_protection", "elevator_shaft_safety_net"]
+        );
+    }
+
+    /// 平网请求应命中平网场景，而不是被「电梯井」关键词误路由到防护门。
+    #[test]
+    fn safety_net_request_matches_own_scene() {
+        let scene =
+            match_safety_scene("画电梯井内安全平网，井道长 2000 宽 1800，层高 3000").unwrap();
+        assert_eq!(scene.scene, "elevator_shaft_safety_net");
+        let scene = match_safety_scene("电梯井口防护门怎么做").unwrap();
+        assert_eq!(scene.scene, "elevator_shaft_protection");
     }
 }
