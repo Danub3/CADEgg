@@ -2040,7 +2040,20 @@ pub fn cad_draw_elevator_shaft_protection(
     include_warning_sign: bool,
     include_material_table: bool,
     scale: f64,
+    door_type: &str,
 ) -> Result<String, String> {
+    // 门型：上翻式（Φ16 翻转轴）或三件套式（水平杆 + L 型卡固件，卡固于井道内侧）。
+    // 校验放在任何 CAD 调用之前，非法门型可直接单测。
+    let is_three_piece = match door_type {
+        "flip_up" => false,
+        "three_piece" => true,
+        other => {
+            return Err(format!(
+                "door_type 仅支持 flip_up 或 three_piece，收到 {}",
+                other
+            ))
+        }
+    };
     if opening_width <= 0.0 || opening_height <= 0.0 {
         return Err(format!(
             "opening_width 和 opening_height 必须为正数，收到 width={} height={}",
@@ -2128,7 +2141,8 @@ pub fn cad_draw_elevator_shaft_protection(
     // 表格放在井口右侧，顶部与井口顶对齐；第二列加宽以容纳长文字。
     let table_x = right + 1300.0 * scale;
     let table_y = top;
-    let table_rows: usize = 4;
+    // 三件套多 2 个数据行（水平杆、L型卡固件）
+    let table_rows: usize = if is_three_piece { 6 } else { 4 };
     let row_h = 240.0 * scale;
     let col_w0 = 720.0 * scale; // 第一列：材料
     let col_w1 = 1450.0 * scale; // 第二列：数量/规格，给长警示语留出左右余量
@@ -2185,6 +2199,26 @@ pub fn cad_draw_elevator_shaft_protection(
         right,
         door_bottom + toe_h,
     );
+    if is_three_piece {
+        // 三件套：上下两道水平杆横跨井口，固定门扇；杆高取图面 40mm 示意。
+        let bar_h = 40.0 * scale;
+        push_rect(
+            &mut cmd_rects,
+            &mut rect_list,
+            left,
+            door_top - bar_h / 2.0,
+            right,
+            door_top + bar_h / 2.0,
+        );
+        push_rect(
+            &mut cmd_rects,
+            &mut rect_list,
+            left,
+            door_bottom + toe_h - bar_h / 2.0,
+            right,
+            door_bottom + toe_h + bar_h / 2.0,
+        );
+    }
     if include_warning_sign {
         push_rect(
             &mut cmd_rects,
@@ -2198,23 +2232,68 @@ pub fn cad_draw_elevator_shaft_protection(
 
     // ── 批 2：所有直线（LINE）──
     let mut cmd_lines = String::new();
-    // 防护门上口两端翻转轴（Φ16 钢筋）：在门顶边左右两端做短竖标记。
-    push_line(
-        &mut cmd_lines,
-        &mut line_list,
-        left,
-        door_top - hinge_size,
-        left,
-        door_top + hinge_size,
-    );
-    push_line(
-        &mut cmd_lines,
-        &mut line_list,
-        right,
-        door_top - hinge_size,
-        right,
-        door_top + hinge_size,
-    );
+    if !is_three_piece {
+        // 上翻式：防护门上口两端翻转轴（Φ16 钢筋）做短竖标记。
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            left,
+            door_top - hinge_size,
+            left,
+            door_top + hinge_size,
+        );
+        push_line(
+            &mut cmd_lines,
+            &mut line_list,
+            right,
+            door_top - hinge_size,
+            right,
+            door_top + hinge_size,
+        );
+    }
+    if is_three_piece {
+        // 三件套：每道水平杆两端各 1 个 L 型卡固件，共 4 个。
+        // 立面表达为 L 形折线：从杆端向外（井口外侧）伸出，再向下拐入井道内侧。
+        let arm = 120.0 * scale;
+        let bar_y_top = door_top;
+        let bar_y_bottom = door_bottom + toe_h;
+        for bar_y in [bar_y_top, bar_y_bottom] {
+            // 左端卡固件：向左伸出，再向下拐
+            push_line(
+                &mut cmd_lines,
+                &mut line_list,
+                left,
+                bar_y,
+                left - arm,
+                bar_y,
+            );
+            push_line(
+                &mut cmd_lines,
+                &mut line_list,
+                left - arm,
+                bar_y,
+                left - arm,
+                bar_y - arm,
+            );
+            // 右端卡固件：向右伸出，再向下拐
+            push_line(
+                &mut cmd_lines,
+                &mut line_list,
+                right,
+                bar_y,
+                right + arm,
+                bar_y,
+            );
+            push_line(
+                &mut cmd_lines,
+                &mut line_list,
+                right + arm,
+                bar_y,
+                right + arm,
+                bar_y - arm,
+            );
+        }
+    }
     // 门扇中缝（对开分隔线）
     push_line(
         &mut cmd_lines,
@@ -2367,7 +2446,11 @@ pub fn cad_draw_elevator_shaft_protection(
     let top_text_min_x = left + 80.0 * scale;
 
     // 主标题：长标题按井口宽度限宽，且不越过井口左侧，避免 AutoCAD 视图缩放后左侧裁字。
-    let title_text = "电梯井口防护（上翻式防护门）".to_string();
+    let title_text = if is_three_piece {
+        "电梯井口防护（三件套式防护门）".to_string()
+    } else {
+        "电梯井口防护（上翻式防护门）".to_string()
+    };
     let title_draw_h = fit_text_height_to_width(
         &title_text,
         title_h,
@@ -2378,13 +2461,23 @@ pub fn cad_draw_elevator_shaft_protection(
     text_items.push((title_x, title_y, title_draw_h, title_text));
 
     // 说明文字：说明较长，按井口宽度压到更适合图面浏览的字号，并同样限制左边界。
-    let note_text = format!(
-        "防护门高 {}  门底间隙 {}  踢脚板 {}  门宽规格 {}m（按井口选型）",
-        fmt_num(guard_height),
-        fmt_num(door_bottom_gap),
-        fmt_num(toe_board_height),
-        door_spec_m
-    );
+    let note_text = if is_three_piece {
+        format!(
+            "防护门高 {}  门底间隙 {}  踢脚板 {}  门宽规格 {}m  水平杆2道+L型卡固件4个（卡固于井道内侧）",
+            fmt_num(guard_height),
+            fmt_num(door_bottom_gap),
+            fmt_num(toe_board_height),
+            door_spec_m
+        )
+    } else {
+        format!(
+            "防护门高 {}  门底间隙 {}  踢脚板 {}  门宽规格 {}m（按井口选型）",
+            fmt_num(guard_height),
+            fmt_num(door_bottom_gap),
+            fmt_num(toe_board_height),
+            door_spec_m
+        )
+    };
     let note_draw_h =
         fit_text_height_to_width(&note_text, note_h, width * 1.55, (72.0 * scale).max(56.0));
     let note_x = (x - estimate_text_width(&note_text, note_draw_h) / 2.0).max(top_text_min_x);
@@ -2429,21 +2522,30 @@ pub fn cad_draw_elevator_shaft_protection(
         ));
 
         // 数据行（第 1~3 行），每格文字居中
-        let data_rows: [(String, String); 3] = [
-            ("防护门".to_string(), format!("{}m 上翻式", door_spec_m)),
-            (
-                "踢脚板".to_string(),
-                format!("高 {}", fmt_num(toe_board_height)),
-            ),
-            (
-                "警示牌".to_string(),
-                if include_warning_sign {
-                    "当心坠落 严禁抛物".to_string()
-                } else {
-                    "未绘制".to_string()
-                },
-            ),
-        ];
+        let mut data_rows: Vec<(String, String)> = vec![(
+            "防护门".to_string(),
+            if is_three_piece {
+                format!("{}m 三件套式", door_spec_m)
+            } else {
+                format!("{}m 上翻式", door_spec_m)
+            },
+        )];
+        if is_three_piece {
+            data_rows.push(("水平杆".to_string(), "2 道".to_string()));
+            data_rows.push(("L型卡固件".to_string(), "4 个 井道内侧".to_string()));
+        }
+        data_rows.push((
+            "踢脚板".to_string(),
+            format!("高 {}", fmt_num(toe_board_height)),
+        ));
+        data_rows.push((
+            "警示牌".to_string(),
+            if include_warning_sign {
+                "当心坠落 严禁抛物".to_string()
+            } else {
+                "未绘制".to_string()
+            },
+        ));
         for (row_idx, (label, value)) in data_rows.iter().enumerate() {
             let row = row_idx + 1; // 数据行从第 1 行开始
             let label_h = fit_text_height_to_width(
@@ -2554,7 +2656,8 @@ pub fn cad_draw_elevator_shaft_protection(
     );
 
     Ok(format!(
-        "已生成电梯井口防护（上翻式防护门）：中心({},{})，井口 {}x{}，防护门高 {}，门底间隙 {}，踢脚板 {}，门宽规格 {}m，警示牌={}，材料表={}。依据：JGJ 80-2016 4.2.2、建办质函〔2019〕90号指导图册 2.7.4。",
+        "已生成电梯井口防护（{}）：中心({},{})，井口 {}x{}，防护门高 {}，门底间隙 {}，踢脚板 {}，门宽规格 {}m，警示牌={}，材料表={}。依据：JGJ 80-2016 4.2.2、建办质函〔2019〕90号指导图册 2.7.4。",
+        if is_three_piece { "三件套式防护门" } else { "上翻式防护门" },
         fmt_num(x),
         fmt_num(y),
         fmt_num(opening_width),
@@ -3433,7 +3536,7 @@ pub fn cad_smoke_test_editing_tools() -> Result<String, String> {
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
     let draw_result = cad_draw_elevator_shaft_protection(
-        1000.0, 2000.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0,
+        1000.0, 2000.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0, "flip_up",
     )?;
     if !draw_result.contains("电梯井口防护") {
         return Err(format!("绘图结果不符合预期: {draw_result}"));
@@ -3457,10 +3560,39 @@ pub fn cad_smoke_test_elevator_shaft_protection() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_draw_text, cad_erase_handle, cad_modelspace_snapshot,
-        cad_smoke_test_editing_tools, cad_smoke_test_elevator_shaft_protection,
-        ensure_bridge_installed_once,
+        bridge_installed_dll_path, cad_draw_elevator_shaft_protection, cad_draw_text,
+        cad_erase_handle, cad_modelspace_snapshot, cad_smoke_test_editing_tools,
+        cad_smoke_test_elevator_shaft_protection, ensure_bridge_installed_once,
     };
+
+    /// 门型参数校验在一切 CAD 调用之前完成，可在无 AutoCAD 环境下单测。
+    #[test]
+    fn elevator_draw_rejects_unknown_door_type() {
+        let result = cad_draw_elevator_shaft_protection(
+            0.0, 0.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0, "slide_up",
+        );
+        assert!(result.is_err(), "非法门型应直接拒绝: {result:?}");
+        let err = result.err().unwrap();
+        assert!(err.contains("door_type"), "错误信息应指明 door_type: {err}");
+    }
+
+    /// 合法门型应通过参数校验阶段（后续 CAD 调用在无 AutoCAD 环境才会失败，
+    /// 因此只断言错误信息不是 door_type 相关）。
+    #[test]
+    fn elevator_draw_accepts_known_door_types_at_validation_stage() {
+        for door_type in ["flip_up", "three_piece"] {
+            let result = cad_draw_elevator_shaft_protection(
+                0.0, 0.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0, door_type,
+            );
+            match result {
+                Err(e) => assert!(
+                    !e.contains("door_type"),
+                    "合法门型 {door_type} 不应在参数校验失败: {e}"
+                ),
+                Ok(_) => {}
+            }
+        }
+    }
 
     #[test]
     #[ignore = "requires a running AutoCAD session"]

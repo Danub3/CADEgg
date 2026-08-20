@@ -356,7 +356,8 @@ fn params_draw_elevator_shaft_protection() -> Value {
             "toe_board_height": {"type": "number", "description": "踢脚板高度，毫米，指导图册推荐 200，缺省按 200"},
             "include_warning_sign": {"type": "boolean", "description": "是否绘制警示牌「当心坠落 严禁抛物」，默认 true"},
             "include_material_table": {"type": "boolean", "description": "是否绘制材料表，默认 true"},
-            "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"}
+            "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"},
+            "door_type": {"type": "string", "enum": ["flip_up", "three_piece"], "description": "防护门门型：flip_up 上翻式（Φ16 翻转轴，默认）；three_piece 三件套式（防护门+水平杆+L型卡固件，卡固于井道内侧）"}
         },
         "required": [
             "x",
@@ -444,7 +445,7 @@ fn all_tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "draw_elevator_shaft_protection",
             layer: ToolLayer::SemanticGeometry,
-            description: "绘制室内电梯井口防护门标准布置：井口轮廓、上翻式防护门扇、翻转轴、踢脚板、警示牌、尺寸标注和可选材料表。适合安全防护 demo 的主绘图工具。",
+            description: "绘制室内电梯井口防护门标准布置：井口轮廓、防护门扇、踢脚板、警示牌、尺寸标注和可选材料表。door_type=flip_up 画上翻式（Φ16 翻转轴）；door_type=three_piece 画三件套式（上下水平杆+L型卡固件，卡固于井道内侧）。适合安全防护 demo 的主绘图工具。",
             parameters: params_draw_elevator_shaft_protection,
         },
         ToolSpec {
@@ -1366,6 +1367,10 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .get("scale")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(1.0),
+            call.args
+                .get("door_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("flip_up"),
         ),
         #[cfg(windows)]
         "validate_elevator_shaft_protection" => crate::cad::cad_validate_elevator_shaft_protection(
