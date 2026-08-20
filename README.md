@@ -1,4 +1,4 @@
-﻿# CADEgg
+# CADEgg
 
 **Construction-Safety Drawing Agent · 建筑施工安全绘图智能体**
 
@@ -16,11 +16,11 @@ CADEgg is a Windows desktop AutoCAD assistant that turns a single natural-langua
 
 | Feature | Description |
 |---|---|
-| **Safety Demo Mode** | A dedicated `safety_demo_mode` that only exposes the elevator-shaft protection-door toolset, hiding unrelated tools |
-| **Elevator Shaft Protection Door** | Draws shaft opening, upper-flip protection door, hinge markers, toe board, warning sign, dimensions, and material table from parameters |
+| **Safety Scene Registry** | A `src-tauri/src/scenes.rs` registry drives safety routing by scene: elevator shaft protection (deterministic draw + validate), edge guardrail, opening cover, stair guard, and safety passage shed are registered; unmatched requests fall back to a generic safety context instead of misusing elevator tools |
+| **Elevator Shaft Protection Door** | Draws shaft opening, upper-flip protection door, hinge markers, toe board, warning sign, dimensions, and material table; deterministic validation enforces door height >= 1500 mm, door bottom gap <= 50 mm, and toe board presence, with recommended items reported as warnings |
 | **Rule-based Validation** | Deterministic checks (door height, toe board, warning sign, material table, dimensions) returned as structured JSON |
 | **Missing-parameter Clarification** | Asks for shaft opening width/height instead of inventing site dimensions; protection-door height and toe board use standard defaults |
-| **Standard Atlas & Rules** | Versioned knowledge cards and rules under `data/atlas/` and `rules/` |
+| **Standard Atlas & Rules** | Versioned knowledge cards under `data/atlas/` (elevator shaft protection, edge guardrail, CAD drafting standard), scanned at runtime; new cards are picked up by dropping a JSON file |
 | **Session Object Tracking** | Tracks created handles in the frontend object table for later reference |
 | **Model Routing** | Practical providers are GLM and Gemini; Claude is hidden in the UI for future support |
 | **Competition Mode** | `competition_mode` hides and blocks `run_lisp`, reducing arbitrary command execution risk |
@@ -65,11 +65,11 @@ CADEgg 是一款 Windows 桌面 AutoCAD 助手，能把一句自然语言指令�
 
 | 功能 | 说明 |
 |---|---|
-| **安全演示模式** | 独立的 `safety_demo_mode`，只暴露电梯井口防护门工具集，隐藏无关工具 |
-| **电梯井口防护门** | 按参数绘制井口轮廓、上翻式防护门、翻转轴、踢脚板、警示牌、尺寸标注和材料表 |
+| **安全场景注册表** | `src-tauri/src/scenes.rs` 驱动安全场景路由：电梯井口防护（确定性出图+校核）已就绪；普通临边栏杆、洞口盖板、楼梯口防护、安全通道棚已注册登记；未命中的安全请求进入通用安全上下文，不会误用电梯井口工具 |
+| **电梯井口防护门** | 按参数绘制井口轮廓、上翻式防护门、翻转轴、踢脚板、警示牌、尺寸标注和材料表；确定性校核强制门高 ≥ 1500mm、门底间隙 ≤ 50mm、设置挡脚板，推荐项以 warnings 提醒 |
 | **规则校核** | 确定性检查（防护门高度、踢脚板、警示牌、材料表、尺寸）以结构化 JSON 返回 |
 | **缺参追问** | 追问井口宽高等现场尺寸；防护门高和踢脚板按规范默认值处理 |
-| **标准图册与规则** | 在 `data/atlas/` 和 `rules/` 下版本化维护知识卡与规则 |
+| **标准图册与规则** | `data/atlas/` 下版本化维护知识卡（电梯井口防护、普通临边栏杆、CAD 制图标准），运行时扫描目录，新增卡片只需放入 JSON |
 | **会话对象追踪** | 在前端对象表记录创建的 handle，供后续引用 |
 | **模型路由** | 实际可用提供方为 GLM 和 Gemini；Claude 入口隐藏，留待后续支持 |
 | **比赛模式** | `competition_mode` 隐藏并阻断 `run_lisp`，降低任意命令执行风险 |
