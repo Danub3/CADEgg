@@ -274,10 +274,7 @@ mod tests {
         let scene = match_safety_scene("画一个楼层临边防护栏杆，长度 3000").unwrap();
         assert_eq!(scene.scene, "edge_guardrail");
         assert_eq!(scene.draw_tool, Some("draw_edge_guardrail"));
-        assert_eq!(
-            scene.validate_tool,
-            Some("validate_edge_guardrail")
-        );
+        assert_eq!(scene.validate_tool, Some("validate_edge_guardrail"));
         assert!(!scene.prohibited_rules.is_empty());
     }
 
