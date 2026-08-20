@@ -105,11 +105,11 @@ const SCENES: &[SafetySceneSpec] = &[
             "dense_mesh_net",
         ],
         sources: &["jgj-80-2016 4.3.1", "mohurd-2019-90 2.7.2"],
-        draw_tool: None,
-        validate_tool: None,
+        draw_tool: Some("draw_edge_guardrail"),
+        validate_tool: Some("validate_edge_guardrail"),
         knowledge_card_ready: true,
-        deterministic_draw_ready: false,
-        deterministic_validate_ready: false,
+        deterministic_draw_ready: true,
+        deterministic_validate_ready: true,
         requires_approval: false,
     },
     SafetySceneSpec {
@@ -273,7 +273,11 @@ mod tests {
     fn separates_edge_guardrail_from_elevator_shaft() {
         let scene = match_safety_scene("画一个楼层临边防护栏杆，长度 3000").unwrap();
         assert_eq!(scene.scene, "edge_guardrail");
-        assert_eq!(scene.draw_tool, None);
+        assert_eq!(scene.draw_tool, Some("draw_edge_guardrail"));
+        assert_eq!(
+            scene.validate_tool,
+            Some("validate_edge_guardrail")
+        );
         assert!(!scene.prohibited_rules.is_empty());
     }
 
@@ -347,9 +351,14 @@ mod tests {
             .filter(|scene| scene.is_full_loop_ready())
             .map(|scene| scene.scene)
             .collect();
+        // 顺序按注册表顺序：防护门、临边栏杆、井内平网
         assert_eq!(
             ready,
-            vec!["elevator_shaft_protection", "elevator_shaft_safety_net"]
+            vec![
+                "elevator_shaft_protection",
+                "edge_guardrail",
+                "elevator_shaft_safety_net"
+            ]
         );
     }
 

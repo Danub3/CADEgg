@@ -517,6 +517,167 @@ pub fn safety_net_clarification_prompt(user_input: &str) -> Option<String> {
     ))
 }
 
+// ── 普通临边防护栏杆（JGJ 80-2016 4.3.1）──
+
+pub const TOP_RAIL_HEIGHT_MM: f64 = 1200.0;
+pub const POST_SPACING_MAX_MM: f64 = 2000.0;
+pub const TOE_BOARD_MIN_MM: f64 = 180.0;
+
+#[derive(Serialize, Debug, Clone)]
+pub struct EdgeGuardrailSummary {
+    pub edge_length: f64,
+    pub top_rail_height: f64,
+    pub post_spacing: f64,
+    pub toe_board_height: f64,
+    pub dense_mesh_net: bool,
+    pub post_count: usize,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct EdgeGuardrailMaterialTable {
+    pub posts: usize,
+    pub top_rail: f64,
+    pub mid_rail: bool,
+    pub toe_board_height: f64,
+    pub dense_mesh_net: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct EdgeGuardrailValidation {
+    pub ok: bool,
+    pub issues: Vec<&'static str>,
+    pub warnings: Vec<&'static str>,
+    pub checks: Vec<ValidationCheck>,
+    pub material_table: EdgeGuardrailMaterialTable,
+    pub guardrail_summary: EdgeGuardrailSummary,
+}
+
+/// 立杆数 = 两端立杆 + 按间距布置的中间立杆（不足一段按一段计）。
+pub fn edge_guardrail_post_count(edge_length: f64, post_spacing: f64) -> usize {
+    if edge_length <= 0.0 || post_spacing <= 0.0 {
+        return 0;
+    }
+    (edge_length / post_spacing).ceil() as usize + 1
+}
+
+pub fn validate_edge_guardrail(
+    edge_length: f64,
+    top_rail_height: f64,
+    post_spacing: f64,
+    toe_board_height: f64,
+    include_dense_mesh_net: bool,
+) -> EdgeGuardrailValidation {
+    let mut checks = Vec::new();
+    let mut issues = Vec::new();
+    let mut warnings = Vec::new();
+
+    let mut add_check =
+        |id: &'static str, label: &'static str, severity: ValidationSeverity, passed: bool| {
+            checks.push(ValidationCheck {
+                id,
+                label,
+                passed,
+                severity,
+            });
+            if !passed {
+                match severity {
+                    ValidationSeverity::Mandatory => issues.push(label),
+                    ValidationSeverity::Recommended | ValidationSeverity::Unverified => {
+                        warnings.push(label)
+                    }
+                }
+            }
+        };
+
+    add_check(
+        "edge_length_valid",
+        "临边长度已提供且为正数",
+        ValidationSeverity::Mandatory,
+        edge_length > 0.0,
+    );
+    add_check(
+        "top_rail_height_valid",
+        "上杆距地面高度不小于 1.2m",
+        ValidationSeverity::Mandatory,
+        top_rail_height >= TOP_RAIL_HEIGHT_MM - 0.5,
+    );
+    add_check(
+        "post_spacing_valid",
+        "立杆间距不大于 2m",
+        ValidationSeverity::Mandatory,
+        post_spacing > 0.0 && post_spacing <= POST_SPACING_MAX_MM + 0.5,
+    );
+    add_check(
+        "toe_board_height_valid",
+        "挡脚板高度不小于 180mm",
+        ValidationSeverity::Mandatory,
+        toe_board_height >= TOE_BOARD_MIN_MM - 0.5,
+    );
+    add_check(
+        "dense_mesh_net_recommended",
+        "内侧满挂密目安全网（标准化图册做法）",
+        ValidationSeverity::Recommended,
+        include_dense_mesh_net,
+    );
+
+    EdgeGuardrailValidation {
+        ok: issues.is_empty(),
+        issues,
+        warnings,
+        checks,
+        material_table: EdgeGuardrailMaterialTable {
+            posts: edge_guardrail_post_count(edge_length, post_spacing),
+            top_rail: top_rail_height,
+            mid_rail: true,
+            toe_board_height,
+            dense_mesh_net: include_dense_mesh_net,
+        },
+        guardrail_summary: EdgeGuardrailSummary {
+            edge_length,
+            top_rail_height,
+            post_spacing,
+            toe_board_height,
+            dense_mesh_net: include_dense_mesh_net,
+            post_count: edge_guardrail_post_count(edge_length, post_spacing),
+        },
+    }
+}
+
+/// 临边栏杆缺参追问：临边长度、作业侧、转角/端部收口。
+pub fn missing_edge_guardrail_params(user_input: &str) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    let has_number = user_input.chars().any(|c| c.is_ascii_digit());
+    if !has_number {
+        missing.push("临边长度");
+    }
+    if !(user_input.contains("作业侧")
+        || user_input.contains("外侧")
+        || user_input.contains("内侧")
+        || user_input.contains("临空侧"))
+    {
+        missing.push("作业侧");
+    }
+    if !(user_input.contains("转角")
+        || user_input.contains("端部")
+        || user_input.contains("收口")
+        || user_input.contains("拐角"))
+    {
+        missing.push("转角/端部收口");
+    }
+    missing
+}
+
+pub fn edge_guardrail_clarification_prompt(user_input: &str) -> Option<String> {
+    let missing = missing_edge_guardrail_params(user_input);
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "请补充临边防护栏杆布置信息：{}。上杆距地面 1.2m，下杆居中设置，立杆间距不大于 2m，挡脚板不小于 180mm，内侧满挂密目安全网（JGJ 80-2016 4.3.1）。",
+        missing.join("、")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,6 +927,64 @@ mod tests {
         let v = validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, -10.0, true);
         assert!(!v.ok);
         assert!(v.issues.iter().any(|i| i.contains("空隙不为负")));
+    }
+
+    #[test]
+    fn edge_guardrail_validation_standard_values_pass() {
+        let v = validate_edge_guardrail(3000.0, 1200.0, 1500.0, 180.0, true);
+        assert!(v.ok);
+        assert!(v.warnings.is_empty());
+        assert_eq!(v.guardrail_summary.post_count, 3); // ceil(3000/1500)+1
+    }
+
+    #[test]
+    fn edge_guardrail_post_count_covers_ends() {
+        assert_eq!(edge_guardrail_post_count(5000.0, 2000.0), 4); // 0/2000/4000/5000
+        assert_eq!(edge_guardrail_post_count(3000.0, 1000.0), 4); // 0/1000/2000/3000
+        assert_eq!(edge_guardrail_post_count(0.0, 2000.0), 0);
+    }
+
+    #[test]
+    fn edge_guardrail_mandatory_failures() {
+        // 上杆 1.1m < 1.2m
+        let v = validate_edge_guardrail(3000.0, 1100.0, 1500.0, 180.0, true);
+        assert!(!v.ok);
+        assert!(v.issues.iter().any(|i| i.contains("1.2m")));
+        // 立杆间距 2.5m > 2m
+        let v = validate_edge_guardrail(3000.0, 1200.0, 2500.0, 180.0, true);
+        assert!(!v.ok);
+        assert!(v.issues.iter().any(|i| i.contains("2m")));
+        // 挡脚板 150mm < 180mm
+        let v = validate_edge_guardrail(3000.0, 1200.0, 1500.0, 150.0, true);
+        assert!(!v.ok);
+        assert!(v.issues.iter().any(|i| i.contains("180mm")));
+    }
+
+    #[test]
+    fn edge_guardrail_mesh_net_is_recommended_only() {
+        let v = validate_edge_guardrail(3000.0, 1200.0, 1500.0, 180.0, false);
+        assert!(v.ok, "缺密目网只是推荐项提醒，不应判失败");
+        assert!(v.warnings.iter().any(|w| w.contains("密目")));
+    }
+
+    #[test]
+    fn edge_guardrail_missing_params_detection() {
+        assert_eq!(
+            missing_edge_guardrail_params("画一个楼层临边防护栏杆"),
+            vec!["临边长度", "作业侧", "转角/端部收口"]
+        );
+        assert_eq!(
+            missing_edge_guardrail_params("画一个 3m 长楼层临边防护栏杆，临空侧作业，端部收口处理"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            missing_edge_guardrail_params("画一个 3m 长楼层临边防护栏杆"),
+            vec!["作业侧", "转角/端部收口"]
+        );
+        assert!(edge_guardrail_clarification_prompt(
+            "画一个 3m 长楼层临边防护栏杆，临空侧作业，端部收口处理"
+        )
+        .is_none());
     }
 
     #[test]

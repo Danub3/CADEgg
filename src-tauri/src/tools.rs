@@ -422,6 +422,38 @@ fn params_draw_elevator_shaft_safety_net() -> Value {
     })
 }
 
+fn params_draw_edge_guardrail() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "x": {"type": "number", "description": "栏杆段中心 X"},
+            "y": {"type": "number", "description": "栏杆段地面标高 Y"},
+            "edge_length": {"type": "number", "description": "临边长度，毫米，须大于 0（现场实测）"},
+            "top_rail_height": {"type": "number", "description": "上杆距地面高度，毫米，不小于 1200，缺省 1200"},
+            "post_spacing": {"type": "number", "description": "立杆间距，毫米，不大于 2000，缺省 2000"},
+            "toe_board_height": {"type": "number", "description": "挡脚板高度，毫米，不小于 180，缺省 180"},
+            "include_dense_mesh_net": {"type": "boolean", "description": "内侧是否满挂密目安全网，默认 true"},
+            "include_dimensions": {"type": "boolean", "description": "是否绘制尺寸标注，默认 true"},
+            "scale": {"type": "number", "description": "图面缩放比例，默认 1.0"}
+        },
+        "required": ["x", "y", "edge_length"]
+    })
+}
+
+fn params_validate_edge_guardrail() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "edge_length": {"type": "number", "description": "临边长度，毫米，须大于 0"},
+            "top_rail_height": {"type": "number", "description": "上杆距地面高度，毫米，须不小于 1200"},
+            "post_spacing": {"type": "number", "description": "立杆间距，毫米，须不大于 2000"},
+            "toe_board_height": {"type": "number", "description": "挡脚板高度，毫米，须不小于 180"},
+            "include_dense_mesh_net": {"type": "boolean", "description": "内侧是否满挂密目安全网"}
+        },
+        "required": ["edge_length", "top_rail_height", "post_spacing", "toe_board_height"]
+    })
+}
+
 fn params_validate_elevator_shaft_safety_net() -> Value {
     json!({
         "type": "object",
@@ -497,6 +529,18 @@ fn all_tool_specs() -> Vec<ToolSpec> {
             layer: ToolLayer::Query,
             description: "按确定性规则校核电梯井内安全平网参数（JGJ 80-2016 4.2.3），返回 JSON：ok、issues、warnings、checks、material_table、net_summary。",
             parameters: params_validate_elevator_shaft_safety_net,
+        },
+        ToolSpec {
+            name: "draw_edge_guardrail",
+            layer: ToolLayer::SemanticGeometry,
+            description: "绘制普通临边防护栏杆立面布置：立杆（含两端）、上杆、下杆（居中）、挡脚板、密目网示意、尺寸标注和材料表。依据 JGJ 80-2016 4.3.1：上杆 1.2m、立杆间距不大于 2m、挡脚板不小于 180mm。",
+            parameters: params_draw_edge_guardrail,
+        },
+        ToolSpec {
+            name: "validate_edge_guardrail",
+            layer: ToolLayer::Query,
+            description: "按确定性规则校核普通临边防护栏杆参数（JGJ 80-2016 4.3.1），返回 JSON：ok、issues、warnings、checks、material_table、guardrail_summary。",
+            parameters: params_validate_edge_guardrail,
         },
         ToolSpec {
             name: "draw_text",
@@ -643,6 +687,7 @@ pub fn safety_missing_params(user_input: &str) -> Vec<&'static str> {
             crate::safety::missing_elevator_shaft_params(user_input)
         }
         Some("elevator_shaft_safety_net") => crate::safety::missing_safety_net_params(user_input),
+        Some("edge_guardrail") => crate::safety::missing_edge_guardrail_params(user_input),
         _ => Vec::new(),
     }
 }
@@ -659,6 +704,7 @@ pub fn safety_clarification_prompt(user_input: &str) -> Option<String> {
         Some("elevator_shaft_safety_net") => {
             crate::safety::safety_net_clarification_prompt(user_input)
         }
+        Some("edge_guardrail") => crate::safety::edge_guardrail_clarification_prompt(user_input),
         _ => None,
     }
 }
@@ -1495,6 +1541,56 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .unwrap_or(true),
         ),
         #[cfg(windows)]
+        "draw_edge_guardrail" => crate::cad::cad_draw_edge_guardrail(
+            num(&call.args, "x")?,
+            num(&call.args, "y")?,
+            num(&call.args, "edge_length")?,
+            call.args
+                .get("top_rail_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::TOP_RAIL_HEIGHT_MM),
+            call.args
+                .get("post_spacing")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::POST_SPACING_MAX_MM),
+            call.args
+                .get("toe_board_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::TOE_BOARD_MIN_MM),
+            call.args
+                .get("include_dense_mesh_net")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("include_dimensions")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
+        ),
+        #[cfg(windows)]
+        "validate_edge_guardrail" => crate::cad::cad_validate_edge_guardrail(
+            num(&call.args, "edge_length")?,
+            call.args
+                .get("top_rail_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::TOP_RAIL_HEIGHT_MM),
+            call.args
+                .get("post_spacing")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::POST_SPACING_MAX_MM),
+            call.args
+                .get("toe_board_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::TOE_BOARD_MIN_MM),
+            call.args
+                .get("include_dense_mesh_net")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        ),
+        #[cfg(windows)]
         "draw_text" => crate::cad::cad_draw_text(
             num(&call.args, "x")?,
             num(&call.args, "y")?,
@@ -1686,13 +1782,21 @@ mod tests {
     }
 
     #[test]
-    fn generic_edge_guardrail_does_not_select_elevator_shaft_tool() {
+    fn edge_guardrail_selects_own_tools_not_elevator_shaft() {
         let tooling = select_tooling_context(
             "画一个楼层临边防护栏杆，长度 3000",
             &[],
             WorkMode::CompetitionMode,
         );
 
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_edge_guardrail"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "validate_edge_guardrail"));
         assert!(!tooling
             .tool_names
             .iter()
@@ -1702,7 +1806,18 @@ mod tests {
             .iter()
             .any(|name| name == "validate_elevator_shaft_protection"));
         assert!(tooling.guidance.contains("edge_guardrail"));
-        assert!(tooling.guidance.contains("尚未开放确定性 CAD 出图"));
+    }
+
+    #[test]
+    fn edge_guardrail_missing_params_routes_to_own_detector() {
+        assert_eq!(
+            safety_missing_params("画一个楼层临边防护栏杆"),
+            vec!["临边长度", "作业侧", "转角/端部收口"]
+        );
+        assert!(safety_clarification_prompt(
+            "画一个 3m 长楼层临边防护栏杆，临空侧作业，端部收口处理"
+        )
+        .is_none());
     }
 
     #[test]

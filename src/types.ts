@@ -97,6 +97,14 @@ export interface ElevatorValidation {
     net_to_wall_gap: number;
     upper_isolation: boolean;
   };
+  guardrail_summary?: {
+    edge_length: number;
+    top_rail_height: number;
+    post_spacing: number;
+    toe_board_height: number;
+    dense_mesh_net: boolean;
+    post_count: number;
+  };
 }
 
 export interface DemoLogEntry {

@@ -2166,7 +2166,8 @@ export default function App() {
           : undefined;
         if (
           e.result.name === "validate_elevator_shaft_protection" ||
-          e.result.name === "validate_elevator_shaft_safety_net"
+          e.result.name === "validate_elevator_shaft_safety_net" ||
+          e.result.name === "validate_edge_guardrail"
         ) {
           const validation = tryParseValidation(e.result.content);
           if (validation) {
@@ -4454,7 +4455,8 @@ function parseValidationPayload(content: string): ElevatorValidation | null {
       typeof parsed.ok === "boolean" &&
       Array.isArray(parsed.checks) &&
       (typeof parsed.material_table === "object" ||
-        typeof parsed.net_summary === "object")
+        typeof parsed.net_summary === "object" ||
+        typeof parsed.guardrail_summary === "object")
     ) {
       return parsed as ElevatorValidation;
     }
@@ -4507,10 +4509,29 @@ function netSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US")
   }
   return `平网校核通过 · ${desc}${warnings.length > 0 ? " · 建议项提醒：" + warnings.slice(0, 3).join("、") : ""}。`;
 }
+function guardrailSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
+  const g = validation.guardrail_summary;
+  if (!g) return "";
+  const warnings = validation.warnings ?? [];
+  if (language === "en-US") {
+    const desc = `Edge ${g.edge_length} mm, top rail ${g.top_rail_height} mm, posts ${g.post_count} (spacing ${g.post_spacing} mm), toe board ${g.toe_board_height} mm, dense mesh ${g.dense_mesh_net ? "hung" : "missing"}.`;
+    if (!validation.ok) {
+      return `Guardrail validation failed: ${validation.issues.slice(0, 3).join(", ") || "see safety panel"} · ${desc}`;
+    }
+    return `Guardrail validation passed · ${desc}${warnings.length > 0 ? " · recommendations: " + warnings.slice(0, 3).join(", ") : ""}`;
+  }
+  const desc = `临边长度 ${g.edge_length}mm，上杆 ${g.top_rail_height}mm，立杆 ${g.post_count} 根（间距 ${g.post_spacing}mm），挡脚板 ${g.toe_board_height}mm，密目网${g.dense_mesh_net ? "内侧满挂" : "未挂"}`;
+  if (!validation.ok) {
+    return `临边校核未通过：${validation.issues.slice(0, 3).join("、") || "请查看右侧安全校核面板"} · ${desc}。`;
+  }
+  return `临边校核通过 · ${desc}${warnings.length > 0 ? " · 建议项提醒：" + warnings.slice(0, 3).join("、") : ""}。`;
+}
 
 function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "en-US") {
   const net = netSummary(validation, language);
   if (net) return net;
+  const guardrail = guardrailSummary(validation, language);
+  if (guardrail) return guardrail;
   const warnings = validation.warnings ?? [];
   const lifecycle = lifecycleSummary(validation, language);
   if (language === "en-US") {
@@ -4543,7 +4564,8 @@ function validationSummary(validation: ElevatorValidation, language: "zh-CN" | "
 function toolCallArgsPreview(call: ToolCall, language: "zh-CN" | "en-US") {
   if (
     call.name === "validate_elevator_shaft_protection" ||
-    call.name === "validate_elevator_shaft_safety_net"
+    call.name === "validate_elevator_shaft_safety_net" ||
+    call.name === "validate_edge_guardrail"
   ) {
     return language === "en-US" ? "Validation parameters collapsed" : "校核参数已折叠";
   }
@@ -4553,7 +4575,8 @@ function toolCallArgsPreview(call: ToolCall, language: "zh-CN" | "en-US") {
 function toolResultDisplayText(message: Extract<Message, { role: "tool" }>, language: "zh-CN" | "en-US") {
   if (
     message.name === "validate_elevator_shaft_protection" ||
-    message.name === "validate_elevator_shaft_safety_net"
+    message.name === "validate_elevator_shaft_safety_net" ||
+    message.name === "validate_edge_guardrail"
   ) {
     const validation = parseValidationPayload(message.content);
     if (validation) return validationSummary(validation, language);
