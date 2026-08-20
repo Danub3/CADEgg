@@ -1,8 +1,8 @@
 use tauri::Manager;
 
+mod benchmark;
 #[cfg(windows)]
 mod cad;
-mod benchmark;
 mod knowledge;
 mod llm;
 mod safety;

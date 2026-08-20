@@ -176,12 +176,7 @@ const QWEN_MODELS: &[&str] = &[
     "qwen3-coder-flash",
     "qwen3-max",
 ];
-const KIMI_MODELS: &[&str] = &[
-    "kimi-k3",
-    "kimi-k2.7-code",
-    "kimi-k2.6",
-    "kimi-k2.5",
-];
+const KIMI_MODELS: &[&str] = &["kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"];
 
 /// 旧模型 ID → 现行 ID 的显式迁移映射。
 /// 已有 settings.json 里若存有旧 ID，加载时直接迁到语义最接近的现行模型，
@@ -504,14 +499,14 @@ pub fn load(app: &tauri::AppHandle) -> Result<Settings, String> {
 pub fn load_from_default_path() -> Result<Settings, String> {
     #[cfg(windows)]
     let path = {
-        let base = std::env::var("APPDATA")
-            .map_err(|e| format!("拿不到 APPDATA 环境变量: {e}"))?;
-        PathBuf::from(base).join("io.github.danub3.cadegg").join("settings.json")
+        let base = std::env::var("APPDATA").map_err(|e| format!("拿不到 APPDATA 环境变量: {e}"))?;
+        PathBuf::from(base)
+            .join("io.github.danub3.cadegg")
+            .join("settings.json")
     };
     #[cfg(not(windows))]
     let path = {
-        let base = std::env::var("HOME")
-            .map_err(|e| format!("拿不到 HOME 环境变量: {e}"))?;
+        let base = std::env::var("HOME").map_err(|e| format!("拿不到 HOME 环境变量: {e}"))?;
         PathBuf::from(base)
             .join(".local/share/io.github.danub3.cadegg")
             .join("settings.json")

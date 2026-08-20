@@ -93,7 +93,10 @@ pub fn read_memory_bundle(
 
     let global_memory_path = memory_dir.join("global-memory.md");
     let (global_memory, global_memory_exists) = if global_memory_path.is_file() {
-        (fs::read_to_string(&global_memory_path).unwrap_or_default(), true)
+        (
+            fs::read_to_string(&global_memory_path).unwrap_or_default(),
+            true,
+        )
     } else {
         (String::new(), false)
     };

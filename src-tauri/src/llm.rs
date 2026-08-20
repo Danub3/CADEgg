@@ -91,13 +91,63 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "cad-action",
         kind: DomainRuleKind::Allow,
         patterns: &[
-            "cad", "autocad", "draw", "drawing", "绘", "画", "出图", "生成图", "建模", "草图",
-            "图纸", "多段线", "polyline", "矩形", "rectangle", "圆", "circle", "直线", "line",
-            "标注", "dimension", "图层", "layer", "模型空间", "modelspace", "handle", "对象",
-            "object", "偏移", "offset", "镜像", "mirror", "旋转", "rotate", "复制", "copy",
-            "删除", "erase", "修剪", "trim", "延伸", "extend", "移动", "move", "阵列", "array",
-            "块", "block", "布局", "layout", "视口", "viewport", "门", "窗",
-            "洞", "孔", "开口",
+            "cad",
+            "autocad",
+            "draw",
+            "drawing",
+            "绘",
+            "画",
+            "出图",
+            "生成图",
+            "建模",
+            "草图",
+            "图纸",
+            "多段线",
+            "polyline",
+            "矩形",
+            "rectangle",
+            "圆",
+            "circle",
+            "直线",
+            "line",
+            "标注",
+            "dimension",
+            "图层",
+            "layer",
+            "模型空间",
+            "modelspace",
+            "handle",
+            "对象",
+            "object",
+            "偏移",
+            "offset",
+            "镜像",
+            "mirror",
+            "旋转",
+            "rotate",
+            "复制",
+            "copy",
+            "删除",
+            "erase",
+            "修剪",
+            "trim",
+            "延伸",
+            "extend",
+            "移动",
+            "move",
+            "阵列",
+            "array",
+            "块",
+            "block",
+            "布局",
+            "layout",
+            "视口",
+            "viewport",
+            "门",
+            "窗",
+            "洞",
+            "孔",
+            "开口",
         ],
     },
     // ---- 允许类：图纸检查 / 图面查询 ----
@@ -105,9 +155,9 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "cad-query",
         kind: DomainRuleKind::Allow,
         patterns: &[
-            "检查", "校核", "复核", "审查", "查询", "验收", "核对", "读图", "图面", "面积",
-            "长度", "距离", "数量", "统计", "属性", "坐标", "颜色", "线型", "线宽", "比例",
-            "单位", "标高", "尺寸", "测量", "measure",
+            "检查", "校核", "复核", "审查", "查询", "验收", "核对", "读图", "图面", "面积", "长度",
+            "距离", "数量", "统计", "属性", "坐标", "颜色", "线型", "线宽", "比例", "单位", "标高",
+            "尺寸", "测量", "measure",
         ],
     },
     // ---- 允许类：施工安全防护与建筑规范 ----
@@ -115,10 +165,42 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "safety-standard",
         kind: DomainRuleKind::Allow,
         patterns: &[
-            "安全", "safety", "防护", "施工", "construction", "临边", "洞口", "井口", "电梯",
-            "楼梯", "stair", "立杆", "横杆", "踢脚板", "警示", "材料表", "规范", "标准", "图集",
-            "jgj", "gb/t", "gb ", "脚手架", "基坑", "塔吊", "安全带", "护栏", "挡脚板", "密目网",
-            "防水", "混凝土", "钢筋", "模板", "砌体", "屋面", "无障碍",
+            "安全",
+            "safety",
+            "防护",
+            "施工",
+            "construction",
+            "临边",
+            "洞口",
+            "井口",
+            "电梯",
+            "楼梯",
+            "stair",
+            "立杆",
+            "横杆",
+            "踢脚板",
+            "警示",
+            "材料表",
+            "规范",
+            "标准",
+            "图集",
+            "jgj",
+            "gb/t",
+            "gb ",
+            "脚手架",
+            "基坑",
+            "塔吊",
+            "安全带",
+            "护栏",
+            "挡脚板",
+            "密目网",
+            "防水",
+            "混凝土",
+            "钢筋",
+            "模板",
+            "砌体",
+            "屋面",
+            "无障碍",
         ],
     },
     // ---- 允许类：模型配置 ----
@@ -126,8 +208,22 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "model-config",
         kind: DomainRuleKind::Allow,
         patterns: &[
-            "模型", "model", "key", "api", "glm", "deepseek", "qwen", "kimi", "gemini",
-            "供应商", "provider", "轮转", "failover", "切换模型", "配置", "密钥",
+            "模型",
+            "model",
+            "key",
+            "api",
+            "glm",
+            "deepseek",
+            "qwen",
+            "kimi",
+            "gemini",
+            "供应商",
+            "provider",
+            "轮转",
+            "failover",
+            "切换模型",
+            "配置",
+            "密钥",
         ],
     },
     // ---- 允许类：应用设置与使用 ----
@@ -135,8 +231,24 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "app-settings",
         kind: DomainRuleKind::Allow,
         patterns: &[
-            "设置", "setting", "字体", "语言", "窗口", "置顶", "会话", "导出", "记忆",
-            "bridge", "连接", "刷新", "帮助", "版本", "快捷键", "深色", "外观", "界面",
+            "设置",
+            "setting",
+            "字体",
+            "语言",
+            "窗口",
+            "置顶",
+            "会话",
+            "导出",
+            "记忆",
+            "bridge",
+            "连接",
+            "刷新",
+            "帮助",
+            "版本",
+            "快捷键",
+            "深色",
+            "外观",
+            "界面",
         ],
     },
     // ---- 拒绝类：纯数学计算 ----
@@ -144,8 +256,18 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "unrelated-math",
         kind: DomainRuleKind::Reject,
         patterns: &[
-            "1+1", "2+2", "等于几", "几加几", "几乘几", "算数", "口算", "九九乘法", "解方程",
-            "微积分", "求导", "积分题",
+            "1+1",
+            "2+2",
+            "等于几",
+            "几加几",
+            "几乘几",
+            "算数",
+            "口算",
+            "九九乘法",
+            "解方程",
+            "微积分",
+            "求导",
+            "积分题",
         ],
     },
     // ---- 拒绝类：文学创作与办公文案 ----
@@ -153,8 +275,20 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "unrelated-creative",
         kind: DomainRuleKind::Reject,
         patterns: &[
-            "写一首", "写首诗", "写诗", "诗歌", "作诗", "歌词", "写小说", "写作文", "散文",
-            "押韵", "周报", "简历", "ppt", "海报",
+            "写一首",
+            "写首诗",
+            "写诗",
+            "诗歌",
+            "作诗",
+            "歌词",
+            "写小说",
+            "写作文",
+            "散文",
+            "押韵",
+            "周报",
+            "简历",
+            "ppt",
+            "海报",
         ],
     },
     // ---- 拒绝类：闲聊 ----
@@ -162,7 +296,14 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "unrelated-chitchat",
         kind: DomainRuleKind::Reject,
         patterns: &[
-            "天气", "笑话", "讲个故事", "你好吗", "吃了吗", "聊聊天", "无聊", "讲段子",
+            "天气",
+            "笑话",
+            "讲个故事",
+            "你好吗",
+            "吃了吗",
+            "聊聊天",
+            "无聊",
+            "讲段子",
             "脑筋急转弯",
         ],
     },
@@ -171,8 +312,15 @@ const DOMAIN_RULES: &[DomainRule] = &[
         label: "unrelated-encyclopedia",
         kind: DomainRuleKind::Reject,
         patterns: &[
-            "量子力学", "相对论", "宇宙大爆炸", "哲学问题", "历史人物", "娱乐圈", "足球比赛",
-            "nba", "游戏攻略",
+            "量子力学",
+            "相对论",
+            "宇宙大爆炸",
+            "哲学问题",
+            "历史人物",
+            "娱乐圈",
+            "足球比赛",
+            "nba",
+            "游戏攻略",
         ],
     },
 ];
@@ -948,10 +1096,7 @@ impl GlmProvider {
             {
                 usage = Some(next_usage);
             }
-            let Some(choice) = parsed["choices"]
-                .as_array()
-                .and_then(|a| a.first())
-            else {
+            let Some(choice) = parsed["choices"].as_array().and_then(|a| a.first()) else {
                 // OpenAI-compatible providers may send a final usage-only
                 // chunk with an empty choices array.
                 return Ok(());
@@ -1219,9 +1364,12 @@ fn parse_glm_step_output(
 }
 
 pub(crate) fn json_u64(value: Option<&Value>) -> Option<u64> {
-    value
-        .and_then(Value::as_u64)
-        .or_else(|| value.and_then(Value::as_i64).filter(|v| *v >= 0).map(|v| v as u64))
+    value.and_then(Value::as_u64).or_else(|| {
+        value
+            .and_then(Value::as_i64)
+            .filter(|v| *v >= 0)
+            .map(|v| v as u64)
+    })
 }
 
 pub(crate) fn parse_openai_usage(
@@ -1236,14 +1384,15 @@ pub(crate) fn parse_openai_usage(
     let cache_read_tokens = json_u64(details.and_then(|v| v.get("cached_tokens")))
         .or_else(|| json_u64(usage.get("prompt_cache_hit_tokens")));
     let input_tokens = json_u64(details.and_then(|v| v.get("prompt_cache_miss_tokens")))
-        .or_else(|| {
-            prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens.unwrap_or(0)))
-        })
+        .or_else(|| prompt_tokens.map(|total| total.saturating_sub(cache_read_tokens.unwrap_or(0))))
         .or(prompt_tokens);
     let cache_write_tokens = json_u64(details.and_then(|v| v.get("cache_write_tokens")))
         .or_else(|| json_u64(usage.get("prompt_cache_creation_tokens")));
-    let reasoning_tokens =
-        json_u64(usage.get("completion_tokens_details").and_then(|v| v.get("reasoning_tokens")));
+    let reasoning_tokens = json_u64(
+        usage
+            .get("completion_tokens_details")
+            .and_then(|v| v.get("reasoning_tokens")),
+    );
 
     // 所有字段都缺失时才返回 None；部分字段存在时保留可解析的部分。
     if input_tokens.is_none()
@@ -2193,8 +2342,8 @@ mod tests {
             "thoughtsTokenCount": 40
         });
 
-        let usage =
-            parse_gemini_usage(Some(&parsed), "Gemini", "gemini-2.5-pro").expect("usage should parse");
+        let usage = parse_gemini_usage(Some(&parsed), "Gemini", "gemini-2.5-pro")
+            .expect("usage should parse");
 
         assert_eq!(usage.input_tokens, Some(800));
         assert_eq!(usage.output_tokens, Some(160));
