@@ -31,6 +31,7 @@ resources/
 
 # Local-only demo and planning documents.
 docs/
+presentation/
 
 # Local-only planning and handoff notes. Keep these out of GitHub.
 session-log/
