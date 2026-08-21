@@ -578,6 +578,7 @@ button:disabled {
 
 .composer {
   position: relative;
+  z-index: 4;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 76px;
   grid-template-rows: 34px auto minmax(60px, 1fr);
@@ -587,7 +588,7 @@ button:disabled {
   min-width: 0;
   margin: 0 18px 18px;
   padding: 12px 16px;
-  overflow: hidden;
+  overflow: visible;
   background: rgb(255 248 220 / 0.98);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -659,6 +660,8 @@ button:disabled {
 }
 
 .model-picker {
+  position: relative;
+  z-index: 5;
   grid-column: 1 / -1;
   grid-row: 1;
   display: grid;
@@ -688,6 +691,10 @@ button:disabled {
 .model-select {
   position: relative;
   min-width: 0;
+}
+
+.model-select.open {
+  z-index: 90;
 }
 
 .model-select-button {
@@ -737,9 +744,36 @@ button:disabled {
   display: grid;
   max-height: min(320px, 58vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 3px solid var(--ink);
   background: rgb(255 253 245 / 0.98);
   box-shadow: 8px 8px 0 rgb(30 22 51 / 0.26);
+  scrollbar-color: rgb(30 22 51 / 0.56) rgb(255 253 245 / 0.70);
+  scrollbar-width: thin;
+}
+
+.model-picker .model-select-options {
+  top: auto;
+  bottom: calc(100% + 6px);
+  max-height: min(336px, 42vh);
+  box-shadow: 8px -8px 0 rgb(30 22 51 / 0.22);
+}
+
+.model-select-options::-webkit-scrollbar {
+  width: 10px;
+}
+
+.model-select-options::-webkit-scrollbar-track {
+  background: rgb(255 253 245 / 0.72);
+}
+
+.model-select-options::-webkit-scrollbar-thumb {
+  border: 2px solid rgb(255 253 245 / 0.82);
+  background: rgb(30 22 51 / 0.56);
+}
+
+.model-select-options::-webkit-scrollbar-thumb:hover {
+  background: rgb(30 22 51 / 0.72);
 }
 
 .model-select-option {
