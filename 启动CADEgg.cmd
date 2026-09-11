@@ -98,11 +98,12 @@ if "%REBUILD_NEEDED%"=="1" (
   )
 ) else (
   call :TRY_RESTORE_EXISTING_APP
+  if errorlevel 2 goto APP_CONTINUE
+  if errorlevel 1 goto FAIL
+  exit /b 0
 )
-set "RESTORE_CODE=%ERRORLEVEL%"
-if "%RESTORE_CODE%"=="0" exit /b 0
-if "%RESTORE_CODE%"=="1" goto FAIL
 
+:APP_CONTINUE
 call :ENSURE_BUILT_APP
 if errorlevel 1 goto FAIL
 

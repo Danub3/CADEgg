@@ -50,3 +50,7 @@ session-log/
 *.njsproj
 *.sln
 *.sw?
+
+# Private meeting materials and review screenshots (never commit or push).
+/2026_9_11答疑/
+/2026_9_11未来项目发展总章程/

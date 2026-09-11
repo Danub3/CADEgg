@@ -87,6 +87,9 @@ impl ToolSpec {
 pub struct ToolingContext {
     pub tool_names: Vec<String>,
     pub guidance: String,
+    /// 本次请求是否按「施工安全场景」约束：为真时上层注入安全知识卡并强制强模型，
+    /// 保证工具集、系统提示和知识卡三者一致（不会出现「告诉他不能画图，却给了绘图工具」）。
+    pub safety_scoped: bool,
 }
 
 fn params_draw_line() -> Value {
@@ -801,7 +804,41 @@ fn safety_scene_tooling_context(
     ToolingContext {
         tool_names: ordered_unique(selected),
         guidance: lines.join("\n"),
+        safety_scoped: true,
     }
+}
+
+/// 未命中已注册场景，但明显在聊施工安全：这类请求只给知识卡/追问，不给绘图工具。
+/// 注意不要把「楼梯」「洞口」等通用词算进来——它们在通用 CAD 语境下也要能正常出图。
+pub fn looks_like_safety_topic(user_input: &str) -> bool {
+    let text = user_input.to_lowercase();
+    contains_any(
+        &text,
+        &[
+            "安全",
+            "防护",
+            "坠落",
+            "临边",
+            "井口",
+            "井道",
+            "电梯井",
+            "安全平网",
+            "防护棚",
+            "安全通道",
+            "护栏",
+            "栏杆",
+            "踢脚板",
+            "挡脚板",
+            "密目网",
+            "危大",
+            "脚手架",
+            "基坑",
+            "安全带",
+            "jgj",
+            "安全规范",
+            "施工方案",
+        ],
+    )
 }
 
 fn generic_safety_tooling_context(user_input: &str, has_session: bool) -> ToolingContext {
@@ -836,6 +873,7 @@ fn generic_safety_tooling_context(user_input: &str, has_session: bool) -> Toolin
     ToolingContext {
         tool_names: ordered_unique(selected),
         guidance: lines.join("\n"),
+        safety_scoped: true,
     }
 }
 
@@ -857,7 +895,10 @@ pub fn select_tooling_context(
     if let Some(scene) = matched_scene {
         return safety_scene_tooling_context(scene, user_input, has_session);
     }
-    if work_mode == WorkMode::SafetyDemoMode {
+    // 安全场景模式只约束「确实在聊施工安全」的请求。
+    // 早期实现把整个模式全局短路成安全工具集，导致新会话示例里的
+    // 「画一条直线 / 画一个圆 / 画双跑楼梯」拿不到任何绘图工具（模型只能回答没有 draw_circle）。
+    if work_mode == WorkMode::SafetyDemoMode && looks_like_safety_topic(&text) {
         return generic_safety_tooling_context(user_input, has_session);
     }
 
@@ -982,6 +1023,7 @@ pub fn select_tooling_context(
     ToolingContext {
         tool_names,
         guidance: lines.join("\n"),
+        safety_scoped: false,
     }
 }
 
@@ -1841,6 +1883,60 @@ mod tests {
             .tool_names
             .iter()
             .any(|name| name == "modelspace_snapshot"));
+    }
+
+    /// 回归：新会话示例里的四条指令在安全场景模式下也必须拿到绘图工具。
+    /// 早期实现把 safety_demo_mode 全局短路成安全工具集，导致「画一个半径 3000 的圆」
+    /// 只拿到 draw_text/zoom/inspect/snapshot，模型只能回答「没有 draw_circle」。
+    #[test]
+    fn new_session_examples_keep_drawing_tools_in_safety_demo_mode() {
+        for (input, expected_tool) in [
+            ("画一条 7000mm 的直线", "draw_line"),
+            ("画一个半径 3000 的圆", "draw_circle"),
+            ("画一个双跑楼梯，层高 3000", "draw_double_flight_stair"),
+        ] {
+            for mode in [WorkMode::CompetitionMode, WorkMode::SafetyDemoMode] {
+                let tooling = select_tooling_context(input, &[], mode);
+                assert!(
+                    tooling.tool_names.iter().any(|name| name == expected_tool),
+                    "{input} 在 {mode:?} 下应包含 {expected_tool}，实际为 {:?}",
+                    tooling.tool_names
+                );
+                assert!(
+                    !tooling.safety_scoped,
+                    "{input} 属于通用绘图请求，不应按安全场景约束"
+                );
+            }
+        }
+    }
+
+    /// 安全场景模式仍然约束「确实在聊施工安全」但未注册场景的请求：只给知识/追问入口。
+    #[test]
+    fn unregistered_safety_topic_stays_knowledge_only_in_safety_mode() {
+        let tooling =
+            select_tooling_context("脚手架安全防护怎么设置", &[], WorkMode::SafetyDemoMode);
+
+        assert!(tooling.safety_scoped);
+        assert!(!tooling.tool_names.iter().any(|name| name == "draw_line"));
+        assert!(!tooling.tool_names.iter().any(|name| name == "draw_circle"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "modelspace_snapshot"));
+    }
+
+    /// 命中已注册场景：无论哪种模式都要走确定性场景工具 + 安全知识卡。
+    #[test]
+    fn registered_scene_is_safety_scoped_in_both_modes() {
+        for mode in [WorkMode::CompetitionMode, WorkMode::SafetyDemoMode] {
+            let tooling =
+                select_tooling_context("画一个电梯井口防护门，井口宽 2000 高 1800", &[], mode);
+            assert!(tooling.safety_scoped);
+            assert!(tooling
+                .tool_names
+                .iter()
+                .any(|name| name == "draw_elevator_shaft_protection"));
+        }
     }
 
     #[test]

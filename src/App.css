@@ -638,6 +638,8 @@ button:disabled {
   grid-column: 2;
   grid-row: 2 / 4;
   display: grid;
+  /* 运行中会多一个「停止」按钮：显式给行高，避免发送键被挤扁 */
+  grid-template-rows: auto auto minmax(56px, 1fr);
   gap: 8px;
 }
 
@@ -657,6 +659,55 @@ button:disabled {
   color: var(--paper);
   background: rgb(30 22 51 / var(--glass-alpha));
   text-shadow: 0 1px 3px rgb(30 22 51 / var(--text-shadow-strength, 0.3));
+}
+
+/* 运行中的「停止」按钮：比发送键更矮，避免和主操作抢视觉重心 */
+.stop-task-button {
+  display: grid;
+  grid-auto-flow: column;
+  place-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 2px solid var(--ink);
+  color: var(--ink);
+  background: rgb(255 214 214 / 0.86);
+  cursor: pointer;
+}
+
+.stop-task-button:disabled {
+  opacity: 0.62;
+  cursor: progress;
+}
+
+.stop-task-button small {
+  font-size: var(--tiny-font-size, 11px);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.composer-side .stop-task-button {
+  height: 34px;
+}
+
+/* 思考面板里的紧凑停止按钮 */
+.thinking-trace header .stop-task-button {
+  min-height: 24px;
+  padding: 0 8px;
+  border-width: 2px;
+  justify-self: end;
+}
+
+.thinking-trace header {
+  grid-template-columns: 14px auto minmax(0, 1fr) auto;
+}
+
+/* 模型静默提示：一直等不到输出时给出明确解释 + 已等待时长 */
+.thinking-waiting {
+  padding: 6px 8px;
+  border: 2px dashed rgb(30 22 51 / 0.42);
+  color: rgb(30 22 51 / 0.78);
+  font-size: var(--tiny-font-size, 11px);
 }
 
 .model-picker {

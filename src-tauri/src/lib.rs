@@ -32,6 +32,8 @@ pub fn run() {
         benchmark::read_benchmark_results,
         benchmark::run_model_benchmark,
         llm::run_agent,
+        llm::cancel_agent,
+        llm::agent_is_running,
         llm::confirm_tool_call,
     ]);
 
@@ -47,6 +49,8 @@ pub fn run() {
         benchmark::read_benchmark_results,
         benchmark::run_model_benchmark,
         llm::run_agent,
+        llm::cancel_agent,
+        llm::agent_is_running,
         llm::confirm_tool_call,
     ]);
 

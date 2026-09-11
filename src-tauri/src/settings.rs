@@ -86,8 +86,11 @@ pub struct Settings {
 fn default_provider() -> String {
     "glm".to_string()
 }
+/// 默认工作模式＝通用 CAD 模式。
+/// 安全场景约束只在两种情况下生效：命中已注册安全场景，或处于安全场景模式且请求确实在聊施工安全。
+/// （历史默认值是 safety_demo_mode，会让新会话示例里的直线/圆/楼梯拿不到绘图工具。）
 fn default_work_mode() -> WorkMode {
-    WorkMode::SafetyDemoMode
+    WorkMode::CompetitionMode
 }
 fn default_auto_failover() -> bool {
     true
@@ -633,6 +636,14 @@ mod tests {
         assert_eq!(sanitized.qwen_strong_model, "qwen3.7-max");
         assert_eq!(sanitized.kimi_model, "kimi-k2.5");
         assert_eq!(sanitized.kimi_strong_model, "kimi-k2.6");
+    }
+
+    /// 默认工作模式必须是通用 CAD 模式：安全场景模式会让未注册的安全话题失去绘图工具，
+    /// 不适合作为新装用户的默认值（历史默认值曾导致新会话示例无法出图）。
+    #[test]
+    fn default_work_mode_is_general_cad() {
+        assert_eq!(Settings::default().work_mode, WorkMode::CompetitionMode);
+        assert_eq!(default_work_mode(), WorkMode::CompetitionMode);
     }
 
     #[test]

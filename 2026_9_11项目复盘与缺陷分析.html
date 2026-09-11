@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CADEgg 2026-09-11 答疑复盘与缺陷分析</title>
+  <style>
+    :root { --ink:#162033; --muted:#5d6879; --line:#d9e1ea; --blue:#087ea4; --pale:#eef8fb; --warn:#fff5e7; --red:#9b2c2c; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:#f4f7fa; font:16px/1.75 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+    main { max-width:1100px; margin:0 auto; padding:42px 28px 80px; background:#fff; min-height:100vh; }
+    h1 { font-size:34px; line-height:1.25; margin:0 0 8px; } h2 { margin-top:42px; border-left:6px solid var(--blue); padding-left:12px; } h3 { margin-top:28px; }
+    .meta { color:var(--muted); margin-bottom:28px; } .lead { background:var(--pale); border:1px solid #b8dfeb; padding:18px 20px; }
+    .callout { padding:16px 18px; border-left:4px solid var(--blue); background:#f5fbfd; margin:16px 0; }
+    .risk { background:var(--warn); border-left-color:#c27a14; } .critical { background:#fff0f0; border-left-color:var(--red); }
+    table { width:100%; border-collapse:collapse; margin:14px 0 22px; } th,td { border:1px solid var(--line); padding:10px 12px; vertical-align:top; text-align:left; } th { background:#edf3f7; }
+    code { background:#f0f3f6; padding:1px 4px; border-radius:3px; } .tag { display:inline-block; padding:2px 8px; margin-right:6px; border-radius:12px; font-size:13px; background:#e8f4f8; color:#075e79; }
+    .done { color:#146c43; } .partial { color:#946200; } .todo { color:#9b2c2c; } li { margin:5px 0; }
+    .small { color:var(--muted); font-size:14px; } .footer { margin-top:44px; padding-top:14px; border-top:1px solid var(--line); color:var(--muted); font-size:14px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>CADEgg 2026-09-11 答疑复盘与缺陷分析</h1>
+  <div class="meta">依据：2026-09-11 答疑截图（26 页）+ 当前工作区代码审查 + 本地构建/测试结果。生成日期：2026-09-11。</div>
+  <div class="lead"><strong>一句话结论：</strong>CADEgg 的方向有辨识度，已经形成“自然语言 → 场景路由 → 知识卡 → 确定性 CAD 工具 → 校核 → 可追溯记录”的雏形；下一阶段决定作品质量的不是再堆模型，而是把证据链、评测集、风险边界、离线演示和更多完整场景做成可验证的工程闭环。</div>
+
+  <h2>一、答疑会给出的核心判断</h2>
+  <table><thead><tr><th>主题</th><th>老师强调的原则</th><th>对 CADEgg 的直接含义</th></tr></thead><tbody>
+    <tr><td>数字与结论</td><td>大模型只负责理解、抽取和解释；工程数字必须由公式、规则引擎、优化器或有限元等确定性模块产生。</td><td>所有尺寸、数量、评分、工程量都必须能回溯到输入、公式、版本和工具输出，模型不能直接“拍数字”。</td></tr>
+    <tr><td>可靠生成</td><td>同一输入应得到同一输出；推荐“模型理解 + 规则裁决 + 人工拍板”三层链路。</td><td>把模型输出限制为结构化字段和候选方案，最终放行由规则和人工确认完成。</td></tr>
+    <tr><td>检索与证据</td><td>“有出处”不等于“可核验”。引用必须来自本次检索，包含规范名、版本/年份、条款、页码或原文；查不到就诚实拒答。</td><td>知识卡必须带来源状态和原文摘录，检索失败必须进入拒答/转人工分支，不能用记忆补齐。</td></tr>
+    <tr><td>视觉与评测</td><td>��线前必须回答类别集合、数据来源、场景覆盖和阈值依据；安全识别优先控制漏报，并分开统计误报。</td><td>需要真实、对抗、边界样本集；阈值来自验证集曲线，不应写成未经测量的“90%/85%”。</td></tr>
+    <tr><td>反馈学习</td><td>用户反馈不能直接训练；应经过人工抽检、离线评测、达标后版本化更新。</td><td>建立反馈落库 → 抽检标注 → 离线评测 → 版本发布四步数据回流，避免脏数据和分布漂移。</td></tr>
+    <tr><td>人机边界</td><td>低风险自动答，中风险给建议，高风险强制转人工；边界必须在代码中有角色、状态和流转。</td><td>不仅要在提示词里写“人工审核”，还要有风险分级、确认状态、审计记录和不可绕过的权限锁。</td></tr>
+    <tr><td>演示交付</td><td>链接失效、断网、环境依赖和未标注 Mock 是常见致命问题；必须准备在线、本地、录屏三级备份。</td><td>演示包应能断网跑核心链路，所有模拟数据和未实现能力必须在界面与文档中显式标注。</td></tr>
+  </tbody></table>
+
+  <h2>二、当前实现盘点</h2>
+  <table><thead><tr><th>能力</th><th>状态</th><th>证据</th><th>判断</th></tr></thead><tbody>
+    <tr><td>前端构建</td><td class="done">已通过</td><td><code>npm.cmd run build</code> 成功，Vite 产物正常。</td><td>基础交付链路可用。</td></tr>
+    <tr><td>Rust 单元测试</td><td class="done">96 通过 / 0 失败 / 10 忽略</td><td><code>cargo test --manifest-path src-tauri/Cargo.toml</code>。</td><td>规则和路由已有较好回归基础，但真实 AutoCAD/API 测试仍被忽略。</td></tr>
+    <tr><td>完整安全场景</td><td class="partial">3 个</td><td>电梯井口防护门、电梯井内安全平网、普通临边防护栏杆可出图、校核、快照。</td><td>形成了有说服力的纵向样板。</td></tr>
+    <tr><td>注册场景</td><td class="partial">6 个以上</td><td><code>scenes.rs</code> 还登记了洞口盖板、楼梯临边、安全通道/防护棚等。</td><td>横向扩展已开始，但多数没有确定性绘图和校核工具。</td></tr>
+    <tr><td>知识库</td><td class="partial">本地 JSON + 内置兜底</td><td><code>data/atlas</code>、<code>data/sources</code>、<code>knowledge.rs</code>。</td><td>有版本和 citations 字段，但检索主要是关键词打分，证据强度尚未进入放行决策。</td></tr>
+    <tr><td>模型路由</td><td class="done">已实现</td><td>GLM/DeepSeek/Qwen/Kimi，强弱模型、轮转、超时、取消和 telemetry。</td><td>工程机制完整度较高，仍需真实基准数据证明选择质量。</td></tr>
+    <tr><td>模型基准</td><td class="partial">框架已实现</td><td><code>benchmark.rs</code> 固定 6 类小请求、预算、重试、结果 JSON/MD。</td><td>当前 scorer 仍偏规则化、样本少，不能代表真实场景能力。</td></tr>
+    <tr><td>人工确认</td><td class="partial">工具级</td><td>删除、裁剪、延伸、LISP 等工具需要确认。</td><td>尚未统一覆盖“高风险安全结论”和“建议生效”状态。</td></tr>
+  </tbody></table>
+
+  <h2>三、作品当前缺陷</h2>
+  <h3>1. 证据链还没有闭环（P0）</h3>
+  <div class="callout critical"><strong>问题：</strong><code>knowledge.rs</code> 运行时只读取知识卡；<code>search_scenes</code> 以关键词命中数排序。卡片虽然有 <code>citations</code>，但没有把“本次检索命中的原文片段、版本有效期、检索时间、证据是否足够”作为结构化结果参与决策。</div>
+  <ul><li>风险：同义词、错别字、跨场景描述容易漏检或误命中；查不到时仍可能由模型常识补答。</li><li>改法：检索结果增加 <code>source_id/version/excerpt/page/effective_status/retrieved_at/confidence</code>；关键结论没有合格 citation 时强制输出“未找到依据，转人工/官方渠道”。</li><li>验收：随机抽查 30 条引用，条款存在率、原文一致率、现行版本率均达到 100%；无依据问题拒答率达到 100%。</li></ul>
+
+  <h3>2. 评测集和指标仍偏“演示型”（P0）</h3>
+  <div class="callout critical"><strong>问题：</strong>基准目前每模型 6 个固定小请求，评分器通过是否出现“200”“7000”“5000”等字符串打分；这能测回归，却不能证明工程可靠性。截图要求 30–100 条真实/对抗样本、正常/边界/对抗三类覆盖，并把召回率、精确率、路由准确率分开。</div>
+  <ul><li>缺少按场景分层的混淆矩阵：漏报和误报没有独立仪表盘。</li><li>阈值没有 PR 曲线或验证集依据；“准确率/命中率”不应作为无来源宣传数字。</li><li>真实 AutoCAD 烟测和 API 在线测试被标记 ignored，当前基线不能代表现场交付。</li><li>改法：建立版本化评测集（建议首批 60 条：6 场景 × 10，含 20% 对抗），记录输入、期望场景、必填字段、期望工具、规则结果和人工标签；每次改动自动跑离线集。</li></ul>
+
+  <h3>3. 场景覆盖有“注册但不可交付”断层（P0）</h3>
+  <table><thead><tr><th>场景</th><th>当前能力</th><th>缺口</th><th>建议顺序</th></tr></thead><tbody>
+    <tr><td>洞口盖板/洞口防护</td><td>已注册关键词和参数</td><td>无确定性 draw/validate，无专属知识卡兜底。</td><td>第一批扩展，和现有临边场景形成对抗测试。</td></tr>
+    <tr><td>楼梯临边/平台防护</td><td>已注册</td><td>无出图/校核。</td><td>第二批，补充线性构件和楼梯几何。</td></tr>
+    <tr><td>安全通道/防护棚</td><td>已注册</td><td>无出图/校核，结构安全边界更复杂。</td><td>第三批，先知识审查后确定性构件。</td></tr>
+    <tr><td>脚手架、临电、洞口组合场景</td><td>主要是知识/追问</td><td>尚无场景注册或完整工具闭环。</td><td>作为扩展路线，不应在当前演示中宣称已支持。</td></tr>
+  </tbody></table>
+
+  <h3>4. 人机边界还停留在工具确认层（P1）</h3>
+  <ul><li><code>requires_confirmation</code> 主要针对删除、修改和 <code>run_lisp</code>；安全场景的出图工具目前 <code>requires_approval: false</code>。</li><li>“高风险只给建议，最终结论人工确认”尚未统一建模为 <code>risk_level → recommendation → human_decision → effective_state</code>。</li><li>改法：所有安全场景输出风险等级；高风险禁止直接标记“合格/放行”，必须生成待审核单，记录审核人、时间、依据和修改前后差异。</li></ul>
+
+  <h3>5. 取消、超时与轮转机制需要现场验证（P1）</h3>
+  <ul><li>代码已加入 90 秒流式静默超时、15 秒建连超时、900 秒单轮上限和取消哨兵，这是正确方向。</li><li>但当前没有真实网络抖动、半连接、服务端只发心跳、AutoCAD 工具执行中取消的集成测试；这些正是截图指出的演示致命点。</li><li>改法：增加可控 Mock Server 和 Bridge 故障注入，验证停止后不触发 failover、不重复执行工具、已画对象保留。</li></ul>
+
+  <h3>6. 基准评分与成本指标仍有占位性质（P1）</h3>
+  <ul><li><code>benchmark.rs</code> 的 cost 分数对未知价格使用占位 0.5；这不能用于严肃的模型选择结论。</li><li>固定字符串 scorer 容易被模型“说出数字”而非真正调用正确工具绕过。</li><li>改法：评分以结构化 tool call、参数 schema、规则校核结果和实际 token/延迟为主；价格按供应商当日公开价版本化记录。</li></ul>
+
+  <h3>7. 演示与可交付性仍依赖本机环境（P1）</h3>
+  <ul><li>AutoCAD、Bridge、API Key、网络和特定版本均是前置条件；10 个真实 AutoCAD 测试被忽略。</li><li>目前需要补齐“离线演示包”：本地模型响应回放、Mock Bridge、预生成 DWG/截图、明确的 Mock 水印和三分钟操作脚本。</li></ul>
+
+  <h3>8. 工程卫生问题（P2）</h3>
+  <ul><li>Rust 测试有未使用赋值和死字段 warning，应在提交前清零。</li><li>仓库中已有若干本地规划/日志规则，编码显示曾出现乱码；后续文档统一 UTF-8，并避免把私人材料混入仓库。</li><li>本次已将 <code>2026_9_11答疑/</code> 与 <code>2026_9_11未来项目发展总章程/</code> 加入 <code>.gitignore</code>。</li></ul>
+
+  <h2>四、优先级路线图</h2>
+  <table><thead><tr><th>阶段</th><th>目标</th><th>交付物</th><th>通过标准</th></tr></thead><tbody>
+    <tr><td>第 0 阶段（本周）</td><td>可信证据与演示止血</td><td>证据对象 schema、拒答分支、离线 Mock 包、演示脚本、告知 Mock 边界。</td><td>断网可完成核心演示；无依据问题不会编造条款。</td></tr>
+    <tr><td>第 1 阶段（1–2 周）</td><td>扩展一个完整场景</td><td>洞口盖板：source + atlas + scenes + safety validator + CAD draw + tool + smoke test。</td><td>同一输入重复运行结果一致；强制/推荐项分层正确。</td></tr>
+    <tr><td>第 2 阶段（2–4 周）</td><td>评测闭环</td><td>60 条版本化评测集、人工标注表、混淆矩阵、PR 阈值报告、失败案例页。</td><td>召回率、精确率、路由准确率、工具成功率分开展示。</td></tr>
+    <tr><td>第 3 阶段（4–6 周）</td><td>人机边界产品化</td><td>风险状态机、人工审核单、审计日志、不可绕过权限。</td><td>高风险请求永不自动放行，审核结果可追溯。</td></tr>
+    <tr><td>第 4 阶段（持续）</td><td>场景矩阵扩展</td><td>楼梯临边、安全通道/防护棚、脚手架/临电知识审查等。</td><td>每新增场景必须完成“证据→规则→出图→校核→测试→演示”全套清单。</td></tr>
+  </tbody></table>
+
+  <h2>五、答辩时建议的诚实表述</h2>
+  <div class="callout"><strong>定位：</strong>“CADEgg 不是让大模型直接画图或直接判定合格，而是让大模型负责理解意图和抽取字段，再由版本化知识卡、确定性规则和 AutoCAD 工具生成可复核结果；高风险结论保留人工拍板。”</div>
+  <div class="callout"><strong>当前边界：</strong>“当前已有三个安全场景完成出图、校核和模型空间快照闭环；洞口盖板、楼梯临边、安全通道已完成注册和边界设计，正在补确定性工具。评测和在线可靠性仍在建设，不把演示数据冒充实测结论。”</div>
+  <div class="callout"><strong>创新点：</strong>“创新不在于接入一个聊天模型，而在于把施工安全图纸任务拆成场景路由、证据链、规则裁决、确定性绘图、人工确认和全过程留痕，形成可审计的工程 Agent。”</div>
+
+  <h2>六、提交与推送结论</h2>
+  <ul><li>远端当前为 <code>origin/main = 564171f</code>，本地有 9 个已修改文件，说明上次修改确实未推送。</li><li>本地修改已通过前端构建和 Rust 测试，适合整理为一次提交后推送；会议截图和未来规划目录已加入忽略，不应进入提交。</li><li>推送前应确认没有 API Key、DWG、日志和私人截图被 staged；建议使用 <code>git diff --cached --name-only</code> 做最后检查。</li></ul>
+  <div class="footer">本报告是工程复盘，不是规范合规意见。任何实际施工方案仍需由具备资质的专业人员依据现行规范、现场实测和项目审批流程确认。</div>
+</main>
+</body>
+</html>

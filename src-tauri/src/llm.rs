@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use crate::tools::{self, SessionObject, ToolCall, ToolResult};
@@ -7,11 +10,24 @@ use crate::tools::{self, SessionObject, ToolCall, ToolResult};
 const MAX_TURNS: usize = 8;
 const SESSION_OBJECT_CONTEXT_LIMIT: usize = 8;
 
+/// 建连超时：DNS / TCP / TLS 阶段的上限；不含模型推理时间。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// 流式空闲超时：超过该时长没有任何分片（含 reasoning_content）即判定卡死，
+/// 由 failover 切换到下一个候选模型，避免界面永远停在「思考中」。
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// 单轮流式读取硬上限：防止异常长尾请求无限占用一次任务。
+const STREAM_TURN_LIMIT: Duration = Duration::from_secs(900);
+/// 流式读取轮询间隔：用于在等待期间检查「停止」请求并刷新等待提示。
+const STREAM_POLL_INTERVAL: Duration = Duration::from_millis(300);
+/// 静默提示间隔：模型连续无输出超过该时长时，向界面推送一次等待提示。
+const STREAM_SILENT_HINT: Duration = Duration::from_secs(5);
+
 const SYSTEM_PROMPT: &str = "你是 CADEgg，一名 AutoCAD 助理。\n\
 - 用户讲中文，你也用中文回答。\n\
 - 当用户的请求需要操作 CAD 时，调用提供的工具，不要凭空编造对象信息。\n\
 - 坐标和尺寸的默认单位是毫米，除非用户明确说米。\n\
-- 优先使用结构化工具（draw_line/draw_circle/move 等）；只有当结构化工具明显不足以表达需求时才用 run_lisp。\n\
+- 只能使用本轮工具清单里列出的工具；清单里没有的工具一律视为本轮不可用，不要臆造工具名，也不要用别的工具「凑」出目标图形（例如本轮没有 draw_circle 时，不要用直线拼圆或只写一句文字）。\n\
+- 优先使用结构化工具（如 draw_line/draw_circle/move，以本轮清单为准）；只有当结构化工具明显不足以表达需求且清单里有 run_lisp 时才用它。\n\
 - 工具库是分层的：能用高层语义几何工具时，不要退回到底层原子工具去自己算；需要读对象信息时优先用查询工具。\n\
 - 如果一个请求可以拆成多步且这些步骤都已确定，尽量在同一轮里一次性返回完整的 tool_calls，不要只做第一步。\n\
 - 当前会话如果额外提供了对象表，就把它当作可引用对象清单；对象不在表里时，不要假设它还存在。\n\
@@ -479,6 +495,103 @@ enum Provider {
     Glm(GlmProvider),
 }
 
+// ---------------- 取消（停止）状态 ----------------
+//
+// 同一时刻只允许一个 agent 任务在跑：run_agent 进入时登记运行中并清空取消标记，
+// 前端点「停止」调用 cancel_agent 置位取消标记；流式读取循环与 failover 每步都会检查它。
+// 取消不是错误：走 AgentEvent::Cancelled 正常收尾，保留已经产生的消息和 CAD 对象。
+
+static AGENT_RUNNING: AtomicBool = AtomicBool::new(false);
+static AGENT_CANCEL: AtomicBool = AtomicBool::new(false);
+/// 「提前到达」的取消请求时间戳（ms）：前端在 run_agent 真正开始前就点了停止时先寄存在这里，
+/// 由下一次 AgentRunGuard::start 消费，避免这几十毫秒的竞态让任务照样跑起来。
+/// 带时间戳是为了只影响紧接着的那一次任务：过期请求不会误杀之后的全新任务。
+static AGENT_PENDING_CANCEL_AT_MS: AtomicU64 = AtomicU64::new(0);
+/// 提前取消的有效期：超过该时长的寄存取消视为过期，直接丢弃。
+const PENDING_CANCEL_TTL_MS: u64 = 10_000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+/// 取消哨兵：内部错误字符串，用于把「用户取消」和「真实失败」区分开。
+const CANCEL_SENTINEL: &str = "__cadegg_cancelled__";
+
+pub(crate) fn cancel_requested() -> bool {
+    AGENT_CANCEL.load(Ordering::SeqCst)
+}
+
+/// 取消检查：命中时返回哨兵错误，由 run_agent 转成 Cancelled 事件。
+pub(crate) fn ensure_not_cancelled() -> Result<(), String> {
+    if cancel_requested() {
+        Err(CANCEL_SENTINEL.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// run_agent 的生命周期守卫：无论正常返回、报错还是提前 return 都会复位运行状态。
+struct AgentRunGuard;
+
+impl AgentRunGuard {
+    fn start() -> Self {
+        // 消费提前到达的取消请求：任务一起来就按「已取消」处理，不会调用任何模型。
+        let pending_at = AGENT_PENDING_CANCEL_AT_MS.swap(0, Ordering::SeqCst);
+        let pending =
+            pending_at != 0 && now_ms().saturating_sub(pending_at) <= PENDING_CANCEL_TTL_MS;
+        AGENT_CANCEL.store(pending, Ordering::SeqCst);
+        AGENT_RUNNING.store(true, Ordering::SeqCst);
+        AgentRunGuard
+    }
+}
+
+impl Drop for AgentRunGuard {
+    fn drop(&mut self) {
+        AGENT_RUNNING.store(false, Ordering::SeqCst);
+        AGENT_CANCEL.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 请求停止当前 agent 任务。返回是否确有任务在跑（用于前端状态对齐）。
+#[tauri::command]
+pub fn cancel_agent(app: AppHandle) -> Result<bool, String> {
+    if !AGENT_RUNNING.load(Ordering::SeqCst) {
+        // 任务还没开始（例如前端仍在同步对象表）：寄存取消，任务一起来就立即收尾。
+        AGENT_PENDING_CANCEL_AT_MS.store(now_ms(), Ordering::SeqCst);
+        return Ok(false);
+    }
+    AGENT_CANCEL.store(true, Ordering::SeqCst);
+    let _ = app.emit(
+        "agent:event",
+        AgentEvent::AssistantTrace {
+            delta: "\n[停止] 已请求中断当前任务，正在释放连接…\n",
+        },
+    );
+    Ok(true)
+}
+
+/// 当前是否有 agent 任务在跑；前端挂载时用来纠正「卡在思考中」的本地状态。
+#[tauri::command]
+pub fn agent_is_running() -> bool {
+    AGENT_RUNNING.load(Ordering::SeqCst)
+}
+
+/// 共享 HTTP 客户端：复用连接池，避免每次请求重建 TLS 配置（首 token 时间更稳）。
+/// 不设整体 timeout（长回答会被误杀），卡死由流式读取阶段的空闲超时兜底。
+fn http_client() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
+}
+
 impl Provider {
     async fn step(&self, history: &[MessageView], app: &AppHandle) -> Result<StepOutput, String> {
         match self {
@@ -771,6 +884,8 @@ async fn step_with_failover(
     let mut last_err = String::new();
     let mut attempted = 0usize;
     for (i, plan) in plans.iter().enumerate() {
+        // 用户点了「停止」：不再尝试任何候选模型，直接以取消收尾。
+        ensure_not_cancelled()?;
         let (provider_id, model) = plan.provider.identity();
         if let Some(reason) = &plan.skip_reason {
             update_route_attempt(route, &provider_id, &model, "skipped", Some(reason.clone()));
@@ -790,6 +905,10 @@ async fn step_with_failover(
                 return Ok(out);
             }
             Err(e) => {
+                // 取消不是失败：立刻中断轮转，不消耗其他模型的额度。
+                if e == CANCEL_SENTINEL {
+                    return Err(e);
+                }
                 last_err = e;
                 let remaining_usable = plans
                     .iter()
@@ -872,7 +991,7 @@ impl GeminiProvider {
             self.model
         );
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let resp = client
             .post(&url)
             .header("x-goog-api-key", &self.api_key)
@@ -891,7 +1010,8 @@ impl GeminiProvider {
         let mut calls: Vec<ToolCall> = Vec::new();
         let mut usage: Option<ProviderTokenUsage> = None;
         let mut saw_event = false;
-        let stream_result = read_sse_events(resp, |data| {
+        let stream_label = format!("Gemini / {}", self.model);
+        let stream_result = read_sse_events(resp, app, &stream_label, |data| {
             saw_event = true;
             let parsed: Value =
                 serde_json::from_str(data).map_err(|e| format!("解析流式响应失败: {e}"))?;
@@ -934,13 +1054,15 @@ impl GeminiProvider {
         .await;
 
         if let Err(error) = stream_result {
-            if !saw_event {
+            ensure_not_cancelled()?;
+            if !saw_event && error != CANCEL_SENTINEL {
                 let fallback_url = format!("{base}/v1beta/models/{}:generateContent", self.model);
                 let fallback_resp = client
                     .post(&fallback_url)
                     .header("x-goog-api-key", &self.api_key)
                     .header("content-type", "application/json")
                     .json(&body)
+                    .timeout(STREAM_TURN_LIMIT)
                     .send()
                     .await
                     .map_err(|e| format!("网络请求失败: {e}"))?;
@@ -1064,7 +1186,7 @@ impl GlmProvider {
         let base = self.base_url.trim_end_matches('/');
         let url = format!("{base}/chat/completions");
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let resp = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
@@ -1083,7 +1205,8 @@ impl GlmProvider {
         let mut calls: Vec<PendingOpenAiToolCall> = Vec::new();
         let mut usage: Option<ProviderTokenUsage> = None;
         let mut saw_event = false;
-        let stream_result = read_sse_events(resp, |data| {
+        let stream_label = format!("{} / {}", self.label, self.model);
+        let stream_result = read_sse_events(resp, app, &stream_label, |data| {
             if data == "[DONE]" {
                 saw_event = true;
                 return Ok(());
@@ -1139,18 +1262,22 @@ impl GlmProvider {
         .await;
 
         if let Err(error) = stream_result {
-            if !saw_event {
+            // 用户已请求停止：不要再发起非流式补发请求。
+            ensure_not_cancelled()?;
+            if !saw_event && error != CANCEL_SENTINEL {
                 let fallback_body = json!({
                     "model": self.model,
                     "messages": messages,
                     "tools": tools::openai_tools_for(&self.selected_tools),
                     "tool_choice": "auto",
                 });
+                // 非流式补发同样要限时：否则流式卡死后的补发会把界面再次挂住。
                 let fallback_resp = client
                     .post(&url)
                     .header("Authorization", format!("Bearer {}", self.api_key))
                     .header("content-type", "application/json")
                     .json(&fallback_body)
+                    .timeout(STREAM_TURN_LIMIT)
                     .send()
                     .await
                     .map_err(|e| format!("网络请求失败: {e}"))?;
@@ -1446,18 +1573,78 @@ fn parse_gemini_usage(
     })
 }
 
-async fn read_sse_events<F>(mut resp: reqwest::Response, mut on_data: F) -> Result<(), String>
+/// 读取 SSE 流，附带三重保护：
+///   1) 每 STREAM_POLL_INTERVAL 醒一次，检查「停止」请求 → 立即中断并断开连接；
+///   2) 超过 STREAM_IDLE_TIMEOUT 没有解析出任何有效事件 → 判定模型/网络卡死，
+///      返回错误交给 failover（只有 keep-alive 注释帧、模型不吐字同样算卡死）；
+///   3) 超过 STREAM_TURN_LIMIT 的单轮总时长 → 强制收尾，避免无限等待。
+/// 静默超过 STREAM_SILENT_HINT 时会推送 Waiting 事件，让界面显示「已等待 Ns」而不是干转圈。
+async fn read_sse_events<F>(
+    mut resp: reqwest::Response,
+    app: &AppHandle,
+    label: &str,
+    mut on_data: F,
+) -> Result<(), String>
 where
     F: FnMut(&str) -> Result<(), String>,
 {
     let mut buffer = String::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("读取流失败: {e}"))? {
-        buffer.push_str(&String::from_utf8_lossy(&chunk).replace("\r\n", "\n"));
-        while let Some(idx) = buffer.find("\n\n") {
-            let raw_event = buffer[..idx].to_string();
-            buffer.drain(..idx + 2);
-            if let Some(data) = extract_sse_data(&raw_event) {
-                on_data(&data)?;
+    let started = Instant::now();
+    // 以「最近一次解析出有效事件」为准，而不是「最近一次收到字节」：
+    // provider 只发 keep-alive 心跳时界面同样是卡住的，必须能被识别。
+    let mut last_payload = Instant::now();
+    let mut last_hint = Instant::now();
+
+    loop {
+        ensure_not_cancelled()?;
+
+        if last_payload.elapsed() >= STREAM_IDLE_TIMEOUT {
+            return Err(format!(
+                "{} 已连续 {} 秒没有任何输出，判定为卡死并触发轮转",
+                label,
+                STREAM_IDLE_TIMEOUT.as_secs()
+            ));
+        }
+        if started.elapsed() >= STREAM_TURN_LIMIT {
+            return Err(format!(
+                "{} 单轮已超过 {} 秒仍未结束，已中止本轮",
+                label,
+                STREAM_TURN_LIMIT.as_secs()
+            ));
+        }
+
+        match tokio::time::timeout(STREAM_POLL_INTERVAL, resp.chunk()).await {
+            Ok(Ok(Some(chunk))) => {
+                buffer.push_str(&String::from_utf8_lossy(&chunk).replace("\r\n", "\n"));
+                let mut saw_payload = false;
+                while let Some(idx) = buffer.find("\n\n") {
+                    let raw_event = buffer[..idx].to_string();
+                    buffer.drain(..idx + 2);
+                    if let Some(data) = extract_sse_data(&raw_event) {
+                        on_data(&data)?;
+                        saw_payload = true;
+                    }
+                }
+                if saw_payload {
+                    last_payload = Instant::now();
+                }
+            }
+            Ok(Ok(None)) => break,
+            Ok(Err(e)) => return Err(format!("读取流失败: {e}")),
+            Err(_) => {
+                // 轮询窗口内没有数据：检查取消/空闲，并周期性给界面一个等待提示。
+                ensure_not_cancelled()?;
+                let silent = last_payload.elapsed();
+                if silent >= STREAM_SILENT_HINT && last_hint.elapsed() >= STREAM_SILENT_HINT {
+                    last_hint = Instant::now();
+                    let _ = app.emit(
+                        "agent:event",
+                        AgentEvent::Waiting {
+                            label,
+                            seconds: silent.as_secs(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -1491,6 +1678,15 @@ fn extract_sse_data(raw_event: &str) -> Option<String> {
 enum AgentEvent<'a> {
     AssistantTrace {
         delta: &'a str,
+    },
+    /// 模型静默等待提示：前端显示「已等待 Ns（可停止）」而不是无反馈转圈。
+    Waiting {
+        label: &'a str,
+        seconds: u64,
+    },
+    /// 用户主动停止：本次任务已被取消，已产生的消息与图形保留。
+    Cancelled {
+        reason: &'a str,
     },
     Usage {
         usage: &'a ProviderTokenUsage,
@@ -1941,6 +2137,8 @@ pub async fn run_agent(
     session_objects: Vec<SessionObject>,
     model_selection: Option<ModelSelection>,
 ) -> Result<(), String> {
+    // 登记运行状态：前端「停止」按钮据此生效；离开函数时守卫自动复位。
+    let _run_guard = AgentRunGuard::start();
     let mut settings = crate::settings::load(&app)?;
     apply_model_selection(&mut settings, model_selection);
     let user_text = user_input.trim().to_string();
@@ -1958,8 +2156,9 @@ pub async fn run_agent(
 
     let tooling = tools::select_tooling_context(&user_text, &session_objects, settings.work_mode);
     let safety_context_scene = tools::safety_context_scene(&user_text);
-    let use_safety_context = settings.work_mode == crate::settings::WorkMode::SafetyDemoMode
-        || safety_context_scene.is_some();
+    // 工具集与安全知识卡必须同源：是否走安全上下文由 ToolingContext 决定，
+    // 避免出现「按安全请求处理（不给绘图工具）却又不注入安全知识卡」的自相矛盾状态。
+    let use_safety_context = tooling.safety_scoped;
 
     // 确定性任务分级：出图/规划/复核走强模型，纯问答走便宜模型。
     // 安全防护请求（需严格按知识卡出图/校核）强制走强模型，保证质量。
@@ -2058,6 +2257,15 @@ pub async fn run_agent(
     let mut undo_group_open = false;
     let mut last_executed_batch: Option<ExecutedBatch> = None;
     for _turn in 0..MAX_TURNS {
+        // 进入新一轮之前先看有没有「停止」请求：有就原地收尾，不再调用模型。
+        if cancel_requested() {
+            if undo_group_open {
+                let _ = end_undo_group();
+            }
+            let reason = "用户已停止本次任务";
+            let _ = app.emit("agent:event", AgentEvent::Cancelled { reason });
+            return Ok(());
+        }
         // failover：主模型失败时依次尝试备用模型，全部失败才报错。
         // 上一轮成功的 provider 移到链首，避免每轮重复打失败的主模型。
         let turn_plans = ordered_provider_chain(
@@ -2071,6 +2279,12 @@ pub async fn run_agent(
             Err(e) => {
                 if undo_group_open {
                     let _ = end_undo_group();
+                }
+                // 取消走正常收尾：前端清掉「思考中」状态，保留已产生的消息和图形。
+                if e == CANCEL_SENTINEL || cancel_requested() {
+                    let reason = "用户已停止本次任务";
+                    let _ = app.emit("agent:event", AgentEvent::Cancelled { reason });
+                    return Ok(());
                 }
                 let msg = redact(&e, &settings);
                 let _ = app.emit("agent:event", AgentEvent::Error { message: &msg });
@@ -2150,6 +2364,10 @@ pub async fn run_agent(
                 });
                 let mut batch_results: Vec<ToolResult> = Vec::new();
                 for call in &calls {
+                    // 已请求停止时不再执行后续工具，避免「停止后还在画图」。
+                    if cancel_requested() {
+                        break;
+                    }
                     let result = tools::dispatch_with_mode(call, settings.work_mode);
                     let _ = app.emit("agent:event", AgentEvent::ToolResult { result: &result });
                     msgs.push(MessageView::Tool {
@@ -2159,6 +2377,15 @@ pub async fn run_agent(
                         content: result.content.clone(),
                     });
                     batch_results.push(result);
+                }
+                // 工具执行期间收到停止：结束本轮并正常收尾（已执行的工具保持结果）。
+                if cancel_requested() {
+                    if undo_group_open {
+                        let _ = end_undo_group();
+                    }
+                    let reason = "用户已停止本次任务";
+                    let _ = app.emit("agent:event", AgentEvent::Cancelled { reason });
+                    return Ok(());
                 }
                 let has_mutating_tools = calls.iter().any(|call| is_mutating_tool(&call.name));
                 if has_mutating_tools {
@@ -2190,6 +2417,11 @@ pub async fn run_agent(
 
     if undo_group_open {
         let _ = end_undo_group();
+    }
+    if cancel_requested() {
+        let reason = "用户已停止本次任务";
+        let _ = app.emit("agent:event", AgentEvent::Cancelled { reason });
+        return Ok(());
     }
     let msg = format!("超出最大轮次 {MAX_TURNS}，循环已中止");
     let _ = app.emit("agent:event", AgentEvent::Error { message: &msg });

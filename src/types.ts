@@ -45,6 +45,8 @@ export type HistoryMessage =
 export type AgentEvent =
   | { kind: "assistant_trace"; delta: string }
   | { kind: "assistant_delta"; delta: string }
+  | { kind: "waiting"; label: string; seconds: number }
+  | { kind: "cancelled"; reason: string }
   | { kind: "usage"; usage: ProviderTokenUsage }
   | { kind: "model_route"; route: ModelRouteTelemetry }
   | { kind: "assistant"; text: string | null; tool_calls: ToolCall[] }
