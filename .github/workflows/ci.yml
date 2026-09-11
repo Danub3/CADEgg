@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend build and repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check patch whitespace
+        run: git diff --check
+
+      - name: Reject committed private keys
+        shell: bash
+        run: |
+          if git grep -n -E -- '-----BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY-----' -- ':!session-log/**'; then
+            echo 'Private key material must not be committed.' >&2
+            exit 1
+          fi
+
+  rust:
+    name: Rust tests
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Run locked tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
