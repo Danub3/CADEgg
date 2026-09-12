@@ -3,6 +3,7 @@ use tauri::Manager;
 mod benchmark;
 #[cfg(windows)]
 mod cad;
+mod evaluation;
 mod knowledge;
 mod llm;
 mod safety;
@@ -31,6 +32,7 @@ pub fn run() {
         benchmark::cancel_model_benchmark,
         benchmark::read_benchmark_results,
         benchmark::run_model_benchmark,
+        knowledge::get_scene_evidence,
         llm::run_agent,
         llm::cancel_agent,
         llm::agent_is_running,
@@ -48,6 +50,7 @@ pub fn run() {
         benchmark::cancel_model_benchmark,
         benchmark::read_benchmark_results,
         benchmark::run_model_benchmark,
+        knowledge::get_scene_evidence,
         llm::run_agent,
         llm::cancel_agent,
         llm::agent_is_running,

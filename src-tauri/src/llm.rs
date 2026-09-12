@@ -2127,6 +2127,22 @@ fn end_undo_group() -> Result<(), String> {
     Err("UNDO GROUP 仅在 Windows 上可用".to_string())
 }
 
+fn safety_evidence_context_or_refusal(
+    user_text: &str,
+    fallback_scene: Option<&str>,
+) -> Result<String, String> {
+    let matched_scenes = crate::knowledge::search_scenes(user_text);
+    let evidence_scene = matched_scenes
+        .first()
+        .map(|scene| scene.as_str())
+        .or(fallback_scene);
+    match evidence_scene {
+        Some(scene) => crate::knowledge::render_verified_scene_context(scene)
+            .map_err(|evidence| evidence.refusal_message()),
+        None => Err(crate::knowledge::unmatched_safety_refusal()),
+    }
+}
+
 // ---------------- Tauri command: run_agent ----------------
 
 #[tauri::command]
@@ -2159,6 +2175,26 @@ pub async fn run_agent(
     // 工具集与安全知识卡必须同源：是否走安全上下文由 ToolingContext 决定，
     // 避免出现「按安全请求处理（不给绘图工具）却又不注入安全知识卡」的自相矛盾状态。
     let use_safety_context = tooling.safety_scoped;
+    let verified_safety_context = if use_safety_context {
+        // 安全结论先过本地证据门，再决定是否允许调用模型。知识卡缺失、引用失配或
+        // 原文不可解析时直接拒答，避免模型用记忆补全规范条款。
+        match safety_evidence_context_or_refusal(&user_text, safety_context_scene) {
+            Ok(context) => Some(context),
+            Err(response) => {
+                let _ = app.emit(
+                    "agent:event",
+                    AgentEvent::Assistant {
+                        text: Some(&response),
+                        tool_calls: &[],
+                    },
+                );
+                let _ = app.emit("agent:event", AgentEvent::Done { text: &response });
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
 
     // 确定性任务分级：出图/规划/复核走强模型，纯问答走便宜模型。
     // 安全防护请求（需严格按知识卡出图/校核）强制走强模型，保证质量。
@@ -2212,20 +2248,11 @@ pub async fn run_agent(
         });
     }
     if use_safety_context {
-        // 闭环第 3 步：按用户输入关键词检索知识卡（search_scenes 多卡命中），
-        // 让模型基于受控规则出图/追问，而非自由发挥。
-        // 兜底：若关键词检索未命中，回退到场景注册表命中的 scene，不跨场景回退到电梯井口。
-        let scenes = crate::knowledge::search_scenes(&user_text);
-        let scene = scenes.first().map(|s| s.as_str()).or(safety_context_scene);
-        if let Some(scene) = scene {
-            if let Some(card) = crate::knowledge::render_scene_context(scene) {
-                msgs.push(MessageView::User {
-                    content: format!("系统提醒（标准图册知识卡，出图/追问须遵守）：\n{card}"),
-                });
-            }
-        } else {
+        if let Some(context) = verified_safety_context {
             msgs.push(MessageView::User {
-                content: "系统提醒（安全模式）：当前未命中具体知识卡。先澄清作业部位、风险、施工阶段、现场尺寸和防护目标；不得把电梯井口防护门规则套用于其他场景。涉及专项方案、结构计算或专业审查时必须提示人工审核。".to_string(),
+                content: format!(
+                    "系统提醒（已通过本地证据门控的标准图册知识卡，出图/追问须遵守）：\n{context}"
+                ),
             });
         }
         if let Some(prompt) = tools::safety_clarification_prompt(&user_text) {
@@ -2717,5 +2744,35 @@ mod tests {
     fn openai_usage_all_missing_returns_none() {
         let parsed = json!({ "unknown_field": 1 });
         assert!(parse_openai_usage(Some(&parsed), "GLM", "glm-4.5").is_none());
+    }
+
+    #[test]
+    fn verified_safety_scene_builds_evidence_context() {
+        let context = safety_evidence_context_or_refusal(
+            "画一个电梯井口防护门，井口宽 2000 高 1800",
+            Some("elevator_shaft_protection"),
+        )
+        .unwrap();
+        assert!(context.contains("cadegg-evidence/v1"));
+        assert!(context.contains("\"status\": \"verified\""));
+        assert!(context.contains("jgj-80-2016-4.2.2"));
+    }
+
+    #[test]
+    fn registered_opening_cover_scene_uses_verified_evidence_before_model_routing() {
+        let context =
+            safety_evidence_context_or_refusal("楼板洞口盖板怎么做", Some("opening_cover"))
+                .unwrap();
+        assert!(context.contains("opening_cover"));
+        assert!(context.contains("cadegg-evidence/v1"));
+        assert!(context.contains("\"status\": \"verified\""));
+    }
+
+    #[test]
+    fn unmatched_safety_topic_is_refused_without_fabricated_citation() {
+        let refusal =
+            safety_evidence_context_or_refusal("脚手架安全防护怎么设置", None).unwrap_err();
+        assert!(refusal.contains("未命中已核验"));
+        assert!(refusal.contains("专业人员"));
     }
 }

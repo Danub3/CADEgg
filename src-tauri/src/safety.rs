@@ -7,6 +7,10 @@ pub const DOOR_WIDTH_NARROW_M: f64 = 1.5;
 pub const DOOR_WIDTH_WIDE_M: f64 = 2.1;
 pub const DOOR_WIDTH_THRESHOLD_MM: f64 = 1800.0;
 
+pub const OPENING_COVER_MIN_SHORT_SIDE_MM: f64 = 25.0;
+pub const OPENING_COVER_GUARDRAIL_THRESHOLD_MM: f64 = 1500.0;
+pub const OPENING_COVER_GUARDRAIL_HEIGHT_MM: f64 = 1200.0;
+
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidationSeverity {
@@ -360,6 +364,208 @@ pub fn validate_elevator_shaft_protection(
 
 pub fn validation_to_pretty_json(validation: &ElevatorShaftValidation) -> Result<String, String> {
     serde_json::to_string_pretty(validation).map_err(|e| format!("序列化校核结果失败: {e}"))
+}
+
+// ── 楼板/屋面洞口防护（JGJ 80-2016 4.2.1）──
+
+#[derive(Serialize, Debug, Clone)]
+pub struct OpeningCoverSummary {
+    pub opening_short_side: f64,
+    pub opening_long_side: f64,
+    pub classification: &'static str,
+    pub protection_method: String,
+    pub guardrail_height: f64,
+    pub cover_fixed: bool,
+    pub safety_net: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct OpeningCoverMaterialTable {
+    pub cover_plate: bool,
+    pub fixing: bool,
+    pub guardrail: bool,
+    pub safety_net: bool,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct OpeningCoverValidation {
+    pub ok: bool,
+    pub issues: Vec<&'static str>,
+    pub warnings: Vec<&'static str>,
+    pub checks: Vec<ValidationCheck>,
+    pub material_table: OpeningCoverMaterialTable,
+    pub opening_summary: OpeningCoverSummary,
+}
+
+pub fn classify_opening_cover(short_side: f64) -> &'static str {
+    if short_side < OPENING_COVER_MIN_SHORT_SIDE_MM {
+        "below_25mm_manual_review"
+    } else if short_side <= 500.0 {
+        "25_to_500_cover"
+    } else if short_side < OPENING_COVER_GUARDRAIL_THRESHOLD_MM {
+        "500_to_1500_cover_or_guardrail"
+    } else {
+        "at_least_1500_guardrail_and_net"
+    }
+}
+
+pub fn validate_opening_cover(
+    opening_short_side: f64,
+    opening_long_side: f64,
+    protection_method: &str,
+    cover_fixed: bool,
+    guardrail_height: f64,
+    include_safety_net: bool,
+) -> OpeningCoverValidation {
+    let method = protection_method.trim().to_ascii_lowercase();
+    let classification = classify_opening_cover(opening_short_side);
+    let mut checks = Vec::new();
+    let mut issues = Vec::new();
+    let mut warnings = Vec::new();
+    let mut add_check =
+        |id: &'static str, label: &'static str, severity: ValidationSeverity, passed: bool| {
+            checks.push(ValidationCheck {
+                id,
+                label,
+                passed,
+                severity,
+            });
+            if !passed {
+                match severity {
+                    ValidationSeverity::Mandatory => issues.push(label),
+                    ValidationSeverity::Recommended | ValidationSeverity::Unverified => {
+                        warnings.push(label)
+                    }
+                }
+            }
+        };
+
+    let dimensions_valid = opening_short_side.is_finite()
+        && opening_long_side.is_finite()
+        && opening_short_side > 0.0
+        && opening_long_side >= opening_short_side;
+    add_check(
+        "opening_dimensions_valid",
+        "洞口短边、长边已提供且为正数（长边不小于短边）",
+        ValidationSeverity::Mandatory,
+        dimensions_valid,
+    );
+    add_check(
+        "short_side_in_scope",
+        "洞口短边不小于25mm，尺寸分级可复核",
+        ValidationSeverity::Mandatory,
+        opening_short_side >= OPENING_COVER_MIN_SHORT_SIDE_MM,
+    );
+
+    let method_valid = matches!(
+        method.as_str(),
+        "cover_plate" | "guardrail" | "guardrail_and_net"
+    );
+    add_check(
+        "protection_method_valid",
+        "防护方案为 cover_plate、guardrail 或 guardrail_and_net",
+        ValidationSeverity::Mandatory,
+        method_valid,
+    );
+
+    let cover_method = method == "cover_plate";
+    let guardrail_method = method == "guardrail" || method == "guardrail_and_net";
+    let large_opening = opening_short_side >= OPENING_COVER_GUARDRAIL_THRESHOLD_MM;
+    add_check(
+        "small_opening_uses_fixed_cover",
+        "短边25mm～500mm时必须采用固定盖板",
+        ValidationSeverity::Mandatory,
+        opening_short_side < 25.0 || (opening_short_side > 500.0) || (cover_method && cover_fixed),
+    );
+    add_check(
+        "medium_opening_method_matches",
+        "短边500mm～1500mm时应采用盖板或防护栏杆",
+        ValidationSeverity::Mandatory,
+        opening_short_side <= 500.0 || large_opening || (cover_method || method == "guardrail"),
+    );
+    add_check(
+        "large_opening_uses_guardrail_and_net",
+        "短边不小于1500mm时必须采用防护栏杆并以安全平网封闭",
+        ValidationSeverity::Mandatory,
+        !large_opening || method == "guardrail_and_net",
+    );
+    add_check(
+        "cover_is_fixed",
+        "盖板已记录固定牢固",
+        ValidationSeverity::Mandatory,
+        !cover_method || cover_fixed,
+    );
+    add_check(
+        "guardrail_height_valid",
+        "采用防护栏杆时高度不小于1.2m",
+        ValidationSeverity::Mandatory,
+        !guardrail_method
+            || (guardrail_height.is_finite()
+                && guardrail_height >= OPENING_COVER_GUARDRAIL_HEIGHT_MM - 0.5),
+    );
+    add_check(
+        "safety_net_present",
+        "短边不小于1500mm时已配置安全平网",
+        ValidationSeverity::Mandatory,
+        !large_opening || include_safety_net,
+    );
+    add_check(
+        "dimension_note_recommended",
+        "图面应标注短边、长边和固定/封闭做法",
+        ValidationSeverity::Recommended,
+        dimensions_valid,
+    );
+
+    OpeningCoverValidation {
+        ok: issues.is_empty(),
+        issues,
+        warnings,
+        checks,
+        material_table: OpeningCoverMaterialTable {
+            cover_plate: cover_method,
+            fixing: cover_method && cover_fixed,
+            guardrail: guardrail_method,
+            safety_net: include_safety_net,
+        },
+        opening_summary: OpeningCoverSummary {
+            opening_short_side,
+            opening_long_side,
+            classification,
+            protection_method: method,
+            guardrail_height,
+            cover_fixed,
+            safety_net: include_safety_net,
+        },
+    }
+}
+
+pub fn missing_opening_cover_params(user_input: &str) -> Vec<&'static str> {
+    let text = user_input.to_lowercase();
+    let wants_draw = contains_any(&text, &["画", "绘制", "生成", "做", "出图", "创建", "加"]);
+    if !wants_draw {
+        return Vec::new();
+    }
+    let has_short = contains_any(&text, &["opening_short_side", "短边", "洞口短边"]);
+    let has_long = contains_any(&text, &["opening_long_side", "长边", "洞口长边"]);
+    let mut missing = Vec::new();
+    if !has_short {
+        missing.push("洞口短边");
+    }
+    if !has_long {
+        missing.push("洞口长边");
+    }
+    missing
+}
+
+pub fn opening_cover_clarification_prompt(user_input: &str) -> Option<String> {
+    let missing = missing_opening_cover_params(user_input);
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "请补充楼板/屋面洞口防护的{}。短边25～500mm采用固定盖板，500～1500mm采用盖板或防护栏杆，短边≥1500mm采用1.2m防护栏杆并以安全平网封闭；电梯井口请改走专用防护门场景。",
+        missing.join("、")
+    ))
 }
 
 // ── 电梯井内安全平网（JGJ 80-2016 4.2.3）──
@@ -965,6 +1171,51 @@ mod tests {
         let v = validate_edge_guardrail(3000.0, 1200.0, 1500.0, 180.0, false);
         assert!(v.ok, "缺密目网只是推荐项提醒，不应判失败");
         assert!(v.warnings.iter().any(|w| w.contains("密目")));
+    }
+
+    #[test]
+    fn opening_cover_classification_matches_short_side_rules() {
+        assert_eq!(classify_opening_cover(100.0), "25_to_500_cover");
+        assert_eq!(
+            classify_opening_cover(800.0),
+            "500_to_1500_cover_or_guardrail"
+        );
+        assert_eq!(
+            classify_opening_cover(1500.0),
+            "at_least_1500_guardrail_and_net"
+        );
+        assert_eq!(classify_opening_cover(20.0), "below_25mm_manual_review");
+    }
+
+    #[test]
+    fn opening_cover_small_fixed_cover_passes() {
+        let v = validate_opening_cover(400.0, 800.0, "cover_plate", true, 0.0, false);
+        assert!(v.ok);
+        assert_eq!(v.opening_summary.classification, "25_to_500_cover");
+    }
+
+    #[test]
+    fn opening_cover_large_requires_guardrail_and_net() {
+        let v = validate_opening_cover(1500.0, 2400.0, "cover_plate", true, 0.0, false);
+        assert!(!v.ok);
+        assert!(v
+            .issues
+            .iter()
+            .any(|issue| issue.contains("防护栏杆并以安全平网")));
+        let v = validate_opening_cover(1500.0, 2400.0, "guardrail_and_net", false, 1200.0, true);
+        assert!(v.ok);
+    }
+
+    #[test]
+    fn opening_cover_missing_params_only_for_draw_requests() {
+        assert_eq!(
+            missing_opening_cover_params("洞口防护怎么分级"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            missing_opening_cover_params("画一个楼板洞口盖板"),
+            vec!["洞口短边", "洞口长边"]
+        );
     }
 
     #[test]

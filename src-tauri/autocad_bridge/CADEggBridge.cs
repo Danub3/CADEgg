@@ -22,7 +22,7 @@ namespace CADEggBridge
     public sealed class BridgeEntry : IExtensionApplication
     {
         private const int BridgePort = 50471;
-        private const string BridgeVersion = "0.3.8.0";
+        private const string BridgeVersion = "0.3.11.0";
         private const int ApplicationContextTimeoutMs = 15000;
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
@@ -34,10 +34,19 @@ namespace CADEggBridge
         private static TcpListener _listener;
         private static Thread _listenerThread;
         private static volatile bool _running;
+        private static bool _plainAutoCadHost;
         private static Dispatcher _applicationDispatcher;
 
         public void Initialize()
         {
+            var product = ReadProductName();
+            _plainAutoCadHost = IsPlainAutoCadProduct(product);
+            if (!_plainAutoCadHost)
+            {
+                Log("Bridge disabled for unsupported Autodesk host: " + product);
+                return;
+            }
+
             _applicationDispatcher = ResolveApplicationDispatcher();
             Log(
                 "Initialize called on thread "
@@ -64,7 +73,9 @@ namespace CADEggBridge
             }
 
             doc.Editor.WriteMessage(
-                "\nCADEgg bridge active. Port={0}, Version={1}",
+                _plainAutoCadHost
+                    ? "\nCADEgg bridge active. Port={0}, Version={1}"
+                    : "\nCADEgg bridge disabled for this Autodesk product. Port={0}, Version={1}",
                 BridgePort,
                 BridgeVersion
             );
@@ -207,7 +218,9 @@ namespace CADEggBridge
                 var data = RunInApplicationContext(
                     delegate
                     {
-                        return Dispatch(request);
+                        var result = Dispatch(request);
+                        result["product_name"] = ReadProductName();
+                        return result;
                     },
                     command
                 );
@@ -373,8 +386,52 @@ namespace CADEggBridge
             {
                 { "bridge_version", BridgeVersion },
                 { "document_name", doc != null ? doc.Name : string.Empty },
-                { "acad_version", Convert.ToString(AcApp.GetSystemVariable("ACADVER")) ?? string.Empty }
+                { "acad_version", Convert.ToString(AcApp.GetSystemVariable("ACADVER")) ?? string.Empty },
+                { "product_name", ReadProductName() }
             };
+        }
+
+        private static string ReadProductName()
+        {
+            try
+            {
+                return Convert.ToString(AcApp.GetSystemVariable("PRODUCT")) ?? string.Empty;
+            }
+            catch (System.Exception ex)
+            {
+                Log("Unable to read host PRODUCT variable: " + ex.Message);
+                return string.Empty;
+            }
+        }
+
+        private static bool IsPlainAutoCadProduct(string product)
+        {
+            if (string.IsNullOrWhiteSpace(product)
+                || product.IndexOf("AutoCAD", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return false;
+            }
+
+            var verticalProducts = new[]
+            {
+                "Civil 3D",
+                "Map 3D",
+                "Architecture",
+                "Mechanical",
+                "Electrical",
+                "MEP",
+                "Plant 3D",
+                "Advance Steel"
+            };
+            foreach (var verticalProduct in verticalProducts)
+            {
+                if (product.IndexOf(verticalProduct, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static Dictionary<string, object> DrawLine(Dictionary<string, JsonElement> args)

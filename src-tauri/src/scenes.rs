@@ -127,8 +127,12 @@ const SCENES: &[SafetySceneSpec] = &[
             "盖板",
         ],
         required_params: &["opening_short_side", "opening_long_side"],
-        mandatory_rules: &[],
-        recommended_rules: &["classify_by_short_side", "cover_or_guardrail_by_size"],
+        mandatory_rules: &[
+            "short_side_25_to_500_requires_fixed_cover",
+            "short_side_500_to_1500_cover_or_guardrail",
+            "short_side_at_least_1500_requires_guardrail_and_net",
+        ],
+        recommended_rules: &["cover_plate_load_bearing", "dimension_and_fixing_note"],
         prohibited_rules: &["do_not_route_to_elevator_shaft_protection"],
         cad_components: &[
             "opening_outline",
@@ -137,11 +141,11 @@ const SCENES: &[SafetySceneSpec] = &[
             "fixing_note",
         ],
         sources: &["jgj-80-2016 4.2.1", "mohurd-2019-90 2.7.1"],
-        draw_tool: None,
-        validate_tool: None,
-        knowledge_card_ready: false,
-        deterministic_draw_ready: false,
-        deterministic_validate_ready: false,
+        draw_tool: Some("draw_opening_cover"),
+        validate_tool: Some("validate_opening_cover"),
+        knowledge_card_ready: true,
+        deterministic_draw_ready: true,
+        deterministic_validate_ready: true,
         requires_approval: false,
     },
     SafetySceneSpec {
@@ -242,6 +246,42 @@ fn score_scene(text: &str, scene: &SafetySceneSpec) -> usize {
 
 pub fn match_safety_scene(user_input: &str) -> Option<&'static SafetySceneSpec> {
     let text = user_input.to_lowercase();
+    // Disambiguate overlapping construction vocabulary before the generic
+    // keyword score: "井道/井内平网" is not an elevator-shaft door, and a
+    // literal floor/roof opening should not be routed to a generic edge rail.
+    if (text.contains("洞口")
+        || text.contains("盖板")
+        || text.contains("管井")
+        || text.contains("采光井"))
+        && !text.contains("井道")
+        && !text.contains("电梯井")
+        && !text.contains("不是洞口")
+        && !text.contains("不能用电梯井口")
+    {
+        return scene_by_id("opening_cover");
+    }
+    if (text.contains("电梯井口") || text.contains("防护门") || text.contains("井口防护"))
+        && !text.contains("不能用电梯井口")
+        && !text.contains("不要画防护门")
+        && !text.contains("不是电梯井口")
+    {
+        return scene_by_id("elevator_shaft_protection");
+    }
+    if text.contains("安全平网")
+        || text.contains("井内平网")
+        || text.contains("井道平网")
+        || text.contains("电梯井平网")
+        || text.contains("电梯井安全网")
+    {
+        if text.contains("不要调用电梯井平网") {
+            return scene_by_id("edge_guardrail");
+        }
+        return scene_by_id("elevator_shaft_safety_net");
+    }
+    if text.contains("临边") && !text.contains("不是临边") && !text.contains("不要路由到普通临边")
+    {
+        return scene_by_id("edge_guardrail");
+    }
     all_safety_scenes()
         .iter()
         .enumerate()
@@ -348,12 +388,13 @@ mod tests {
             .filter(|scene| scene.is_full_loop_ready())
             .map(|scene| scene.scene)
             .collect();
-        // 顺序按注册表顺序：防护门、临边栏杆、井内平网
+        // 顺序按注册表顺序：防护门、临边栏杆、洞口盖板、井内平网
         assert_eq!(
             ready,
             vec![
                 "elevator_shaft_protection",
                 "edge_guardrail",
+                "opening_cover",
                 "elevator_shaft_safety_net"
             ]
         );

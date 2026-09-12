@@ -17,10 +17,10 @@ Current focus: deterministic, traceable safety-protection drawings rather than g
 | Area | Status | Notes |
 |---|---|---|
 | Safety drawing loop | Production demo ready | Three deterministic safety scenes can draw, validate, and inspect the resulting model space. |
-| AutoCAD integration | Local Bridge first, COM fallback | The C# AutoCAD Bridge listens on `127.0.0.1:50471`; version `0.3.8.0` marshals drawing work onto AutoCAD's UI dispatcher. |
+| AutoCAD integration | Pure AutoCAD only | Bridge `0.3.11.0` listens on `127.0.0.1:50471` only inside pure AutoCAD, verifies the host product, and rejects Civil 3D/other vertical products; COM is a fallback for pure AutoCAD. |
 | Model providers | Domestic providers only | The active user-facing providers are GLM, DeepSeek, Qwen, and Kimi through OpenAI-compatible chat/tool APIs. Gemini and Claude are not part of the current route. |
-| Knowledge base | Local, versioned JSON cards | `data/atlas/` stores agent-facing conclusions; `data/sources/` stores source excerpts and citations. |
-| Verification baseline | Passing | Last recorded baseline: `npm.cmd run build` passed, Rust unit suite `92 passed / 0 failed / 10 ignored`, AutoCAD smoke suite `4 passed / 0 failed` when run serially. |
+| Knowledge base | Local, versioned JSON cards | `data/atlas/` stores agent-facing conclusions; `data/sources/` stores source excerpts and citations. Safety requests pass a local citation-integrity gate before any model call. |
+| Verification baseline | Passing | Last recorded baseline: `npm.cmd run build` passed, Rust unit suite `108 passed / 0 failed / 10 ignored`, AutoCAD smoke suite `4 passed / 0 failed` when run serially. |
 
 ### What CADEgg Does
 
@@ -42,6 +42,7 @@ CADEgg implements a closed loop for construction-safety drawings:
 | Full-loop scenes | Elevator shaft protection door, elevator shaft safety net, and edge guardrail can all draw, validate, and run `modelspace_snapshot`. | `draw_*`, `validate_*`, knowledge cards |
 | Registered scenes | Opening cover, stair guard, and safety passage shed are registered with boundaries, keywords, and required parameters, but are not yet deterministic draw/validate scenes. | Scene registry only |
 | Missing parameters | Drawing requests that lack critical site dimensions are routed to clarification instead of fabricated values. | `safety_missing_params`, scene-specific prompts |
+| Evidence gate | Produces `cadegg-evidence/v1` objects and verifies card version, source version, excerpt, section, page, and raw text. Missing or inconsistent evidence is refused before a model/API call. | `src-tauri/src/knowledge.rs`, `data/schema/evidence_bundle.schema.json` |
 | Rule validation | Mandatory rules become `issues`; recommended rules become `warnings`; outputs are structured JSON for the UI and exported logs. | `src-tauri/src/safety.rs` |
 | CAD tools | Basic drawing, semantic geometry, safety components, text, editing by handle, selection import, inspection, and model-space snapshots. | Single catalog in `src-tauri/src/tools.rs` |
 | Session objects | Created or imported CAD handles are tracked so later instructions can say "that object" and resolve to handles. | Frontend object table plus `sync_session_objects` |
@@ -113,7 +114,7 @@ Rust backend
         |
         | JSON over localhost
         v
-C# AutoCAD Bridge 0.3.8.0
+C# AutoCAD Bridge 0.3.11.0 (pure AutoCAD host only)
         |
         v
 AutoCAD model space entities
@@ -178,16 +179,33 @@ Real AutoCAD smoke tests are ignored by default. Run them serially because they 
 cargo test --manifest-path src-tauri\Cargo.toml smoke_test_round_trip -- --ignored --nocapture --test-threads=1
 ```
 
+The evidence gate has a network-free, AutoCAD-free walkthrough in
+`workflows/evidence_gate_offline_demo.md`.
+
+The versioned safety-scene evaluation set is in
+`data/evals/safety_scene_eval_v1.json`. It contains 60 cases with the required
+normal/boundary/adversarial/noise split and a deterministic offline report:
+
+```powershell
+cargo.exe test --manifest-path src-tauri\Cargo.toml evaluation::tests::offline_eval_report_is_versioned_and_balanced -- --exact --nocapture
+```
+
+The report includes scene recall/precision, route accuracy, tool-call validity,
+validator correctness, false-negative/false-positive rates, and a confusion
+matrix. It does not call a model or AutoCAD and must not be represented as
+online model accuracy.
+
 ### Extending a Safety Scene
 
 1. Add or update source excerpts in `data/sources/`.
 2. Add a versioned knowledge card in `data/atlas/`.
 3. Register keywords, required parameters, rule tiers, and readiness flags in `scenes.rs`.
 4. Add the built-in card fallback in `knowledge.rs`.
-5. Implement deterministic validation in `safety.rs`.
-6. Implement CAD drawing in `cad.rs` with parameter checks before AutoCAD calls.
-7. Add tool schemas and dispatch entries in `tools.rs`.
-8. Add frontend summary parsing and display in `types.ts` / `App.tsx`, then run tests and serial AutoCAD smoke checks.
+5. Verify that `get_scene_evidence` returns `status=verified`; unresolved citations must remain refused.
+6. Implement deterministic validation in `safety.rs`.
+7. Implement CAD drawing in `cad.rs` with parameter checks before AutoCAD calls.
+8. Add tool schemas and dispatch entries in `tools.rs`.
+9. Add frontend summary parsing and display in `types.ts` / `App.tsx`, then run tests and serial AutoCAD smoke checks.
 
 ---
 
@@ -204,10 +222,10 @@ CADEgg 是一个面向施工安全防护图纸的 AutoCAD 智能绘图 Agent。�
 | 模块 | 状态 | 说明 |
 |---|---|---|
 | 场景闭环 | 已可演示 | 电梯井口防护门、电梯井内安全平网、普通临边防护栏杆三类场景已具备确定性出图、校核和图面快照。 |
-| CAD 连接 | Bridge 优先 | C# AutoCAD Bridge 监听 `127.0.0.1:50471`，当前版本 `0.3.8.0`，绘图事务调度到 AutoCAD UI Dispatcher，COM 作为回退/辅助通道。 |
+| CAD 连接 | 仅纯 AutoCAD | C# AutoCAD Bridge `0.3.11.0` 只会在纯 AutoCAD 宿主内监听 `127.0.0.1:50471`，并校验宿主产品身份；Civil 3D 等垂直产品中的 Bridge 保持停用，COM 仅作为纯 AutoCAD 回退通道。 |
 | 模型路线 | 国产模型 | 当前用户可见、后端实际路由的供应商为智谱 GLM、DeepSeek、通义千问、Kimi；Gemini 和 Claude 已不属于当前可用路线。 |
-| 知识库 | 本地 JSON | `data/atlas/` 保存面向 Agent 的知识卡，`data/sources/` 保存规范摘录和引用出处；运行时可扫描磁盘并带内置兜底。 |
-| 验证基线 | 已记录 | 最近记录：`npm.cmd run build` 通过；Rust 单元测试 `92 passed / 0 failed / 10 ignored`；真实 AutoCAD 串行 smoke `4 passed / 0 failed`。 |
+| 知识库 | 本地 JSON | `data/atlas/` 保存面向 Agent 的知识卡，`data/sources/` 保存规范摘录和引用出处；安全请求在调用模型前必须通过本地引用完整性门控。 |
+| 验证基线 | 已记录 | 最近记录：`npm.cmd run build` 通过；Rust 单元测试 `108 passed / 0 failed / 10 ignored`；真实 AutoCAD 串行 smoke `4 passed / 0 failed`。 |
 
 ### 核心能力
 
@@ -216,6 +234,7 @@ CADEgg 是一个面向施工安全防护图纸的 AutoCAD 智能绘图 Agent。�
 | 场景 | 用注册表识别施工安全场景，避免把临边、井口、井内平网等相近场景互相误用。 | `src-tauri/src/scenes.rs` |
 | 出图 | 三个闭环场景可生成真实 AutoCAD 图元，并包含尺寸、标注、材料表和构造示意。 | `src-tauri/src/cad.rs` |
 | 校核 | 强制项进入 `issues`，推荐项进入 `warnings`，结果以结构化 JSON 返回前端和导出记录。 | `src-tauri/src/safety.rs` |
+| 证据门控 | 生成 `cadegg-evidence/v1` 对象，核对知识卡版本、来源版本、摘录、条款、页码和原文；缺失或不一致时在模型/API 调用前拒答。 | `src-tauri/src/knowledge.rs`、`data/schema/evidence_bundle.schema.json` |
 | 缺参 | 缺少现场实测关键尺寸时先追问，不自行编造井口宽高、井道尺寸或临边长度。 | `safety_missing_params` |
 | 工具 | 统一工具目录覆盖基础绘制、语义几何、安全构件、文字标注、按 handle 编辑、选择导入和图面快照。 | `src-tauri/src/tools.rs` |
 | 对象 | 记录创建或导入的 CAD handle，支持后续用“刚才那个对象”“选中的线”等表达继续编辑。 | `sessionObjects.ts` |
@@ -232,7 +251,7 @@ CADEgg 是一个面向施工安全防护图纸的 AutoCAD 智能绘图 Agent。�
 | 电梯井口防护门 | 完整闭环 | 防护门高度不小于 `1500mm`，门底间隙不大于 `50mm`，必须设置踢脚板；支持上翻式 `flip_up` 和三件套式 `three_piece`；支持临时拆除、恢复、责任人、替代防护和验收状态等施工生命周期校核。 |
 | 电梯井内安全平网 | 完整闭环 | 依据 JGJ 80-2016 4.2.3，每隔 2 层且不大于 `10m` 加设一道安全平网，施工层上部设置隔离防护；井道尺寸必须为正；“网体与井壁空隙 `<= 25mm`”当前作为推荐项，等待进一步出处核实。 |
 | 普通临边防护栏杆 | 完整闭环 | 上杆高度不小于 `1200mm`，立杆间距不大于 `2000mm`，挡脚板高度不小于 `180mm`，下杆位于上杆和挡脚板之间；密目安全网作为推荐做法。 |
-| 楼板/屋面洞口防护 | 已登记 | 已有场景关键词、必填参数和边界描述；确定性出图和校核尚未开放，不会借用电梯井口工具替代。 |
+| 楼板/屋面洞口防护 | 完整闭环 | 按短边 `25~500mm` 固定盖板、`500~1500mm` 盖板或栏杆、`>=1500mm` 栏杆+安全平网分级；提供确定性校核、平面出图和证据门控；不会借用电梯井口工具替代。 |
 | 楼梯口/梯段边防护 | 已登记 | 已有场景关键词、必填参数和边界描述；确定性出图和校核尚未开放。 |
 | 安全通道/防护棚 | 已登记 | 已有场景关键词、必填参数和边界描述；确定性出图和校核尚未开放。 |
 
@@ -263,7 +282,7 @@ CADEgg 是一个面向施工安全防护图纸的 AutoCAD 智能绘图 Agent。�
 | 模式 | 行为 |
 |---|---|
 | 通用 CAD 模式（默认，`competition_mode`） | 直线、圆、矩形、正多边形、楼梯等结构化工具全开；命中注册安全场景时仍走场景专用出图/校核工具。为保证可复现，禁用任意 LISP。 |
-| 安全场景模式（`safety_demo_mode`） | 施工安全话题只走已注册场景；未注册场景（如脚手架）只给知识卡与追问，不给绘图工具。非安全请求（画直线、画圆、双跑楼梯等）照常出图。 |
+| 安全场景模式（`safety_demo_mode`） | 施工安全话题只走已注册且证据通过的场景；无知识卡、引用不完整或未注册场景（如脚手架）在模型调用前拒答并转人工/官方渠道。非安全请求（画直线、画圆、双跑楼梯等）照常出图。 |
 
 关键点：安全约束按「场景/话题」判定，不再按模式全局短路工具集。历史版本在安全场景模式下会把所有请求都降级成 `draw_text/zoom_extents/inspect_handle/modelspace_snapshot`，导致新会话示例里的直线、圆、楼梯都拿不到绘图工具（模型只能回答「没有 draw_circle」）。
 
@@ -297,7 +316,7 @@ Rust 后端
         |
         | localhost JSON
         v
-C# AutoCAD Bridge 0.3.8.0
+C# AutoCAD Bridge 0.3.11.0（仅纯 AutoCAD 宿主）
         |
         v
 AutoCAD 模型空间真实图元
@@ -319,7 +338,7 @@ AutoCAD 模型空间真实图元
 ### 环境要求
 
 - Windows
-- AutoCAD，需支持 .NET 插件和 COM 自动化
+- 纯 AutoCAD，需支持 .NET 插件和 COM 自动化；Civil 3D、Map 3D、Architecture、Mechanical 等垂直产品当前不在适配范围内
 - Node.js 与 npm
 - Rust 工具链与 Cargo
 - 至少一个国产模型供应商 API Key：智谱 GLM、DeepSeek、通义千问或 Kimi
@@ -361,6 +380,8 @@ cargo test --manifest-path src-tauri\Cargo.toml
 ```powershell
 cargo test --manifest-path src-tauri\Cargo.toml smoke_test_round_trip -- --ignored --nocapture --test-threads=1
 ```
+
+证据门控的纯离线演示步骤见 `workflows/evidence_gate_offline_demo.md`，不需要网络、模型 API 或 AutoCAD。
 
 ### 新增安全场景模板
 

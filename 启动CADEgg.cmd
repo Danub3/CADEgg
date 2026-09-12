@@ -40,47 +40,37 @@ echo AutoCAD preflight: %CAD_PREFLIGHT%
 echo Log file: %LOG%
 echo.
 
-call :ENSURE_AUTOCAD_READY
+call :ENSURE_PLAIN_AUTOCAD_READY
 
 if /I "%MODE%"=="dev" goto DEV_MODE
 goto APP_MODE
 
-:ENSURE_AUTOCAD_READY
+:ENSURE_PLAIN_AUTOCAD_READY
 if "%CAD_PREFLIGHT%"=="0" (
   echo [INFO] AutoCAD preflight skipped by command line.
   echo [INFO] AutoCAD preflight skipped by command line. >> "%LOG%"
   exit /b 0
 )
 
-tasklist /FI "IMAGENAME eq acad.exe" 2>nul | find /I "acad.exe" >nul
-if not errorlevel 1 (
-  echo [INFO] AutoCAD is already running.
-  echo [INFO] AutoCAD is already running. >> "%LOG%"
-  exit /b 0
-)
-
-echo [INFO] AutoCAD is not running. Trying to find and start it...
-echo [INFO] AutoCAD is not running. Trying to find and start it. >> "%LOG%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $progids=@('AutoCAD.Application'); for($m=30; $m -ge 20; $m--){ foreach($s in '.3','.2','.1',''){ $progids += ('AutoCAD.Application.' + $m + $s) } }; $found=$null; foreach($progid in $progids){ $clsidKey=Get-Item -LiteralPath ('Registry::HKEY_CLASSES_ROOT\' + $progid + '\CLSID') -ErrorAction SilentlyContinue; if(-not $clsidKey){ continue }; $clsid=[string]$clsidKey.GetValue(''); if(-not $clsid){ continue }; $serverKey=Get-Item -LiteralPath ('Registry::HKEY_CLASSES_ROOT\CLSID\' + $clsid + '\LocalServer32') -ErrorAction SilentlyContinue; if(-not $serverKey){ continue }; $cmd=[string]$serverKey.GetValue(''); if($cmd -match '\"([^\"]+\.exe)\"|([^\s]+\.exe)'){ $exe=$matches[1]; if(-not $exe){ $exe=$matches[2] }; $exe=[Environment]::ExpandEnvironmentVariables($exe); if(Test-Path -LiteralPath $exe){ $found=$exe; break } } }; if(-not $found){ $cmdPath=Get-Command acad.exe -ErrorAction SilentlyContinue; if($cmdPath){ $found=$cmdPath.Source } }; if(-not $found){ $roots=@(); foreach($drive in Get-PSDrive -PSProvider FileSystem){ foreach($rel in 'Program Files\Autodesk','Program Files (x86)\Autodesk','Autodesk'){ $p=Join-Path $drive.Root $rel; if(Test-Path -LiteralPath $p){ $roots += $p } } }; foreach($root in $roots){ $item=Get-ChildItem -LiteralPath $root -Filter acad.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; if($item){ $found=$item.FullName; break } } }; if(-not $found){ Write-Host '[WARN] AutoCAD executable not found.'; exit 2 }; Write-Host ('[INFO] Starting AutoCAD: ' + $found); Start-Process -FilePath $found | Out-Null; for($i=0; $i -lt 45; $i++){ Start-Sleep -Seconds 1; if(Get-Process acad -ErrorAction SilentlyContinue){ Write-Host '[INFO] AutoCAD process detected.'; exit 0 } }; Write-Host '[WARN] AutoCAD was started, but acad.exe was not detected within 45s.'; exit 3" >> "%LOG%" 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\scripts\ensure_plain_autocad.ps1" >> "%LOG%" 2>&1
 set "CAD_EXIT=%ERRORLEVEL%"
 if "%CAD_EXIT%"=="0" (
-  echo [INFO] AutoCAD started and detected.
-  echo [INFO] AutoCAD started and detected. >> "%LOG%"
+  echo [INFO] Pure AutoCAD is ready.
+  echo [INFO] Pure AutoCAD is ready. >> "%LOG%"
   exit /b 0
 )
 if "%CAD_EXIT%"=="2" (
-  echo [WARN] AutoCAD was not found in registry. CADEgg will still start, but Bridge stays unavailable until AutoCAD is opened.
-  echo [WARN] AutoCAD was not found in registry. >> "%LOG%"
+  echo [WARN] Pure AutoCAD was not found. CADEgg will start, but the Bridge stays unavailable.
+  echo [WARN] Pure AutoCAD was not found. >> "%LOG%"
   exit /b 0
 )
 if "%CAD_EXIT%"=="3" (
-  echo [WARN] AutoCAD start was requested but not detected within timeout. CADEgg will continue starting.
-  echo [WARN] AutoCAD start was requested but not detected within timeout. >> "%LOG%"
+  echo [WARN] Pure AutoCAD start timed out. CADEgg will continue starting.
+  echo [WARN] Pure AutoCAD start timed out. >> "%LOG%"
   exit /b 0
 )
-
-echo [WARN] AutoCAD preflight failed with code %CAD_EXIT%. CADEgg will continue starting.
-echo [WARN] AutoCAD preflight failed with code %CAD_EXIT%. >> "%LOG%"
+echo [WARN] Pure AutoCAD preflight failed with code %CAD_EXIT%. CADEgg will continue starting.
+echo [WARN] Pure AutoCAD preflight failed with code %CAD_EXIT%. >> "%LOG%"
 exit /b 0
 
 :APP_MODE
