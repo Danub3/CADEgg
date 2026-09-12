@@ -2262,21 +2262,15 @@ pub fn cad_draw_double_flight_stair(
     })
 }
 
-pub fn cad_draw_elevator_shaft_protection(
-    x: f64,
-    y: f64,
+fn validate_elevator_shaft_protection_draw_params(
     opening_width: f64,
     opening_height: f64,
     guard_height: f64,
     toe_board_height: f64,
     door_bottom_gap: f64,
-    include_warning_sign: bool,
-    include_material_table: bool,
     scale: f64,
     door_type: &str,
-) -> Result<String, String> {
-    // 门型：上翻式（Φ16 翻转轴）或三件套式（水平杆 + L 型卡固件，卡固于井道内侧）。
-    // 校验放在任何 CAD 调用之前，非法门型可直接单测。
+) -> Result<bool, String> {
     let is_three_piece = match door_type {
         "flip_up" => false,
         "three_piece" => true,
@@ -2302,6 +2296,32 @@ pub fn cad_draw_elevator_shaft_protection(
     if scale <= 0.0 {
         return Err(format!("scale 必须为正数，收到 {scale}"));
     }
+    Ok(is_three_piece)
+}
+
+pub fn cad_draw_elevator_shaft_protection(
+    x: f64,
+    y: f64,
+    opening_width: f64,
+    opening_height: f64,
+    guard_height: f64,
+    toe_board_height: f64,
+    door_bottom_gap: f64,
+    include_warning_sign: bool,
+    include_material_table: bool,
+    scale: f64,
+    door_type: &str,
+) -> Result<String, String> {
+    // 门型：上翻式（Φ16 翻转轴）或三件套式（水平杆 + L 型卡固件，卡固于井道内侧）。
+    let is_three_piece = validate_elevator_shaft_protection_draw_params(
+        opening_width,
+        opening_height,
+        guard_height,
+        toe_board_height,
+        door_bottom_gap,
+        scale,
+        door_type,
+    )?;
 
     // 直线坐标收集表：与 cmd_lines 并行维护，供 bridge 通道直接绘制。
     // 原因：直线若走 COM SendCommand，AutoCAD 忙时会被拒（0x80010001）导致整批 60s 超时；
@@ -2927,17 +2947,13 @@ pub fn cad_validate_elevator_shaft_protection(
     safety::validation_to_pretty_json(&validation)
 }
 
-pub fn cad_draw_elevator_shaft_safety_net(
-    x: f64,
-    y: f64,
+fn validate_elevator_shaft_safety_net_draw_params(
     shaft_width: f64,
     shaft_depth: f64,
     floor_height: f64,
     net_to_wall_gap: f64,
-    include_upper_isolation: bool,
-    include_dimensions: bool,
     scale: f64,
-) -> Result<String, String> {
+) -> Result<(), String> {
     if shaft_width <= 0.0 || shaft_depth <= 0.0 {
         return Err(format!(
             "shaft_width 和 shaft_depth 必须为正数，收到 {} x {}",
@@ -2953,6 +2969,27 @@ pub fn cad_draw_elevator_shaft_safety_net(
     if scale <= 0.0 {
         return Err(format!("scale 必须为正数，收到 {scale}"));
     }
+    Ok(())
+}
+
+pub fn cad_draw_elevator_shaft_safety_net(
+    x: f64,
+    y: f64,
+    shaft_width: f64,
+    shaft_depth: f64,
+    floor_height: f64,
+    net_to_wall_gap: f64,
+    include_upper_isolation: bool,
+    include_dimensions: bool,
+    scale: f64,
+) -> Result<String, String> {
+    validate_elevator_shaft_safety_net_draw_params(
+        shaft_width,
+        shaft_depth,
+        floor_height,
+        net_to_wall_gap,
+        scale,
+    )?;
 
     let mut line_list: Vec<[f64; 4]> = Vec::new();
     fn push_line(cmd: &mut String, lines: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
@@ -3286,17 +3323,13 @@ pub fn cad_draw_elevator_shaft_safety_net(
     ))
 }
 
-pub fn cad_draw_edge_guardrail(
-    x: f64,
-    y: f64,
+fn validate_edge_guardrail_draw_params(
     edge_length: f64,
     top_rail_height: f64,
     post_spacing: f64,
     toe_board_height: f64,
-    include_dense_mesh_net: bool,
-    include_dimensions: bool,
     scale: f64,
-) -> Result<String, String> {
+) -> Result<(), String> {
     if edge_length <= 0.0 {
         return Err(format!("edge_length 必须为正数，收到 {edge_length}"));
     }
@@ -3314,6 +3347,27 @@ pub fn cad_draw_edge_guardrail(
     if scale <= 0.0 {
         return Err(format!("scale 必须为正数，收到 {scale}"));
     }
+    Ok(())
+}
+
+pub fn cad_draw_edge_guardrail(
+    x: f64,
+    y: f64,
+    edge_length: f64,
+    top_rail_height: f64,
+    post_spacing: f64,
+    toe_board_height: f64,
+    include_dense_mesh_net: bool,
+    include_dimensions: bool,
+    scale: f64,
+) -> Result<String, String> {
+    validate_edge_guardrail_draw_params(
+        edge_length,
+        top_rail_height,
+        post_spacing,
+        toe_board_height,
+        scale,
+    )?;
 
     let mut line_list: Vec<[f64; 4]> = Vec::new();
     fn push_line(cmd: &mut String, lines: &mut Vec<[f64; 4]>, x1: f64, y1: f64, x2: f64, y2: f64) {
@@ -4649,16 +4703,302 @@ pub fn cad_smoke_test_edge_guardrail() -> Result<String, String> {
     ))
 }
 
+#[derive(Clone, Copy)]
+struct IsolatedSmokeLayout {
+    case_id: &'static str,
+    origin_x: f64,
+    origin_y: f64,
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+}
+
+fn snapshot_handles(snapshot: &str) -> BTreeSet<String> {
+    snapshot
+        .lines()
+        .filter_map(|line| line.split_once("handle=").map(|(_, rest)| rest))
+        .filter_map(|rest| {
+            let handle: String = rest
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric())
+                .collect();
+            (!handle.is_empty() && handle != "?").then_some(handle)
+        })
+        .collect()
+}
+
+fn parse_snapshot_bbox(snapshot: &str) -> Option<(f64, f64, f64, f64)> {
+    let line = snapshot
+        .lines()
+        .find(|line| line.contains("整体包围盒：X ["))?;
+    let numbers: Vec<f64> = line
+        .split(|ch: char| !(ch.is_ascii_digit() || matches!(ch, '-' | '+' | '.' | 'e' | 'E')))
+        .filter(|part| !part.is_empty() && *part != "+" && *part != "-")
+        .filter_map(|part| part.parse::<f64>().ok())
+        .collect();
+    (numbers.len() >= 4).then_some((numbers[0], numbers[1], numbers[2], numbers[3]))
+}
+
+fn isolated_smoke_region_is_clear(
+    layout: IsolatedSmokeLayout,
+    snapshot: &str,
+) -> Result<(), String> {
+    if let Some((min_x, max_x, min_y, max_y)) = parse_snapshot_bbox(snapshot) {
+        let overlaps = min_x <= layout.max_x
+            && max_x >= layout.min_x
+            && min_y <= layout.max_y
+            && max_y >= layout.min_y;
+        if overlaps {
+            return Err(format!(
+                "smoke case {} target region occupied: origin=({},{}), expected_bbox=[{}..{}]x[{}..{}], existing_bbox=[{}..{}]x[{}..{}]",
+                layout.case_id,
+                fmt_num(layout.origin_x),
+                fmt_num(layout.origin_y),
+                fmt_num(layout.min_x),
+                fmt_num(layout.max_x),
+                fmt_num(layout.min_y),
+                fmt_num(layout.max_y),
+                fmt_num(min_x),
+                fmt_num(max_x),
+                fmt_num(min_y),
+                fmt_num(max_y),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn wait_for_stable_modelspace_snapshot() -> Result<String, String> {
+    const REQUIRED_STABLE_SAMPLES: usize = 6;
+    const POLL: Duration = Duration::from_millis(500);
+    const TIMEOUT: Duration = Duration::from_secs(20);
+
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let mut previous: Option<BTreeSet<String>> = None;
+    let mut stable_samples = 0usize;
+    loop {
+        let latest = cad_modelspace_snapshot()?;
+        let handles = snapshot_handles(&latest);
+        if previous.as_ref() == Some(&handles) {
+            stable_samples += 1;
+        } else {
+            previous = Some(handles);
+            stable_samples = 1;
+        }
+        if stable_samples >= REQUIRED_STABLE_SAMPLES {
+            return Ok(latest);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "AutoCAD model space did not stabilize for {} consecutive samples within {:?}",
+                REQUIRED_STABLE_SAMPLES, TIMEOUT
+            ));
+        }
+        thread::sleep(POLL);
+    }
+}
+
+fn run_isolated_smoke_case<F>(layout: IsolatedSmokeLayout, operation: F) -> Result<String, String>
+where
+    F: FnOnce() -> Result<String, String>,
+{
+    let before = wait_for_stable_modelspace_snapshot()?;
+    isolated_smoke_region_is_clear(layout, &before)?;
+    let before_handles = snapshot_handles(&before);
+
+    let operation_result = operation();
+    let after = wait_for_stable_modelspace_snapshot();
+    let after_text = after.clone().unwrap_or_default();
+    let created: Vec<String> = snapshot_handles(&after_text)
+        .difference(&before_handles)
+        .cloned()
+        .collect();
+    let mut inspected = Vec::new();
+    let mut inspection_errors = Vec::new();
+    for handle in &created {
+        match cad_inspect_handle(handle) {
+            Ok(snapshot) => inspected.push(snapshot),
+            Err(error) => inspection_errors.push(format!("handle={handle}: {error}")),
+        }
+    }
+
+    let mut cleanup_errors = Vec::new();
+    for handle in created.iter().rev() {
+        if let Err(error) = cad_erase_handle(handle) {
+            cleanup_errors.push(format!("handle={handle}: {error}"));
+        }
+    }
+
+    let final_snapshot = wait_for_stable_modelspace_snapshot()?;
+    let residual: Vec<String> = snapshot_handles(&final_snapshot)
+        .intersection(&created.iter().cloned().collect())
+        .cloned()
+        .collect();
+    if !inspection_errors.is_empty() || !cleanup_errors.is_empty() || !residual.is_empty() {
+        return Err(format!(
+            "smoke case {} evidence/cleanup failed: inspection_errors={:?}, cleanup_errors={:?}, residual_handles={:?}",
+            layout.case_id, inspection_errors, cleanup_errors, residual
+        ));
+    }
+
+    let operation_text = operation_result?;
+    let after_snapshot = after.map_err(|error| format!("生成后快照失败: {error}"))?;
+    Ok(format!(
+        "case_id={} origin=({},{}), expected_bbox=[{}..{}]x[{}..{}], created_handles={:?}, object_snapshots={:?}, snapshot_lines={}, draw_result={}, cleanup=verified",
+        layout.case_id,
+        fmt_num(layout.origin_x),
+        fmt_num(layout.origin_y),
+        fmt_num(layout.min_x),
+        fmt_num(layout.max_x),
+        fmt_num(layout.min_y),
+        fmt_num(layout.max_y),
+        created,
+        inspected,
+        after_snapshot.lines().count(),
+        operation_text,
+    ))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn cad_smoke_test_safety_scenes_isolated() -> Result<String, String> {
+    let cases = [
+        run_isolated_smoke_case(
+            IsolatedSmokeLayout {
+                case_id: "opening_cover",
+                origin_x: 100_000.0,
+                origin_y: 100_000.0,
+                min_x: 99_000.0,
+                max_x: 103_500.0,
+                min_y: 98_500.0,
+                max_y: 102_000.0,
+            },
+            || {
+                let draw = cad_draw_opening_cover(
+                    100_000.0,
+                    100_000.0,
+                    400.0,
+                    800.0,
+                    "cover_plate",
+                    true,
+                    0.0,
+                    false,
+                    1.0,
+                )?;
+                let validation =
+                    cad_validate_opening_cover(400.0, 800.0, "cover_plate", true, 0.0, false)?;
+                let value: serde_json::Value = serde_json::from_str(&validation)
+                    .map_err(|error| format!("opening_cover validation JSON failed: {error}"))?;
+                if value["ok"] != serde_json::Value::Bool(true) {
+                    return Err(format!("opening_cover validation failed: {validation}"));
+                }
+                Ok(format!("{draw} validation={validation}"))
+            },
+        )?,
+        run_isolated_smoke_case(
+            IsolatedSmokeLayout {
+                case_id: "elevator_shaft_protection",
+                origin_x: 120_000.0,
+                origin_y: 100_000.0,
+                min_x: 117_000.0,
+                max_x: 126_000.0,
+                min_y: 96_000.0,
+                max_y: 106_000.0,
+            },
+            || {
+                let draw = cad_draw_elevator_shaft_protection(
+                    120_000.0, 100_000.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0,
+                    "flip_up",
+                )?;
+                let validation = cad_validate_elevator_shaft_protection(
+                    2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, None,
+                )?;
+                let value: serde_json::Value = serde_json::from_str(&validation)
+                    .map_err(|error| format!("elevator validation JSON failed: {error}"))?;
+                if value["ok"] != serde_json::Value::Bool(true) {
+                    return Err(format!("elevator validation failed: {validation}"));
+                }
+                Ok(format!("{draw} validation={validation}"))
+            },
+        )?,
+        run_isolated_smoke_case(
+            IsolatedSmokeLayout {
+                case_id: "elevator_shaft_safety_net",
+                origin_x: 140_000.0,
+                origin_y: 100_000.0,
+                min_x: 137_000.0,
+                max_x: 146_000.0,
+                min_y: 96_000.0,
+                max_y: 106_000.0,
+            },
+            || {
+                let draw = cad_draw_elevator_shaft_safety_net(
+                    140_000.0, 100_000.0, 2200.0, 1800.0, 3000.0, 20.0, true, true, 1.0,
+                )?;
+                let validation =
+                    cad_validate_elevator_shaft_safety_net(2200.0, 1800.0, 3000.0, 20.0, true)?;
+                let value: serde_json::Value = serde_json::from_str(&validation)
+                    .map_err(|error| format!("safety_net validation JSON failed: {error}"))?;
+                if value["ok"] != serde_json::Value::Bool(true) {
+                    return Err(format!("safety_net validation failed: {validation}"));
+                }
+                Ok(format!("{draw} validation={validation}"))
+            },
+        )?,
+        run_isolated_smoke_case(
+            IsolatedSmokeLayout {
+                case_id: "edge_guardrail",
+                origin_x: 160_000.0,
+                origin_y: 100_000.0,
+                min_x: 155_000.0,
+                max_x: 167_000.0,
+                min_y: 96_000.0,
+                max_y: 105_000.0,
+            },
+            || {
+                let draw = cad_draw_edge_guardrail(
+                    160_000.0, 100_000.0, 6000.0, 1200.0, 1500.0, 180.0, true, true, 1.0,
+                )?;
+                let validation = cad_validate_edge_guardrail(6000.0, 1200.0, 1500.0, 180.0, true)?;
+                let value: serde_json::Value = serde_json::from_str(&validation)
+                    .map_err(|error| format!("edge validation JSON failed: {error}"))?;
+                if value["ok"] != serde_json::Value::Bool(true) {
+                    return Err(format!("edge validation failed: {validation}"));
+                }
+                Ok(format!("{draw} validation={validation}"))
+            },
+        )?,
+    ];
+
+    Ok(cases.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_installed_dll_path, cad_draw_edge_guardrail, cad_draw_elevator_shaft_protection,
-        cad_draw_elevator_shaft_safety_net, cad_draw_text, cad_erase_handle,
-        cad_modelspace_snapshot, cad_smoke_test_edge_guardrail, cad_smoke_test_editing_tools,
+        bridge_installed_dll_path, cad_draw_text, cad_erase_handle, cad_modelspace_snapshot,
+        cad_smoke_test_edge_guardrail, cad_smoke_test_editing_tools,
         cad_smoke_test_elevator_shaft_protection, cad_smoke_test_elevator_shaft_safety_net,
-        ensure_bridge_installed_once, is_plain_autocad_product, known_progids,
-        plain_autocad_launch_args, validate_bridge_product, BridgeResponse,
+        cad_smoke_test_safety_scenes_isolated, ensure_bridge_installed_once,
+        is_plain_autocad_product, known_progids, parse_snapshot_bbox, plain_autocad_launch_args,
+        snapshot_handles, validate_bridge_product, validate_edge_guardrail_draw_params,
+        validate_elevator_shaft_protection_draw_params,
+        validate_elevator_shaft_safety_net_draw_params, BridgeResponse,
     };
+
+    #[test]
+    fn smoke_snapshot_helpers_extract_bbox_and_handles() {
+        let snapshot = "图面快照：模型空间共 2 个对象。\n整体包围盒：X [-10.0 ~ 25.5]，Y [100.0 ~ 240.0]\n对象明细：\n#0 LINE handle=ABC 图层=0\n#1 TEXT handle=12F 图层=0\n";
+        assert_eq!(
+            parse_snapshot_bbox(snapshot),
+            Some((-10.0, 25.5, 100.0, 240.0))
+        );
+        assert_eq!(
+            snapshot_handles(snapshot).into_iter().collect::<Vec<_>>(),
+            vec!["12F".to_string(), "ABC".to_string()]
+        );
+        assert_eq!(parse_snapshot_bbox("模型空间为空"), None);
+    }
 
     #[test]
     fn plain_autocad_product_filter_rejects_vertical_hosts() {
@@ -4707,29 +5047,22 @@ mod tests {
     /// 门型参数校验在一切 CAD 调用之前完成，可在无 AutoCAD 环境下单测。
     #[test]
     fn elevator_draw_rejects_unknown_door_type() {
-        let result = cad_draw_elevator_shaft_protection(
-            0.0, 0.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0, "slide_up",
+        let result = validate_elevator_shaft_protection_draw_params(
+            2000.0, 1800.0, 1500.0, 200.0, 50.0, 1.0, "slide_up",
         );
         assert!(result.is_err(), "非法门型应直接拒绝: {result:?}");
         let err = result.err().unwrap();
         assert!(err.contains("door_type"), "错误信息应指明 door_type: {err}");
     }
 
-    /// 合法门型应通过参数校验阶段（后续 CAD 调用在无 AutoCAD 环境才会失败，
-    /// 因此只断言错误信息不是 door_type 相关）。
+    /// 合法门型只调用纯参数校验，不得触发 AutoCAD 绘图。
     #[test]
     fn elevator_draw_accepts_known_door_types_at_validation_stage() {
         for door_type in ["flip_up", "three_piece"] {
-            let result = cad_draw_elevator_shaft_protection(
-                0.0, 0.0, 2000.0, 1800.0, 1500.0, 200.0, 50.0, true, true, 1.0, door_type,
+            let result = validate_elevator_shaft_protection_draw_params(
+                2000.0, 1800.0, 1500.0, 200.0, 50.0, 1.0, door_type,
             );
-            match result {
-                Err(e) => assert!(
-                    !e.contains("door_type"),
-                    "合法门型 {door_type} 不应在参数校验失败: {e}"
-                ),
-                Ok(_) => {}
-            }
+            assert!(result.is_ok(), "合法门型 {door_type} 应通过: {result:?}");
         }
     }
 
@@ -4742,21 +5075,13 @@ mod tests {
             (2200.0, 1800.0, 3000.0, -5.0), // 空隙为负
         ];
         for (w, d, fh, gap) in cases {
-            let result =
-                cad_draw_elevator_shaft_safety_net(0.0, 0.0, w, d, fh, gap, true, true, 1.0);
+            let result = validate_elevator_shaft_safety_net_draw_params(w, d, fh, gap, 1.0);
             assert!(result.is_err(), "参数 ({w},{d},{fh},{gap}) 应被拒绝");
         }
-        // 合法参数通过校验阶段（后续 CAD 调用才可能因无 AutoCAD 失败）
-        let result = cad_draw_elevator_shaft_safety_net(
-            0.0, 0.0, 2200.0, 1800.0, 3000.0, 20.0, true, true, 1.0,
+        assert!(
+            validate_elevator_shaft_safety_net_draw_params(2200.0, 1800.0, 3000.0, 20.0, 1.0)
+                .is_ok()
         );
-        match result {
-            Err(e) => assert!(
-                !e.contains("必须为正数") && !e.contains("不能为负"),
-                "合法参数不应在校验阶段失败: {e}"
-            ),
-            Ok(_) => {}
-        }
     }
 
     /// 临边栏杆绘图参数校验在 CAD 调用之前完成，可无 AutoCAD 单测。
@@ -4768,21 +5093,13 @@ mod tests {
             (3000.0, 1200.0, 0.0, 180.0),
             (3000.0, 1200.0, 1500.0, -5.0),
         ] {
-            let result = cad_draw_edge_guardrail(0.0, 0.0, len, top, spacing, toe, true, true, 1.0);
+            let result = validate_edge_guardrail_draw_params(len, top, spacing, toe, 1.0);
             assert!(
                 result.is_err(),
                 "参数 ({len},{top},{spacing},{toe}) 应被拒绝"
             );
         }
-        let result =
-            cad_draw_edge_guardrail(0.0, 0.0, 3000.0, 1200.0, 1500.0, 180.0, true, true, 1.0);
-        match result {
-            Err(e) => assert!(
-                !e.contains("必须为正数") && !e.contains("不能为负"),
-                "合法参数不应在校验阶段失败: {e}"
-            ),
-            Ok(_) => {}
-        }
+        assert!(validate_edge_guardrail_draw_params(3000.0, 1200.0, 1500.0, 180.0, 1.0).is_ok());
     }
 
     #[test]
@@ -4871,6 +5188,14 @@ mod tests {
     fn edge_guardrail_smoke_test_round_trip() {
         let result = cad_smoke_test_edge_guardrail();
         assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+    }
+
+    #[test]
+    #[ignore = "requires a running AutoCAD session; isolated case origins and handle cleanup"]
+    fn isolated_safety_scenes_smoke_test_round_trip() {
+        let result = cad_smoke_test_safety_scenes_isolated();
+        assert!(result.is_ok(), "{}", result.err().unwrap_or_default());
+        println!("{}", result.unwrap());
     }
 
     #[test]

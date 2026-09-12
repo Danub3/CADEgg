@@ -20,7 +20,7 @@ Current focus: deterministic, traceable safety-protection drawings rather than g
 | AutoCAD integration | Pure AutoCAD only | Bridge `0.3.11.0` listens on `127.0.0.1:50471` only inside pure AutoCAD, verifies the host product, and rejects Civil 3D/other vertical products; COM is a fallback for pure AutoCAD. |
 | Model providers | Domestic providers only | The active user-facing providers are GLM, DeepSeek, Qwen, and Kimi through OpenAI-compatible chat/tool APIs. Gemini and Claude are not part of the current route. |
 | Knowledge base | Local, versioned JSON cards | `data/atlas/` stores agent-facing conclusions; `data/sources/` stores source excerpts and citations. Safety requests pass a local citation-integrity gate before any model call. |
-| Verification baseline | Passing | Last recorded baseline: `npm.cmd run build` passed, Rust unit suite `108 passed / 0 failed / 10 ignored`, AutoCAD smoke suite `4 passed / 0 failed` when run serially. |
+| Verification baseline | Passing | Last recorded baseline: `npm.cmd run build` passed, Rust unit suite `115 passed / 0 failed / 11 ignored`, isolated AutoCAD safety smoke suite `4 passed / 0 failed` when run serially. |
 
 ### What CADEgg Does
 
@@ -176,8 +176,10 @@ cargo test --manifest-path src-tauri\Cargo.toml
 Real AutoCAD smoke tests are ignored by default. Run them serially because they share one AutoCAD document:
 
 ```powershell
-cargo test --manifest-path src-tauri\Cargo.toml smoke_test_round_trip -- --ignored --nocapture --test-threads=1
+cargo test --manifest-path src-tauri\Cargo.toml isolated_safety_scenes_smoke_test_round_trip -- --ignored --nocapture --test-threads=1
 ```
+
+The isolated safety smoke harness assigns a stable grid origin and expected bounding box to each case, refuses an occupied target region, records newly created handles and object snapshots, and erases only those handles after verification.
 
 The evidence gate has a network-free, AutoCAD-free walkthrough in
 `workflows/evidence_gate_offline_demo.md`.
@@ -225,7 +227,7 @@ CADEgg 是一个面向施工安全防护图纸的 AutoCAD 智能绘图 Agent。�
 | CAD 连接 | 仅纯 AutoCAD | C# AutoCAD Bridge `0.3.11.0` 只会在纯 AutoCAD 宿主内监听 `127.0.0.1:50471`，并校验宿主产品身份；Civil 3D 等垂直产品中的 Bridge 保持停用，COM 仅作为纯 AutoCAD 回退通道。 |
 | 模型路线 | 国产模型 | 当前用户可见、后端实际路由的供应商为智谱 GLM、DeepSeek、通义千问、Kimi；Gemini 和 Claude 已不属于当前可用路线。 |
 | 知识库 | 本地 JSON | `data/atlas/` 保存面向 Agent 的知识卡，`data/sources/` 保存规范摘录和引用出处；安全请求在调用模型前必须通过本地引用完整性门控。 |
-| 验证基线 | 已记录 | 最近记录：`npm.cmd run build` 通过；Rust 单元测试 `108 passed / 0 failed / 10 ignored`；真实 AutoCAD 串行 smoke `4 passed / 0 failed`。 |
+| 验证基线 | 已记录 | 最近记录：`npm.cmd run build` 通过；Rust 单元测试 `115 passed / 0 failed / 11 ignored`；隔离真实 AutoCAD 安全场景串行 smoke `4 passed / 0 failed`。 |
 
 ### 核心能力
 
@@ -378,8 +380,10 @@ cargo test --manifest-path src-tauri\Cargo.toml
 真实 AutoCAD smoke 测试默认被标记为 ignored。运行时必须串行，避免多个测试共享同一个 DWG 文档互相污染：
 
 ```powershell
-cargo test --manifest-path src-tauri\Cargo.toml smoke_test_round_trip -- --ignored --nocapture --test-threads=1
+cargo test --manifest-path src-tauri\Cargo.toml isolated_safety_scenes_smoke_test_round_trip -- --ignored --nocapture --test-threads=1
 ```
+
+隔离 smoke harness 会为每个案例分配稳定网格原点和预期包围盒；目标区域已占用时拒绝落图，验证时记录新增 handles 与对象快照，结束后只按本案例新增 handles 清理。
 
 证据门控的纯离线演示步骤见 `workflows/evidence_gate_offline_demo.md`，不需要网络、模型 API 或 AutoCAD。
 
