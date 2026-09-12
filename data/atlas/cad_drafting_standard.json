@@ -1,7 +1,10 @@
 {
   "scene": "cad_drafting_standard",
   "name": "CAD 制图规范（尺寸标注/图线/字体）",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "source_versions": {
+    "gb-t-50001": "GB/T 50001"
+  },
   "keywords": ["制图", "标注", "尺寸标注", "图线", "字体", "字高", "线宽", "图层", "规范", "国标", "标准"],
   "applicable_conditions": [
     "CADEgg 生成任何 CAD 图纸时均须遵守，用于保证制图符合国家行业规范",

@@ -39,7 +39,7 @@ const AUTO_ATTACH_WAIT_ROUNDS: usize = 18;
 const AUTO_ATTACH_WAIT_MS: u64 = 750;
 const BRIDGE_PORT: u16 = 50471;
 const BRIDGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-const BRIDGE_VERSION: &str = "0.3.8.0";
+const BRIDGE_VERSION: &str = "0.3.11.0";
 const BRIDGE_BUNDLE_NAME: &str = "CADEggBridge.bundle";
 const BRIDGE_DLL_BASENAME: &str = "CADEggBridge";
 const BRIDGE_BUILD_STAMP: &str = "bridge-version.txt";
@@ -65,6 +65,23 @@ struct BridgeResponse {
     message: String,
     #[serde(default)]
     data: serde_json::Value,
+}
+
+fn validate_bridge_product(response: &BridgeResponse) -> Result<(), String> {
+    let product = response
+        .data
+        .get("product_name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if is_plain_autocad_product(product) {
+        Ok(())
+    } else if product.is_empty() {
+        Err("CADEgg bridge 未报告宿主产品身份（可能仍运行旧版 bridge）。请重启纯 AutoCAD 以加载 CADEggBridge 0.3.11.0。".to_string())
+    } else {
+        Err(format!(
+            "CADEgg bridge 当前连接到 `{product}`，仅支持纯 AutoCAD；请在纯 AutoCAD 窗口中重启 bridge。"
+        ))
+    }
 }
 
 #[repr(C)]
@@ -201,14 +218,33 @@ where
 }
 
 fn known_progids() -> Vec<String> {
-    let mut progids = vec!["AutoCAD.Application".to_string()];
+    // AutoCAD verticals reuse acad.exe and may register the .1/.2/.3 aliases.
+    // Only the unsuffixed product ProgID is eligible for the pure AutoCAD route.
+    let mut progids = Vec::new();
     for major in (20..=30).rev() {
-        progids.push(format!("AutoCAD.Application.{major}.3"));
-        progids.push(format!("AutoCAD.Application.{major}.2"));
-        progids.push(format!("AutoCAD.Application.{major}.1"));
         progids.push(format!("AutoCAD.Application.{major}"));
     }
+    progids.push("AutoCAD.Application".to_string());
     progids
+}
+
+fn is_plain_autocad_product(label: &str) -> bool {
+    let normalized = label.trim().to_ascii_lowercase();
+    if normalized.is_empty() || !normalized.contains("autocad") {
+        return false;
+    }
+    ![
+        "civil 3d",
+        "map 3d",
+        "architecture",
+        "mechanical",
+        "electrical",
+        "mep",
+        "plant 3d",
+        "advance steel",
+    ]
+    .iter()
+    .any(|vertical| normalized.contains(vertical))
 }
 
 fn query_registry_default_value(key_path: &str) -> Option<String> {
@@ -725,8 +761,12 @@ fn bridge_send_request(command: &str, args: serde_json::Value) -> Result<BridgeR
     if line.trim().is_empty() {
         return Err("bridge 响应为空".to_string());
     }
-    serde_json::from_str::<BridgeResponse>(line.trim())
-        .map_err(|e| format!("解析 bridge 响应失败: {e}"))
+    let response = serde_json::from_str::<BridgeResponse>(line.trim())
+        .map_err(|e| format!("解析 bridge 响应失败: {e}"))?;
+    if response.ok {
+        validate_bridge_product(&response)?;
+    }
+    Ok(response)
 }
 
 fn attempt_launch_candidate(
@@ -734,15 +774,23 @@ fn attempt_launch_candidate(
     automation: bool,
 ) -> Result<(), String> {
     let mut command = Command::new(&candidate.exe_path);
-    if automation {
-        command.arg("/Automation");
-    } else {
-        command.arg("/regserver");
+    for argument in plain_autocad_launch_args(automation) {
+        command.arg(argument);
     }
     command
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("启动 {} 失败: {}", candidate.exe_path.display(), error))
+}
+
+fn plain_autocad_launch_args(automation: bool) -> [&'static str; 3] {
+    // acad.exe is shared by Autodesk verticals; this switch selects the plain
+    // AutoCAD product even when Civil 3D was the last profile opened.
+    if automation {
+        ["/product", "ACAD", "/Automation"]
+    } else {
+        ["/product", "ACAD", "/regserver"]
+    }
 }
 
 unsafe fn get_autocad() -> Result<IDispatch, String> {
@@ -767,9 +815,14 @@ unsafe fn get_autocad() -> Result<IDispatch, String> {
             Ok(()) => {
                 let unknown =
                     unknown.ok_or_else(|| format!("GetActiveObject({progid}) 返回 null"))?;
-                return unknown
+                let app = unknown
                     .cast::<IDispatch>()
-                    .map_err(|e| format!("cast IDispatch 失败: {e}"));
+                    .map_err(|e| format!("cast IDispatch 失败: {e}"))?;
+                let product = get_variable_string(&get_active_document(&app)?, "PRODUCT")?;
+                if is_plain_autocad_product(&product) {
+                    return Ok(app);
+                }
+                last_error = format!("当前 COM 对象是 `{product}`，不是纯 AutoCAD；已拒绝连接。");
             }
             Err(error) => {
                 last_error = error;
@@ -815,9 +868,17 @@ unsafe fn get_autocad() -> Result<IDispatch, String> {
                                 let unknown = unknown.ok_or_else(|| {
                                     format!("GetActiveObject({progid}) 返回 null")
                                 })?;
-                                return unknown
+                                let app = unknown
                                     .cast::<IDispatch>()
-                                    .map_err(|e| format!("cast IDispatch 失败: {e}"));
+                                    .map_err(|e| format!("cast IDispatch 失败: {e}"))?;
+                                let product =
+                                    get_variable_string(&get_active_document(&app)?, "PRODUCT")?;
+                                if is_plain_autocad_product(&product) {
+                                    return Ok(app);
+                                }
+                                last_error = format!(
+                                    "当前 COM 对象是 `{product}`，不是纯 AutoCAD；已拒绝连接。"
+                                );
                             }
                             Err(error) => {
                                 last_error = error;
@@ -853,9 +914,17 @@ unsafe fn get_autocad() -> Result<IDispatch, String> {
                                 let unknown = unknown.ok_or_else(|| {
                                     format!("GetActiveObject({progid}) 返回 null")
                                 })?;
-                                return unknown
+                                let app = unknown
                                     .cast::<IDispatch>()
-                                    .map_err(|e| format!("cast IDispatch 失败: {e}"));
+                                    .map_err(|e| format!("cast IDispatch 失败: {e}"))?;
+                                let product =
+                                    get_variable_string(&get_active_document(&app)?, "PRODUCT")?;
+                                if is_plain_autocad_product(&product) {
+                                    return Ok(app);
+                                }
+                                last_error = format!(
+                                    "当前 COM 对象是 `{product}`，不是纯 AutoCAD；已拒绝连接。"
+                                );
                             }
                             Err(error) => {
                                 last_error = error;
@@ -1883,6 +1952,167 @@ pub fn cad_draw_rectangle_by_center(
             handle
         ))
     })
+}
+
+pub fn cad_draw_opening_cover(
+    x: f64,
+    y: f64,
+    opening_short_side: f64,
+    opening_long_side: f64,
+    protection_method: &str,
+    cover_fixed: bool,
+    guardrail_height: f64,
+    include_safety_net: bool,
+    scale: f64,
+) -> Result<String, String> {
+    if opening_short_side <= 0.0
+        || opening_long_side <= 0.0
+        || opening_long_side < opening_short_side
+    {
+        return Err("洞口短边、长边必须为正数，且长边不小于短边".to_string());
+    }
+    if scale <= 0.0 {
+        return Err(format!("scale 必须为正数，收到 {scale}"));
+    }
+    let method = protection_method.trim().to_ascii_lowercase();
+    if !matches!(
+        method.as_str(),
+        "cover_plate" | "guardrail" | "guardrail_and_net"
+    ) {
+        return Err(
+            "protection_method 只能是 cover_plate、guardrail 或 guardrail_and_net".to_string(),
+        );
+    }
+    let validation = safety::validate_opening_cover(
+        opening_short_side,
+        opening_long_side,
+        &method,
+        cover_fixed,
+        guardrail_height,
+        include_safety_net,
+    );
+    if !validation.ok {
+        return Err(format!(
+            "洞口防护参数未通过校核：{}",
+            validation.issues.join("；")
+        ));
+    }
+    let half_w = opening_long_side * scale / 2.0;
+    let half_h = opening_short_side * scale / 2.0;
+    let points = vec![
+        x - half_w,
+        y - half_h,
+        x + half_w,
+        y - half_h,
+        x + half_w,
+        y + half_h,
+        x - half_w,
+        y + half_h,
+    ];
+    draw_polyline_via_bridge(&points, true).or_else(|_| {
+        run_sta(move || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            let cmd = format!(
+                "_.RECTANG\n{},{}\n{},{}\n",
+                fmt_num(x - half_w),
+                fmt_num(y - half_h),
+                fmt_num(x + half_w),
+                fmt_num(y + half_h)
+            );
+            send_command(&app, &cmd)?;
+            Ok("fallback".to_string())
+        })
+    })?;
+    if method == "cover_plate" {
+        let inset = (opening_short_side.min(opening_long_side) * 0.08).max(10.0) * scale;
+        let inner = vec![
+            x - half_w + inset,
+            y - half_h + inset,
+            x + half_w - inset,
+            y - half_h + inset,
+            x + half_w - inset,
+            y + half_h - inset,
+            x - half_w + inset,
+            y + half_h - inset,
+        ];
+        let _ = draw_polyline_via_bridge(&inner, true);
+    } else {
+        let rail_h = guardrail_height * scale;
+        let left = x - half_w;
+        let right = x + half_w;
+        for yy in [y - half_h, y - half_h + rail_h * 0.5, y - half_h + rail_h] {
+            let _ = draw_line_via_bridge(left, yy, right, yy);
+        }
+        let post_count = safety::edge_guardrail_post_count(opening_long_side, 2000.0);
+        for i in 0..post_count {
+            let t = if post_count <= 1 {
+                0.0
+            } else {
+                i as f64 / (post_count - 1) as f64
+            };
+            let px = left + (right - left) * t;
+            let _ = draw_line_via_bridge(px, y - half_h, px, y - half_h + rail_h);
+        }
+        if method == "guardrail_and_net" && include_safety_net {
+            let _ = cad_draw_text(
+                x,
+                y,
+                "安全平网封闭",
+                (opening_short_side * scale * 0.08).max(80.0),
+                0.0,
+            );
+        }
+    }
+    let label = match method.as_str() {
+        "cover_plate" => "固定盖板",
+        "guardrail" => "防护栏杆",
+        _ => "防护栏杆+安全平网",
+    };
+    let note = format!(
+        "洞口防护：{}；短边{} 长边{}；盖板固定={}",
+        label,
+        fmt_num(opening_short_side),
+        fmt_num(opening_long_side),
+        if cover_fixed { "是" } else { "否" }
+    );
+    let _ = cad_draw_text(
+        x,
+        y + half_h + 160.0 * scale,
+        &note,
+        (opening_short_side * scale * 0.06).max(70.0),
+        0.0,
+    );
+    let _ = run_sta_with_timeout(
+        move || unsafe {
+            let app = get_autocad()?;
+            let doc = get_active_document(&app)?;
+            send_command_to_doc(&doc, "_.REGEN\n_.ZOOM\n_E\n")?;
+            Ok(())
+        },
+        Duration::from_secs(30),
+    );
+    Ok(format!("已生成楼板/屋面洞口防护：{}，短边{}，长边{}。依据：JGJ 80-2016 4.2.1、建办质函〔2019〕90号 2.7.1。", label, fmt_num(opening_short_side), fmt_num(opening_long_side)))
+}
+
+pub fn cad_validate_opening_cover(
+    opening_short_side: f64,
+    opening_long_side: f64,
+    protection_method: &str,
+    cover_fixed: bool,
+    guardrail_height: f64,
+    include_safety_net: bool,
+) -> Result<String, String> {
+    let validation = safety::validate_opening_cover(
+        opening_short_side,
+        opening_long_side,
+        protection_method,
+        cover_fixed,
+        guardrail_height,
+        include_safety_net,
+    );
+    serde_json::to_string_pretty(&validation)
+        .map_err(|e| format!("序列化洞口防护校核结果失败: {e}"))
 }
 
 pub fn cad_draw_double_flight_stair(
@@ -4426,8 +4656,53 @@ mod tests {
         cad_draw_elevator_shaft_safety_net, cad_draw_text, cad_erase_handle,
         cad_modelspace_snapshot, cad_smoke_test_edge_guardrail, cad_smoke_test_editing_tools,
         cad_smoke_test_elevator_shaft_protection, cad_smoke_test_elevator_shaft_safety_net,
-        ensure_bridge_installed_once,
+        ensure_bridge_installed_once, is_plain_autocad_product, known_progids,
+        plain_autocad_launch_args, validate_bridge_product, BridgeResponse,
     };
+
+    #[test]
+    fn plain_autocad_product_filter_rejects_vertical_hosts() {
+        assert!(is_plain_autocad_product("AutoCAD"));
+        assert!(is_plain_autocad_product("Autodesk AutoCAD 2027"));
+        assert!(!is_plain_autocad_product("Autodesk Civil 3D 2027"));
+        assert!(!is_plain_autocad_product("Autodesk AutoCAD Map 3D"));
+        assert!(!is_plain_autocad_product(""));
+    }
+
+    #[test]
+    fn only_plain_autocad_progids_and_launch_args_are_allowed() {
+        let progids = known_progids();
+        assert!(progids.contains(&"AutoCAD.Application".to_string()));
+        assert!(progids.iter().all(|progid| {
+            progid == "AutoCAD.Application"
+                || (progid.starts_with("AutoCAD.Application.")
+                    && progid["AutoCAD.Application.".len()..]
+                        .chars()
+                        .all(|ch| ch.is_ascii_digit()))
+        }));
+        assert_eq!(
+            plain_autocad_launch_args(true),
+            ["/product", "ACAD", "/Automation"]
+        );
+        assert_eq!(
+            plain_autocad_launch_args(false),
+            ["/product", "ACAD", "/regserver"]
+        );
+    }
+
+    #[test]
+    fn bridge_product_identity_is_required() {
+        let mut plain = BridgeResponse {
+            ok: true,
+            message: "ok".to_string(),
+            data: serde_json::json!({"product_name": "AutoCAD"}),
+        };
+        assert!(validate_bridge_product(&plain).is_ok());
+        plain.data["product_name"] = serde_json::json!("Autodesk Civil 3D 2027");
+        assert!(validate_bridge_product(&plain).is_err());
+        plain.data = serde_json::json!({});
+        assert!(validate_bridge_product(&plain).is_err());
+    }
 
     /// 门型参数校验在一切 CAD 调用之前完成，可在无 AutoCAD 环境下单测。
     #[test]

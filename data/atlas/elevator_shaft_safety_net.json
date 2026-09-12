@@ -1,7 +1,10 @@
 {
   "scene": "elevator_shaft_safety_net",
   "name": "电梯井内安全平网",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "source_versions": {
+    "jgj-80-2016": "JGJ 80-2016"
+  },
   "keywords": ["安全平网", "井内平网", "井道平网", "平网防护", "电梯井内", "隔离防护"],
   "applicable_conditions": [
     "电梯施工前，电梯井道内的坠落防护",

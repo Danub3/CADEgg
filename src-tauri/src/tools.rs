@@ -471,6 +471,39 @@ fn params_validate_elevator_shaft_safety_net() -> Value {
     })
 }
 
+fn params_draw_opening_cover() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "x": {"type": "number", "description": "洞口中心 X，默认 0"},
+            "y": {"type": "number", "description": "洞口中心 Y，默认 0"},
+            "opening_short_side": {"type": "number", "description": "洞口短边，毫米，须不小于25且为现场实测"},
+            "opening_long_side": {"type": "number", "description": "洞口长边，毫米，须不小于短边且为现场实测"},
+            "protection_method": {"type": "string", "enum": ["cover_plate", "guardrail", "guardrail_and_net"], "description": "按短边分级选择：固定盖板、栏杆、栏杆+安全平网"},
+            "cover_fixed": {"type": "boolean", "description": "盖板是否固定牢固，默认 true"},
+            "guardrail_height": {"type": "number", "description": "防护栏杆高度，毫米，大洞口不小于1200，默认1200"},
+            "include_safety_net": {"type": "boolean", "description": "短边不小于1500mm时是否配置安全平网，默认 true"},
+            "scale": {"type": "number", "description": "图面缩放比例，默认1.0"}
+        },
+        "required": ["opening_short_side", "opening_long_side"]
+    })
+}
+
+fn params_validate_opening_cover() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "opening_short_side": {"type": "number", "description": "洞口短边，毫米"},
+            "opening_long_side": {"type": "number", "description": "洞口长边，毫米"},
+            "protection_method": {"type": "string", "enum": ["cover_plate", "guardrail", "guardrail_and_net"]},
+            "cover_fixed": {"type": "boolean", "description": "盖板是否固定牢固"},
+            "guardrail_height": {"type": "number", "description": "防护栏杆高度，毫米"},
+            "include_safety_net": {"type": "boolean", "description": "是否配置安全平网"}
+        },
+        "required": ["opening_short_side", "opening_long_side", "protection_method"]
+    })
+}
+
 fn all_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -544,6 +577,18 @@ fn all_tool_specs() -> Vec<ToolSpec> {
             layer: ToolLayer::Query,
             description: "按确定性规则校核普通临边防护栏杆参数（JGJ 80-2016 4.3.1），返回 JSON：ok、issues、warnings、checks、material_table、guardrail_summary。",
             parameters: params_validate_edge_guardrail,
+        },
+        ToolSpec {
+            name: "draw_opening_cover",
+            layer: ToolLayer::SemanticGeometry,
+            description: "按 JGJ 80-2016 4.2.1 洞口短边分级绘制楼板/屋面洞口防护：25～500mm 固定盖板，500～1500mm 盖板或栏杆，≥1500mm 栏杆+安全平网。",
+            parameters: params_draw_opening_cover,
+        },
+        ToolSpec {
+            name: "validate_opening_cover",
+            layer: ToolLayer::Query,
+            description: "按洞口短边尺寸分级校核盖板、栏杆和安全平网方案，返回结构化 issues、checks、material_table 和 opening_summary。",
+            parameters: params_validate_opening_cover,
         },
         ToolSpec {
             name: "draw_text",
@@ -691,6 +736,7 @@ pub fn safety_missing_params(user_input: &str) -> Vec<&'static str> {
         }
         Some("elevator_shaft_safety_net") => crate::safety::missing_safety_net_params(user_input),
         Some("edge_guardrail") => crate::safety::missing_edge_guardrail_params(user_input),
+        Some("opening_cover") => crate::safety::missing_opening_cover_params(user_input),
         _ => Vec::new(),
     }
 }
@@ -708,6 +754,7 @@ pub fn safety_clarification_prompt(user_input: &str) -> Option<String> {
             crate::safety::safety_net_clarification_prompt(user_input)
         }
         Some("edge_guardrail") => crate::safety::edge_guardrail_clarification_prompt(user_input),
+        Some("opening_cover") => crate::safety::opening_cover_clarification_prompt(user_input),
         _ => None,
     }
 }
@@ -776,10 +823,16 @@ fn safety_scene_tooling_context(
             "该场景已注册但尚未开放确定性 CAD 出图/校核工具；不得调用电梯井口工具替代。"
                 .to_string(),
         );
-        lines.push(
-            "当前只能基于知识卡和注册规则输出做法边界、参数清单、追问项或人工审核提示。"
-                .to_string(),
-        );
+        if scene.knowledge_card_ready {
+            lines.push(
+                "当前只能基于已核验证据输出做法边界、参数清单、追问项或人工审核提示。".to_string(),
+            );
+        } else {
+            lines.push(
+                "该场景尚无已核验知识卡，必须拒绝工程结论和出图，并转人工/官方渠道核验。"
+                    .to_string(),
+            );
+        }
     }
 
     if !scene.mandatory_rules.is_empty() {
@@ -1271,6 +1324,21 @@ fn object_updates_for_success(call: &ToolCall, content: &str) -> Vec<ObjectUpdat
         "draw_elevator_shaft_protection" => extract_created_session_object(content)
             .map(|object| vec![ObjectUpdate::Upsert { object }])
             .unwrap_or_default(),
+        "draw_opening_cover" => extract_handle(content)
+            .map(|handle| ObjectUpdate::Upsert {
+                object: SessionObject {
+                    handle,
+                    kind: "LWPOLYLINE".to_string(),
+                    label: format!(
+                        "洞口防护 {}×{}",
+                        fmt_num(call.args["opening_short_side"].as_f64().unwrap_or_default()),
+                        fmt_num(call.args["opening_long_side"].as_f64().unwrap_or_default())
+                    ),
+                    source: Some("generated".to_string()),
+                },
+            })
+            .into_iter()
+            .collect(),
         "draw_text" => extract_handle(content)
             .map(|handle| ObjectUpdate::Upsert {
                 object: SessionObject {
@@ -1633,6 +1701,54 @@ fn dispatch_with_policy(call: &ToolCall, confirmed: bool) -> ToolResult {
                 .unwrap_or(true),
         ),
         #[cfg(windows)]
+        "draw_opening_cover" => crate::cad::cad_draw_opening_cover(
+            call.args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            call.args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            num(&call.args, "opening_short_side")?,
+            num(&call.args, "opening_long_side")?,
+            call.args
+                .get("protection_method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("cover_plate"),
+            call.args
+                .get("cover_fixed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("guardrail_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::OPENING_COVER_GUARDRAIL_HEIGHT_MM),
+            call.args
+                .get("include_safety_net")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            call.args
+                .get("scale")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0),
+        ),
+        #[cfg(windows)]
+        "validate_opening_cover" => crate::cad::cad_validate_opening_cover(
+            num(&call.args, "opening_short_side")?,
+            num(&call.args, "opening_long_side")?,
+            call.args
+                .get("protection_method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("cover_plate"),
+            call.args
+                .get("cover_fixed")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            call.args
+                .get("guardrail_height")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(crate::safety::OPENING_COVER_GUARDRAIL_HEIGHT_MM),
+            call.args
+                .get("include_safety_net")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        ),
+        #[cfg(windows)]
         "draw_text" => crate::cad::cad_draw_text(
             num(&call.args, "x")?,
             num(&call.args, "y")?,
@@ -1788,6 +1904,36 @@ mod tests {
         // 防护门场景仍走原检测
         let missing = safety_missing_params("画电梯井口防护门");
         assert!(missing.contains(&"井口宽度"));
+    }
+
+    #[test]
+    fn opening_cover_requests_select_own_tools_and_keep_boundary() {
+        let tooling = select_tooling_context(
+            "画一个楼板洞口盖板，短边 400，长边 800",
+            &[],
+            WorkMode::SafetyDemoMode,
+        );
+        assert!(tooling.safety_scoped);
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_opening_cover"));
+        assert!(tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "validate_opening_cover"));
+        assert!(!tooling
+            .tool_names
+            .iter()
+            .any(|name| name == "draw_elevator_shaft_protection"));
+        assert_eq!(
+            safety_context_scene("画一个楼板洞口盖板"),
+            Some("opening_cover")
+        );
+        assert_eq!(
+            safety_missing_params("画一个楼板洞口盖板"),
+            vec!["洞口短边", "洞口长边"]
+        );
     }
 
     #[test]

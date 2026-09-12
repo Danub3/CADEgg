@@ -7,6 +7,7 @@
     "scene",
     "name",
     "version",
+    "source_versions",
     "keywords",
     "applicable_conditions",
     "dimension_rules",
@@ -26,6 +27,12 @@
       "type": "string",
       "description": "知识卡版本号，规范更新时递增。",
       "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "source_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "description": "知识卡锁定的来源版本：key 为 source_id，value 必须与 data/sources 中的 version/code/document_no/publish_year 一致。"
     },
     "keywords": {
       "type": "array",

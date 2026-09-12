@@ -1,7 +1,11 @@
 {
   "scene": "elevator_shaft_protection",
   "name": "室内电梯井口防护",
-  "version": "1.1.0",
+  "version": "1.2.0",
+  "source_versions": {
+    "jgj-80-2016": "JGJ 80-2016",
+    "mohurd-2019-90": "建办质函〔2019〕90号"
+  },
   "keywords": ["电梯井", "电梯井口", "井口防护", "电梯井防护", "防护门", "室内电梯井"],
   "applicable_conditions": [
     "施工阶段室内电梯井口，在正式井道门安装前的防护部位",
